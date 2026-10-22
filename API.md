@@ -11,6 +11,7 @@ create --project FILE [--name NAME] [--fps NUM/DEN] [--width PIXELS --height PIX
 import --project FILE PATH... [--no-recursive]
 media-search --project FILE [--query TEXT] [--favorites]
 media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]
+media-relink --project FILE --media ID --path FILE
 analyze-audio --project FILE --media ID
 history --project FILE
 undo --project FILE
@@ -30,6 +31,8 @@ doctor
 ```
 
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]` writes library metadata. `analyze-audio --project FILE --media ID` decodes a media asset's audio locally and returns estimated BPM hypotheses, beat positions, and transient timestamps. Results are cached beside the project using file size and modification time. Autocorrelation scores are comparative matches, not calibrated probabilities.
+
+`media-relink --project FILE --media ID --path FILE` replaces a missing source path while retaining its ID. The replacement must have the same audio/video kind and cover every existing clip source range.
 
 `timeline-frame --project FILE --time TIME` renders one frame-snapped composite from the active, unmuted video tracks. The desktop Timeline monitor uses this command's shared core operation for its still preview; source video playback remains available in the Source monitor.
 

@@ -315,6 +315,72 @@ export async function importMedia(filePath: string, inputPaths: string[], recurs
   } finally { library.close(); }
 }
 
+export async function findMissingMedia(filePath: string): Promise<string[]> {
+  const project = await loadProject(filePath);
+  const results = await Promise.all(project.media.map(async (asset) => {
+    try { await fs.access(asset.path); return null; }
+    catch { return asset.id; }
+  }));
+  return results.filter((id): id is string => id !== null);
+}
+
+export async function relinkMedia(filePath: string, mediaId: string, replacementPath: string): Promise<Project> {
+  const project = await loadProject(filePath);
+  const asset = project.media.find((item) => item.id === mediaId);
+  if (!asset) throw new AppError('MEDIA_NOT_FOUND', `Media asset not found: ${mediaId}`);
+  const target = path.resolve(replacementPath);
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try { stat = await fs.stat(target); }
+  catch { throw new AppError('SOURCE_UNAVAILABLE', `Replacement media file is not available: ${target}`); }
+  if (!stat.isFile()) throw new AppError('INVALID_MEDIA_PATH', `Replacement media path is not a file: ${target}`);
+  const hash = await hashFile(target);
+  const projectDuplicate = project.media.find((item) => item.id !== mediaId && item.contentHash === hash);
+  if (projectDuplicate) throw new AppError('DUPLICATE_MEDIA', `Replacement file is already in this project as ${projectDuplicate.name}.`);
+  const metadata = await probe(target);
+  if (metadata.kind !== asset.kind) throw new AppError('MEDIA_TYPE_MISMATCH', `Replacement must be ${asset.kind} media.`);
+  for (const track of project.tracks) for (const clip of track.clips) {
+    if (clip.mediaId === mediaId && compare(add(clip.sourceIn, clip.duration), metadata.duration) > 0) {
+      throw new AppError('RELINK_DURATION_TOO_SHORT', `Replacement media is shorter than a source range used by clip ${clip.id}.`);
+    }
+  }
+  const library = new MediaLibrary(libraryDatabasePath(filePath, project.id));
+  try {
+    const libraryDuplicate = library.findByHash(hash);
+    if (libraryDuplicate && libraryDuplicate.id !== mediaId) {
+      throw new AppError('DUPLICATE_MEDIA', `Replacement file is already indexed as ${libraryDuplicate.name}.`);
+    }
+    const modifiedAt = stat.mtime.toISOString();
+    asset.path = target;
+    asset.name = path.basename(target);
+    asset.duration = metadata.duration;
+    asset.width = metadata.width;
+    asset.height = metadata.height;
+    asset.frameRate = metadata.frameRate;
+    asset.hasAudio = metadata.hasAudio;
+    asset.sizeBytes = stat.size;
+    asset.modifiedAt = modifiedAt;
+    asset.contentHash = hash;
+    const thumbDir = path.join(projectCachePath(filePath, project.id), 'thumbnails');
+    await fs.mkdir(thumbDir, { recursive: true });
+    if (asset.kind === 'video') {
+      const thumbnail = path.join(thumbDir, `${asset.id}.jpg`);
+      const tempThumbnail = path.join(thumbDir, `${asset.id}.${newId()}.tmp.jpg`);
+      await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', decimal(rational(BigInt(asset.duration.num), BigInt(asset.duration.den) * 2n)), '-i', target, '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', tempThumbnail]);
+      await fs.rename(tempThumbnail, thumbnail);
+      asset.thumbnailPath = thumbnail;
+    } else {
+      const waveform = path.join(thumbDir, `${asset.id}-waveform.png`);
+      const tempWaveform = path.join(thumbDir, `${asset.id}.${newId()}.tmp.png`);
+      await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', target, '-filter_complex', '[0:a:0]aformat=channel_layouts=mono,showwavespic=s=640x144:colors=0xa6e85f:scale=lin[wave]', '-map', '[wave]', '-frames:v', '1', '-update', '1', tempWaveform]);
+      await fs.rename(tempWaveform, waveform);
+      asset.thumbnailPath = waveform;
+    }
+    await saveProject(filePath, project);
+    library.upsert(asset);
+  } finally { library.close(); }
+  return project;
+}
+
 async function* walk(root: string): AsyncGenerator<string> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   for (const entry of entries) {

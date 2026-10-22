@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { analyzeAudio } from '../core/audioAnalysis';
 import { AppError } from '../core/errors';
-import { addTrack, addClip, createProject, fileExists, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, removeClip, saveProject, splitClip, trimClip, undoProject, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
+import { addTrack, addClip, createProject, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, splitClip, trimClip, undoProject, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
 import { frameTime } from '../core/time';
@@ -144,6 +144,12 @@ ipcMain.handle('media:import', async (_event, filePath: string) => {
   const result = await withProjectLock(filePath, () => importMedia(filePath, response.filePaths, true));
   await activateFolderWatchers(filePath);
   return { project: await loadProject(filePath), result };
+});
+ipcMain.handle('media:findMissing', (_event, filePath: string) => findMissingMedia(filePath));
+ipcMain.handle('media:relink', async (_event, filePath: string, mediaId: string) => {
+  const response = await dialog.showOpenDialog(mainWindow!, { title: 'Relink missing media', properties: ['openFile'], filters: [{ name: 'Video and audio media', extensions: ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mts', 'm2ts', 'wmv', 'flv', 'mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma'] }] });
+  if (response.canceled || !response.filePaths[0]) return null;
+  return withProjectLock(filePath, () => relinkMedia(filePath, mediaId, response.filePaths[0]));
 });
 ipcMain.handle('media:updateMetadata', (_event, filePath: string, mediaId: string, patch) => withProjectLock(filePath, () => updateMediaMetadata(filePath, mediaId, patch)));
 ipcMain.handle('media:search', (_event, filePath: string, query: string, favoriteOnly: boolean) => searchMedia(filePath, query, favoriteOnly));

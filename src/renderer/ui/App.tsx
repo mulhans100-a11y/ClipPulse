@@ -47,9 +47,12 @@ export default function App() {
   const [filter, setFilter] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [importRoots, setImportRoots] = useState<ImportRoot[]>([]);
+  const [missingMediaIds, setMissingMediaIds] = useState<string[]>([]);
   const mediaRef = useRef<HTMLVideoElement>(null);
   const previewRequest = useRef(0);
   const historyRequest = useRef(0);
+  const missingRequest = useRef(0);
+  const projectPathRef = useRef('');
   const timelineRef = useRef<HTMLDivElement>(null);
   const currentClip = getClip(project, selectedClipId);
   const selectedMedia = project?.media.find((asset) => asset.id === selectedMediaId) ?? null;
@@ -66,6 +69,11 @@ export default function App() {
       const history = await window.openmontage.getProjectHistory(filePath);
       if (request === historyRequest.current) { setCanUndo(history.canUndo); setCanRedo(history.canRedo); }
     } catch { if (request === historyRequest.current) { setCanUndo(false); setCanRedo(false); } }
+  }
+  async function refreshMissingMedia(filePath: string) {
+    const request = ++missingRequest.current;
+    try { const missing = await window.openmontage.findMissingMedia(filePath); if (request === missingRequest.current) setMissingMediaIds(missing); }
+    catch { if (request === missingRequest.current) setMissingMediaIds([]); }
   }
 
   useEffect(() => {
@@ -91,14 +99,16 @@ export default function App() {
     const removeProgress = window.openmontage?.onExportProgress((progress) => setExportProgress(progress));
     const removeMediaUpdate = window.openmontage?.onMediaUpdated(({ project: next, result }) => {
       setProject(next); setNotice(`${result.added.length} new clip${result.added.length === 1 ? '' : 's'} found in watched folders`);
+      if (projectPathRef.current) void refreshMissingMedia(projectPathRef.current);
     });
     return () => { removeProgress?.(); removeMediaUpdate?.(); };
   }, []);
 
   const load = useCallback((result: { project: Project; path: string }) => {
-    setProject(result.project); setProjectPath(result.path); setSelectedClipId(null);
+    setProject(result.project); setProjectPath(result.path); projectPathRef.current = result.path; setSelectedClipId(null);
     void window.openmontage?.getImportRoots(result.path).then(setImportRoots).catch(() => setImportRoots([]));
     void refreshHistory(result.path);
+    void refreshMissingMedia(result.path);
     setSelectedMediaId(result.project.media[0]?.id ?? null); setPlayhead(0);
     setError(''); setNotice(`Opened ${result.project.name}`);
   }, []);
@@ -129,11 +139,13 @@ export default function App() {
       if (result.added.length) { setProject(next); setSelectedMediaId(result.added[0].id); await refreshHistory(projectPath); }
       setNotice(toastMessage(result));
       setImportRoots(await window.openmontage.getImportRoots(projectPath));
+      await refreshMissingMedia(projectPath);
       if (result.errors.length) setError(result.errors.map((item) => `${item.path}: ${item.message}`).join('\n'));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
   async function addMediaToTimeline(asset: MediaAsset, start = 0, trackOverride?: string) {
     if (!project) return;
+    if (missingMediaIds.includes(asset.id)) { setError('Relink this missing file before adding it to the timeline.'); return; }
     const kind: TrackKind = asset.kind === 'audio' ? 'audio' : 'video';
     const track = project.tracks.find((item) => item.id === trackOverride) ?? project.tracks.find((item) => item.kind === kind);
     if (!track) { setError(`Create a ${kind} track first.`); return; }
@@ -225,6 +237,14 @@ export default function App() {
     try { await window.openmontage.saveProject(projectPath, project); await refreshHistory(projectPath); setNotice('Project saved'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
+  async function relinkAsset(mediaId: string) {
+    try {
+      const next = await window.openmontage.relinkMedia(projectPath, mediaId);
+      if (!next) return;
+      setProject(next); await refreshMissingMedia(projectPath); await refreshHistory(projectPath);
+      setNotice(`Relinked ${next.media.find((asset) => asset.id === mediaId)?.name ?? 'media file'}`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
 
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
@@ -279,10 +299,11 @@ export default function App() {
         {importRoots.length > 0 && <details className="watch-folders"><summary><FolderSync size={12} /> {importRoots.filter((root) => root.watching).length} folder{importRoots.filter((root) => root.watching).length === 1 ? '' : 's'} watched <ChevronDown size={11} /></summary><div className="watch-root-list">{importRoots.map((root) => <div className="watch-root" key={root.path}><span title={root.path}>{root.path}</span><button className={`switch mini-switch ${root.watching ? 'on' : ''}`} title={root.watching ? 'Stop watching folder' : 'Watch folder for new clips'} onClick={async () => { try { setImportRoots(await window.openmontage.setImportRootWatching(projectPath, root.path, !root.watching)); setNotice(root.watching ? 'Folder watch paused' : 'Folder watch enabled'); } catch (cause) { setError(String(cause)); } }}><i /></button></div>)}</div></details>}
         <div className="media-list">
           {visibleMedia.length === 0 && <div className="empty-small"><HardDrive size={22} /><span>No media imported</span><button onClick={() => void importMedia()}>Browse files</button></div>}
-          {visibleMedia.map((asset) => <button key={asset.id} className={`media-card ${selectedMediaId === asset.id ? 'selected' : ''}`} onClick={() => { setSelectedMediaId(asset.id); setSelectedClipId(null); }} onDoubleClick={() => void addMediaToTimeline(asset)}>
+          {visibleMedia.map((asset) => <button key={asset.id} className={`media-card ${selectedMediaId === asset.id ? 'selected' : ''} ${missingMediaIds.includes(asset.id) ? 'missing' : ''}`} onClick={() => { setSelectedMediaId(asset.id); setSelectedClipId(null); }} onDoubleClick={() => void addMediaToTimeline(asset)}>
             <div className="media-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <div className="audio-art"><Music2 size={20} /></div>}<span className="duration-pill">{formatTime(secondsOf(asset.duration))}</span></div>
             <div className="media-info"><strong title={asset.name}>{asset.name}</strong><span>{asset.kind === 'video' ? `${asset.width ?? '?'} × ${asset.height ?? '?'} · ${asset.frameRate ? `${Number(asset.frameRate.num) / Number(asset.frameRate.den)} fps` : 'Video'}` : 'Audio'}</span>{(asset.tags?.length || asset.game) && <small>{[asset.game, ...(asset.tags ?? [])].filter(Boolean).join(' · ')}</small>}</div>
             {asset.kind === 'video' ? <Film className="type-icon" size={14} /> : <AudioLines className="type-icon" size={14} />}
+            {missingMediaIds.includes(asset.id) && <span className="missing-badge">MISSING</span>}
             <span className="favorite-control" onClick={(event) => { event.stopPropagation(); void run(() => window.openmontage.updateMediaMetadata(projectPath, asset.id, { favorite: !asset.favorite }), (next) => next, asset.favorite ? 'Removed from favorites' : 'Added to favorites'); }} title={asset.favorite ? 'Remove favorite' : 'Add to favorites'}><Star size={13} fill={asset.favorite ? 'currentColor' : 'none'} /></span>
           </button>)}
         </div>
@@ -361,7 +382,7 @@ export default function App() {
             try { await window.openmontage.saveProject(projectPath, next); setProject(next); await refreshHistory(projectPath); setNotice('Clip volume updated'); } catch (cause) { setError(String(cause)); }
           }} /></section>
           <section className="inspector-section muted-section"><div className="section-label"><span>MORE CONTROLS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Sparkles size={14} /><span>Effects and keyframes</span><small>Planned</small></div><div className="disabled-row"><Activity size={14} /><span>Masking and tracking</span><small>Planned</small></div></section>
-        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
+        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
         <div className="inspector-footer"><span>PROJECT</span><strong>{project.name}</strong><small>{project.width} × {project.height} · {Number(project.frameRate.num) / Number(project.frameRate.den)} fps</small></div>
       </aside>
     </div>
@@ -370,7 +391,7 @@ export default function App() {
   </div>;
 }
 
-function MediaInspector({ asset, projectPath, onSave }: { asset: MediaAsset; projectPath: string; onSave: (patch: { tags: string[]; game: string | null }) => void }) {
+function MediaInspector({ asset, projectPath, missing, onRelink, onSave }: { asset: MediaAsset; projectPath: string; missing: boolean; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null }) => void }) {
   const [tags, setTags] = useState((asset.tags ?? []).join(', '));
   const [game, setGame] = useState(asset.game ?? '');
   const [analysisResult, setAnalysisResult] = useState<{ assetId: string; data: AudioAnalysis } | null>(null);
@@ -387,6 +408,7 @@ function MediaInspector({ asset, projectPath, onSave }: { asset: MediaAsset; pro
   }
   return <>
     <div className="inspector-asset"><div className="inspector-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <Music2 size={19} />}</div><div><strong>{asset.name}</strong><small>{asset.kind.toUpperCase()} · {formatTime(secondsOf(asset.duration))}</small></div></div>
+    {missing && <div className="missing-media-box"><strong>Media file is missing</strong><small title={asset.path}>{asset.path}</small><button onClick={onRelink}><FolderOpen size={13} /> Relink file</button></div>}
     <section className="inspector-section"><div className="section-label"><span>LIBRARY DETAILS</span><button><ChevronDown size={14} /></button></div>
       <label className="metadata-field"><span>Game</span><input value={game} onChange={(event) => setGame(event.target.value)} placeholder="e.g. Valorant" /></label>
       <label className="metadata-field"><span>Tags</span><textarea value={tags} onChange={(event) => setTags(event.target.value)} placeholder="headshot, clutch, ace" rows={3} /></label>

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata } from '../src/core/project';
+import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata } from '../src/core/project';
 import { analyzeAudio } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
@@ -156,6 +156,38 @@ test('SQLite library caches folder imports and persists game, tags, favorites, a
   assert.equal((await setImportRootWatching(projectFile, captures, false))[0].watching, false);
 });
 
+test('missing project media can be relinked without changing clip references and can be undone', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-relink-'));
+  scratch.push(directory);
+  const original = path.join(directory, 'original.mp4');
+  const replacement = path.join(directory, 'moved', 'replacement.mp4');
+  const tooShort = path.join(directory, 'too-short.mp4');
+  const projectFile = path.join(directory, 'relink.omproj');
+  await mkdir(path.dirname(replacement), { recursive: true });
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=green:s=320x180:r=30:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', original]);
+  await copyFile(original, replacement);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=green:s=320x180:r=30:d=0.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', tooShort]);
+  await createProject(projectFile, { frameRate: rational(30), width: 320, height: 180 });
+  const imported = await importMedia(projectFile, [original]);
+  const asset = imported.added[0];
+  const project = await loadProject(projectFile);
+  const videoTrack = project.tracks.find((track) => track.kind === 'video')!;
+  const withClip = await addClip(projectFile, asset.id, videoTrack.id, rational(0), rational(0), rational(3, 2));
+  assert.deepEqual(await findMissingMedia(projectFile), []);
+  await rm(original);
+  assert.deepEqual(await findMissingMedia(projectFile), [asset.id]);
+  await assert.rejects(() => relinkMedia(projectFile, asset.id, tooShort), (error: any) => error.code === 'RELINK_DURATION_TOO_SHORT');
+  const relinked = await relinkMedia(projectFile, asset.id, replacement);
+  assert.equal(relinked.media[0].id, asset.id);
+  assert.equal(relinked.media[0].path, replacement);
+  assert.equal(relinked.tracks.find((track) => track.id === videoTrack.id)!.clips[0].id, withClip.tracks.find((track) => track.id === videoTrack.id)!.clips[0].id);
+  assert.deepEqual(await findMissingMedia(projectFile), []);
+  await undoProject(projectFile);
+  assert.deepEqual(await findMissingMedia(projectFile), [asset.id]);
+  await redoProject(projectFile);
+  assert.deepEqual(await findMissingMedia(projectFile), []);
+});
+
 test('recursive folder watcher reports new nested media files and closes cleanly', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-watch-'));
   scratch.push(directory);
@@ -275,6 +307,12 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   assert.equal((await invoke('inspect', '--project', projectPath)).data.clipCount, 0);
   await invoke('redo', '--project', projectPath);
   assert.equal((await invoke('inspect', '--project', projectPath)).data.clipCount, 1);
+  const movedSource = path.join(directory, 'moved-source.mp4');
+  await copyFile(source, movedSource);
+  await rm(source);
+  const relinked = await invoke('media-relink', '--project', projectPath, '--media', imported.data.added.find((asset: any) => asset.kind === 'video').id, '--path', movedSource);
+  assert.equal(relinked.data.path, movedSource);
+  assert.equal((await invoke('validate', '--project', projectPath)).data.valid, true);
 });
 
 async function writeClickTrack(filePath: string, bpm: number, durationSeconds: number): Promise<void> {

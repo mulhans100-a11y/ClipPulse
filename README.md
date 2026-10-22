@@ -10,6 +10,7 @@ This is an early Phase A/B/C build. The editor includes an initial local beat an
 - `.omproj` project files with versioned JSON, rational time values, autosaved edits, a `.bak` previous snapshot, and persistent 50-state undo/redo history.
 - Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, cached video thumbnails, and audio waveform images. Original media files are referenced and never modified.
 - A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names, and watches selected folders for new local clips.
+- Missing source files are marked in the media bin and can be relinked to a replacement file without breaking existing clip references.
 - Video and audio tracks; additional tracks can be added. Clips can be inserted, moved between tracks, trimmed, split, and removed.
 - Drag clip edges for frame-snapped source trimming while preserving the opposite edit point.
 - Preview of imported source video, timeline playhead, persistent undo/redo, and keyboard shortcuts for save/undo/redo/delete/playback.
@@ -75,7 +76,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 - Timeline editing currently uses rational seconds; the inspector also shows project-frame positions. UI fields are rounded to microsecond precision when they call the editor core.
 - Timeline composite preview is a still image rendered when the playhead moves; it does not play the edit in real time. Audio clips show a cached waveform image that stretches with the clip source range; zoom-aware waveform rendering, proxies, transitions, effect parity, and render queue are not implemented.
 - Rendering composites visible clips in track order over a black canvas. There is no color/effect pipeline or alpha-mask editor yet.
-- Media references are absolute file paths. Moving media requires re-importing or editing project JSON; relinking UI is not implemented. SQLite is a rebuildable cache adjacent to the project.
+- Media references are absolute file paths. Relinking keeps the existing media ID, requires the same media kind, and rejects a replacement that is too short for existing clip ranges. SQLite is a rebuildable cache adjacent to the project.
 - The `.bak` auto-backup is a single snapshot. Undo/redo snapshots are stored in a project-adjacent `.openmontage-history-<id>` folder, capped at 50 states; each timeline operation writes the project immediately.
 - The Medal integration currently means authorized local-folder import only. No cloud API integration is claimed.
 - Beat analysis detects amplitude rises with onset autocorrelation; it does not identify downbeats, meter, harmonic content, or musical sections.

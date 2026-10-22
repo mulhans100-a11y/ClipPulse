@@ -23,7 +23,8 @@ Status reflects the repository at `0.1.0`.
 - [x] SQLite index and incremental path/size/mtime reuse, with exact SHA-256 duplicate detection.
 - [x] Search by name/path/tag/game, plus tags, favorites, and game assignment.
 - [x] Debounced recursive local folder watcher with UI pause/resume controls.
-- [ ] Sorting, highlight state, missing-file relinking, and UI virtualization for very large libraries.
+- [x] Missing-file detection and relinking that preserves clip IDs and rejects incompatible or too-short replacements.
+- [ ] Sorting, highlight state, and UI virtualization for very large libraries.
 - [ ] Proxy jobs, resumable queue, resource limits, and thumbnail cache invalidation.
 - [ ] Medal local capture-folder presets and new-file watcher.
 - [x] Verify and document whether Medal offers a public user-authorized cloud API before considering cloud access; no documented personal-library API was found.
