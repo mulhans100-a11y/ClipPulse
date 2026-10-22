@@ -6,6 +6,7 @@ import type { ImportRoot, MediaAsset } from './types';
 
 export interface LibraryAsset extends MediaAsset {
   favorite: boolean;
+  rating: number;
   tags: string[];
   game?: string;
 }
@@ -41,6 +42,7 @@ export class MediaLibrary {
         thumbnail_path TEXT,
         imported_at TEXT NOT NULL,
         favorite INTEGER NOT NULL DEFAULT 0,
+        rating INTEGER NOT NULL DEFAULT 0,
         game TEXT
       );
       CREATE INDEX IF NOT EXISTS media_path_idx ON media(path_key);
@@ -58,8 +60,10 @@ export class MediaLibrary {
         watching INTEGER NOT NULL DEFAULT 0,
         last_scan TEXT
       );
-      PRAGMA user_version=1;
     `);
+    const mediaColumns = this.db.prepare('PRAGMA table_info(media)').all() as Array<{ name: string }>;
+    if (!mediaColumns.some((column) => column.name === 'rating')) this.db.exec('ALTER TABLE media ADD COLUMN rating INTEGER NOT NULL DEFAULT 0');
+    this.db.exec('PRAGMA user_version=2;');
   }
 
   findByPath(filePath: string): LibraryAsset | undefined {
@@ -103,13 +107,13 @@ export class MediaLibrary {
     }
   }
 
-  updatePreferences(mediaId: string, patch: { favorite?: boolean; tags?: string[]; game?: string | null }): void {
+  updatePreferences(mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null }): void {
     this.db.exec('BEGIN');
     try {
-      if (patch.favorite !== undefined || patch.game !== undefined) {
-        const current = this.db.prepare('SELECT favorite,game FROM media WHERE id=?').get(mediaId) as { favorite: number; game: string | null } | undefined;
+      if (patch.favorite !== undefined || patch.rating !== undefined || patch.game !== undefined) {
+        const current = this.db.prepare('SELECT favorite,rating,game FROM media WHERE id=?').get(mediaId) as { favorite: number; rating: number; game: string | null } | undefined;
         if (!current) throw new AppError('MEDIA_NOT_FOUND', `Media asset not found in library: ${mediaId}`);
-        this.db.prepare('UPDATE media SET favorite=?,game=? WHERE id=?').run(patch.favorite === undefined ? current.favorite : patch.favorite ? 1 : 0, patch.game === undefined ? current.game : patch.game, mediaId);
+        this.db.prepare('UPDATE media SET favorite=?,rating=?,game=? WHERE id=?').run(patch.favorite === undefined ? current.favorite : patch.favorite ? 1 : 0, patch.rating ?? current.rating, patch.game === undefined ? current.game : patch.game, mediaId);
       }
       if (patch.tags !== undefined) {
         this.db.prepare('DELETE FROM media_tags WHERE media_id=?').run(mediaId);
@@ -161,7 +165,7 @@ export class MediaLibrary {
       frameRate: row.fps_num === null || row.fps_den === null ? undefined : { num: String(row.fps_num), den: String(row.fps_den) },
       hasAudio: Boolean(row.has_audio), sizeBytes: Number(row.size_bytes), modifiedAt: String(row.modified_at),
       contentHash: String(row.content_hash), thumbnailPath: row.thumbnail_path === null ? undefined : String(row.thumbnail_path),
-      importedAt: String(row.imported_at), favorite: Boolean(row.favorite), game: row.game === null ? undefined : String(row.game), tags
+      importedAt: String(row.imported_at), favorite: Boolean(row.favorite), rating: Number(row.rating ?? 0), game: row.game === null ? undefined : String(row.game), tags
     };
   }
 
@@ -169,13 +173,13 @@ export class MediaLibrary {
 
   private writeAsset(asset: MediaAsset): void {
     const enriched = asset as LibraryAsset;
-    this.db.prepare(`INSERT INTO media (id,path,path_key,name,kind,duration_num,duration_den,width,height,fps_num,fps_den,has_audio,size_bytes,modified_at,content_hash,thumbnail_path,imported_at,favorite,game)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(id) DO UPDATE SET path=excluded.path,path_key=excluded.path_key,name=excluded.name,kind=excluded.kind,duration_num=excluded.duration_num,duration_den=excluded.duration_den,width=excluded.width,height=excluded.height,fps_num=excluded.fps_num,fps_den=excluded.fps_den,has_audio=excluded.has_audio,size_bytes=excluded.size_bytes,modified_at=excluded.modified_at,content_hash=excluded.content_hash,thumbnail_path=excluded.thumbnail_path,favorite=excluded.favorite,game=excluded.game`).run(
+    this.db.prepare(`INSERT INTO media (id,path,path_key,name,kind,duration_num,duration_den,width,height,fps_num,fps_den,has_audio,size_bytes,modified_at,content_hash,thumbnail_path,imported_at,favorite,rating,game)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET path=excluded.path,path_key=excluded.path_key,name=excluded.name,kind=excluded.kind,duration_num=excluded.duration_num,duration_den=excluded.duration_den,width=excluded.width,height=excluded.height,fps_num=excluded.fps_num,fps_den=excluded.fps_den,has_audio=excluded.has_audio,size_bytes=excluded.size_bytes,modified_at=excluded.modified_at,content_hash=excluded.content_hash,thumbnail_path=excluded.thumbnail_path,favorite=excluded.favorite,rating=excluded.rating,game=excluded.game`).run(
       asset.id, asset.path, pathKey(asset.path), asset.name, asset.kind, asset.duration.num, asset.duration.den,
       asset.width ?? null, asset.height ?? null, asset.frameRate?.num ?? null, asset.frameRate?.den ?? null,
       asset.hasAudio ? 1 : 0, asset.sizeBytes, asset.modifiedAt, asset.contentHash, asset.thumbnailPath ?? null,
-      asset.importedAt, enriched.favorite ? 1 : 0, enriched.game ?? null
+      asset.importedAt, enriched.favorite ? 1 : 0, enriched.rating ?? 0, enriched.game ?? null
     );
     this.db.prepare('DELETE FROM media_tags WHERE media_id=?').run(asset.id);
     const insertTag = this.db.prepare('INSERT OR IGNORE INTO media_tags(media_id,tag) VALUES (?,?)');

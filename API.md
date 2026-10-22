@@ -10,7 +10,7 @@ Run `npm run build` once, then invoke `npm run cli -- <command> ...`.
 create --project FILE [--name NAME] [--fps NUM/DEN] [--width PIXELS --height PIXELS]
 import --project FILE PATH... [--no-recursive]
 media-search --project FILE [--query TEXT] [--favorites]
-media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]
+media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]
 media-relink --project FILE --media ID --path FILE
 analyze-audio --project FILE --media ID
 history --project FILE
@@ -33,7 +33,9 @@ export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h2
 doctor
 ```
 
-`media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]` writes library metadata. `analyze-audio --project FILE --media ID` decodes a media asset's audio locally and returns estimated BPM hypotheses, beat positions, and transient timestamps. Results are cached beside the project using file size and modification time. Autocorrelation scores are comparative matches, not calibrated probabilities.
+`--rating` accepts an integer from 0 to 5. A value of `0` clears the rating; values 1–5 rank the asset as a highlight. The rating is saved in the project and the SQLite media index.
+
+`media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]` writes library metadata; rating zero clears a manual highlight score, while 1–5 ranks a clip. The score is stored in the project and SQLite index. `analyze-audio --project FILE --media ID` decodes a media asset's audio locally and returns estimated BPM hypotheses, beat positions, and transient timestamps. Results are cached beside the project using file size and modification time. Autocorrelation scores are comparative matches, not calibrated probabilities.
 
 `media-relink --project FILE --media ID --path FILE` replaces a missing source path while retaining its ID. The replacement must have the same audio/video kind and cover every existing clip source range.
 

@@ -56,7 +56,7 @@ export default function App() {
   const [canRedo, setCanRedo] = useState(false);
   const [filter, setFilter] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
-  const [mediaSort, setMediaSort] = useState<'recent' | 'name' | 'duration'>('recent');
+  const [mediaSort, setMediaSort] = useState<'recent' | 'name' | 'duration' | 'rating'>('recent');
   const [mediaScrollTop, setMediaScrollTop] = useState(0);
   const [mediaViewportHeight, setMediaViewportHeight] = useState(0);
   const [importRoots, setImportRoots] = useState<ImportRoot[]>([]);
@@ -85,7 +85,9 @@ export default function App() {
       ? a.name.localeCompare(b.name)
       : mediaSort === 'duration'
         ? secondsOf(b.duration) - secondsOf(a.duration)
-        : Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
+        : mediaSort === 'rating'
+          ? (b.rating ?? 0) - (a.rating ?? 0) || Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)) || a.name.localeCompare(b.name)
+          : Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
   }, [project, filter, favoriteOnly, mediaSort]);
   const mediaWindow = mediaVirtualWindow(visibleMedia.length, mediaScrollTop, mediaViewportHeight, MEDIA_CARD_HEIGHT);
 
@@ -429,7 +431,7 @@ export default function App() {
       <aside className="media-panel panel">
         <div className="panel-heading"><div><span className="eyebrow">PROJECT</span><h2>Media</h2></div><div className="panel-actions"><button className="square-button" title="Import Medal capture folder" onClick={() => void importMedalFolder()}><Medal size={16} /></button><button className="square-button" title="Import media" onClick={() => void importMedia()}><Import size={16} /></button></div></div>
         <div className="search-wrap"><span>⌕</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search media" /><kbd>⌘ K</kbd></div>
-        <div className="media-count"><span>{visibleMedia.length} / {project.media.length} ASSETS</span><div><select className="media-sort" value={mediaSort} onChange={(event) => setMediaSort(event.target.value as typeof mediaSort)} aria-label="Sort media"><option value="recent">Recent</option><option value="name">Name</option><option value="duration">Longest</option></select><button className={`favorite-filter ${favoriteOnly ? "enabled" : ""}`} title="Show favorites only" onClick={() => setFavoriteOnly((value) => !value)}><Star size={12} fill={favoriteOnly ? "currentColor" : "none"} /></button></div></div>
+        <div className="media-count"><span>{visibleMedia.length} / {project.media.length} ASSETS</span><div><select className="media-sort" value={mediaSort} onChange={(event) => setMediaSort(event.target.value as typeof mediaSort)} aria-label="Sort media"><option value="recent">Recent</option><option value="name">Name</option><option value="duration">Longest</option><option value="rating">Top rated</option></select><button className={`favorite-filter ${favoriteOnly ? "enabled" : ""}`} title="Show favorites only" onClick={() => setFavoriteOnly((value) => !value)}><Star size={12} fill={favoriteOnly ? "currentColor" : "none"} /></button></div></div>
         {importRoots.length > 0 && <details className="watch-folders"><summary><FolderSync size={12} /> {importRoots.filter((root) => root.watching).length} folder{importRoots.filter((root) => root.watching).length === 1 ? '' : 's'} watched <ChevronDown size={11} /></summary><div className="watch-root-list">{importRoots.map((root) => <div className="watch-root" key={root.path}><span title={root.path}>{root.path}</span><button className={`switch mini-switch ${root.watching ? 'on' : ''}`} title={root.watching ? 'Stop watching folder' : 'Watch folder for new clips'} onClick={async () => { try { setImportRoots(await window.openmontage.setImportRootWatching(projectPath, root.path, !root.watching)); setNotice(root.watching ? 'Folder watch paused' : 'Folder watch enabled'); } catch (cause) { setError(String(cause)); } }}><i /></button></div>)}</div></details>}
         <div ref={mediaListRef} className="media-list" onScroll={(event) => setMediaScrollTop(event.currentTarget.scrollTop)}>
           {visibleMedia.length === 0 && <div className="empty-small"><HardDrive size={22} /><span>No media imported</span><button onClick={() => void importMedia()}>Browse files</button></div>}
@@ -538,15 +540,16 @@ export default function App() {
   </div>;
 }
 
-function MediaInspector({ asset, projectPath, missing, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
+function MediaInspector({ asset, projectPath, missing, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null; rating: number }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
   const [tags, setTags] = useState((asset.tags ?? []).join(', '));
   const [game, setGame] = useState(asset.game ?? '');
+  const [rating, setRating] = useState(asset.rating ?? 0);
   const [analysisResult, setAnalysisResult] = useState<{ assetId: string; data: AudioAnalysis } | null>(null);
   const analysis = analysisResult?.assetId === asset.id ? analysisResult.data : null;
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisFailure, setAnalysisFailure] = useState<{ assetId: string; message: string } | null>(null);
   const analysisError = analysisFailure?.assetId === asset.id ? analysisFailure.message : null;
-  useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setAnalysisResult(null); setAnalysisFailure(null); }, [asset.id, asset.tags, asset.game]);
+  useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setRating(asset.rating ?? 0); setAnalysisResult(null); setAnalysisFailure(null); }, [asset.id, asset.tags, asset.game, asset.rating]);
   async function runAnalysis() {
     setAnalyzing(true); setAnalysisFailure(null);
     try { const data = await window.openmontage.analyzeAudio(projectPath, asset.id); setAnalysisResult({ assetId: asset.id, data }); onAnalysis(asset.id, data); }
@@ -557,9 +560,10 @@ function MediaInspector({ asset, projectPath, missing, onRelink, onSave, onAnaly
     <div className="inspector-asset"><div className="inspector-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <Music2 size={19} />}</div><div><strong>{asset.name}</strong><small>{asset.kind.toUpperCase()} · {formatTime(secondsOf(asset.duration))}</small></div></div>
     {missing && <div className="missing-media-box"><strong>Media file is missing</strong><small title={asset.path}>{asset.path}</small><button onClick={onRelink}><FolderOpen size={13} /> Relink file</button></div>}
     <section className="inspector-section"><div className="section-label"><span>LIBRARY DETAILS</span><button><ChevronDown size={14} /></button></div>
+      <div className="rating-field"><span>Highlight rating</span><div role="group" aria-label="Highlight rating">{[1, 2, 3, 4, 5].map((value) => <button type="button" key={value} className={value <= rating ? 'rated' : ''} aria-label={`Rate ${value} out of 5`} aria-pressed={rating === value} onClick={() => setRating(value)}><Star size={14} fill={value <= rating ? 'currentColor' : 'none'} /></button>)}<button type="button" className="rating-clear" onClick={() => setRating(0)} disabled={rating === 0}>Clear</button></div></div>
       <label className="metadata-field"><span>Game</span><input value={game} onChange={(event) => setGame(event.target.value)} placeholder="e.g. Valorant" /></label>
       <label className="metadata-field"><span>Tags</span><textarea value={tags} onChange={(event) => setTags(event.target.value)} placeholder="headshot, clutch, ace" rows={3} /></label>
-      <button className="save-metadata" onClick={() => onSave({ game: game.trim() || null, tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean) })}><Check size={13} /> Save details</button>
+      <button className="save-metadata" onClick={() => onSave({ game: game.trim() || null, tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), rating })}><Check size={13} /> Save details</button>
       <div className="asset-facts"><span>RESOLUTION</span><strong>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Audio only'}</strong><span>FILE SIZE</span><strong>{formatBytes(asset.sizeBytes)}</strong></div>
     </section>
     <section className="inspector-section"><div className="section-label"><span>ANALYSIS</span><button><ChevronDown size={14} /></button></div>

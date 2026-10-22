@@ -34,6 +34,8 @@ export interface MediaAsset {
   thumbnailPath?: string;
   importedAt: string;
   favorite?: boolean;
+  /** Manual highlight score; zero means unranked. */
+  rating?: number;
   tags?: string[];
   game?: string;
 }

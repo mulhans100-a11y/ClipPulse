@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
@@ -10,13 +11,13 @@ import { analyzeAudio } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
 import { runCommand } from '../src/core/ffmpeg';
-import { libraryDatabasePath } from '../src/core/library';
+import { libraryDatabasePath, MediaLibrary } from '../src/core/library';
 import { watchFolder } from '../src/core/folderWatcher';
 import { medalCaptureFolderPreset } from '../src/core/medal';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
 import { audioClipBeatOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
 import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
-import type { Project, TimelineClip } from '../src/core/types';
+import type { MediaAsset, Project, TimelineClip } from '../src/core/types';
 
 const scratch: string[] = [];
 test.after(async () => { for (const directory of scratch) await rm(directory, { recursive: true, force: true }); });
@@ -35,6 +36,36 @@ test('Medal capture preset follows the Windows system drive and stays opt-in els
   assert.equal(medalCaptureFolderPreset('win32', 'D:'), 'D:\\Medal');
   assert.equal(medalCaptureFolderPreset('win32', undefined), 'C:\\Medal');
   assert.equal(medalCaptureFolderPreset('linux', undefined), null);
+});
+
+test('media library upgrades a v1 database and preserves the default unranked score', () => {
+  const directory = mkdtemp(path.join(os.tmpdir(), 'openmontage-library-migration-'));
+  return directory.then(async (root) => {
+    scratch.push(root);
+    const databasePath = path.join(root, 'legacy.sqlite');
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`CREATE TABLE media (
+      id TEXT PRIMARY KEY, path TEXT NOT NULL, path_key TEXT NOT NULL, name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('video','audio')), duration_num TEXT NOT NULL, duration_den TEXT NOT NULL,
+      width INTEGER, height INTEGER, fps_num TEXT, fps_den TEXT, has_audio INTEGER NOT NULL,
+      size_bytes INTEGER NOT NULL, modified_at TEXT NOT NULL, content_hash TEXT NOT NULL UNIQUE,
+      thumbnail_path TEXT, imported_at TEXT NOT NULL, favorite INTEGER NOT NULL DEFAULT 0, game TEXT
+    ); PRAGMA user_version=1;`);
+    legacy.close();
+
+    const library = new MediaLibrary(databasePath);
+    const asset: MediaAsset = {
+      id: 'rating-migration', path: path.join(root, 'clip.mp4'), name: 'clip.mp4', kind: 'video',
+      duration: rational(1), width: 320, height: 180, frameRate: rational(30), hasAudio: false,
+      sizeBytes: 1, modifiedAt: '', contentHash: 'rating-migration-hash', importedAt: ''
+    };
+    try {
+      library.upsert(asset);
+      assert.equal(library.findById(asset.id)?.rating, 0);
+      library.updatePreferences(asset.id, { rating: 4 });
+      assert.equal(library.findById(asset.id)?.rating, 4);
+    } finally { library.close(); }
+  });
 });
 
 test('timeline snap points include clip edges and analyzed beats within an audio source range', () => {
@@ -221,17 +252,22 @@ test('SQLite library caches folder imports and persists game, tags, favorites, a
   assert.ok((await stat(libraryDatabasePath(projectFile, project.id))).size > 0);
   assert.equal((await getImportRoots(projectFile))[0].watching, true);
 
-  const updated = await updateMediaMetadata(projectFile, first.added[0].id, { favorite: true, game: 'Valorant', tags: ['headshot', 'round win'] });
+  const updated = await updateMediaMetadata(projectFile, first.added[0].id, { favorite: true, rating: 4, game: 'Valorant', tags: ['headshot', 'round win'] });
   assert.equal(updated.media[0].favorite, true);
+  assert.equal(updated.media[0].rating, 4);
   const results = await searchMedia(projectFile, 'headshot', true);
   assert.equal(results.length, 1);
   assert.equal(results[0].game, 'Valorant');
+  assert.equal(results[0].rating, 4);
   assert.deepEqual(results[0].tags, ['headshot', 'round win']);
 
   await undoProject(projectFile);
+  assert.equal((await loadProject(projectFile)).media[0].rating ?? 0, 0, 'undo restores the score and SQLite metadata together');
   assert.equal((await searchMedia(projectFile, 'headshot', true)).length, 0, 'undo restores SQLite tags and favorite state along with project JSON');
   await redoProject(projectFile);
   assert.equal((await searchMedia(projectFile, 'headshot', true))[0].game, 'Valorant');
+  assert.equal((await loadProject(projectFile)).media[0].rating, 4);
+  await assert.rejects(updateMediaMetadata(projectFile, first.added[0].id, { rating: 6 }), (error: any) => error.code === 'INVALID_RATING');
 
   const second = await importMedia(projectFile, [captures]);
   assert.equal(second.added.length, 0, 'unchanged files are reused from the SQLite path/stat cache');
@@ -379,6 +415,8 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   assert.equal(created.ok, true);
   const imported = await invoke('import', '--project', projectPath, source, music);
   assert.equal(imported.data.added.length, 2);
+  const ratedAsset = await invoke('media-update', '--project', projectPath, '--media', imported.data.added[0].id, '--rating', '5');
+  assert.equal(ratedAsset.data.rating, 5);
   const musicAsset = imported.data.added.find((asset: any) => asset.kind === 'audio');
   assert.ok(musicAsset.thumbnailPath, 'audio import includes a cached waveform image');
   assert.ok((await stat(musicAsset.thumbnailPath)).size > 100);

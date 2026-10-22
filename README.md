@@ -10,9 +10,9 @@ The Phase A editing core is complete. The project also contains partial media-li
 - `.omproj` project files with versioned JSON, rational time values, autosaved edits, a `.bak` previous snapshot, and persistent 50-state undo/redo history.
 - Editable project name, output dimensions, and rational frame rate, plus four-step timeline zoom from 50% to 400%.
 - Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, cached video thumbnails, and audio waveform images. Original media files are referenced and never modified.
-- A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names, and watches selected folders for new local clips.
+- A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names and manual 0–5 highlight ratings, and watches selected folders for new local clips.
 - The Medal import shortcut checks Medal's documented Windows default capture folder (`<system drive>:\Medal`); if it is not present, choose the custom folder from Medal's storage settings. Imports recurse and register the folder for new-file watching.
-- Media library sorting by modified date, name, or duration, with a virtualized list that only mounts nearby cards and thumbnails.
+- Media library sorting by modified date, name, duration, or highlight rating, with a virtualized list that only mounts nearby cards and thumbnails.
 - Missing source files are marked in the media bin and can be relinked to a replacement file without breaking existing clip references.
 - Video and audio tracks; additional tracks can be added, muted, soloed, or locked. Clips can be inserted, duplicated, moved between tracks, trimmed, split, and removed.
 - Clip audio can be enabled, adjusted, and faded in or out; the settings are editable in the inspector and render through FFmpeg.

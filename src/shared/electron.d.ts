@@ -13,7 +13,7 @@ export interface OpenMontageApi {
   importMedalFolder(path: string): Promise<{ project: Project; result: ImportResult; captureFolder: string } | null>;
   findMissingMedia(path: string): Promise<string[]>;
   relinkMedia(path: string, mediaId: string): Promise<Project | null>;
-  updateMediaMetadata(path: string, mediaId: string, patch: { favorite?: boolean; tags?: string[]; game?: string | null }): Promise<Project>;
+  updateMediaMetadata(path: string, mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null }): Promise<Project>;
   searchMedia(path: string, query: string, favoriteOnly: boolean): Promise<MediaAsset[]>;
   getImportRoots(path: string): Promise<ImportRoot[]>;
   setImportRootWatching(path: string, rootPath: string, watching: boolean): Promise<ImportRoot[]>;

@@ -39,7 +39,7 @@ function secondsFlag(args: ParsedArgs, key: string, fallback?: string) {
 }
 function json(data: unknown): void { process.stdout.write(`${JSON.stringify({ ok: true, data }, null, 2)}\n`); }
 function help(): void {
-  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nAll successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
+  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nAll successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
 }
 
 async function main(): Promise<void> {
@@ -72,12 +72,14 @@ async function main(): Promise<void> {
     json(project.media.find((asset) => asset.id === mediaId)); return;
   }
   if (args.command === 'media-update') {
-    const patch: { favorite?: boolean; tags?: string[]; game?: string | null } = {};
+    const patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null } = {};
     const favorite = one(args, 'favorite');
     if (favorite !== undefined) {
       if (favorite !== 'true' && favorite !== 'false') throw new AppError('INVALID_ARGUMENTS', '--favorite must be true or false.');
       patch.favorite = favorite === 'true';
     }
+    const rating = one(args, 'rating');
+    if (rating !== undefined) patch.rating = Number(rating);
     const tags = args.flags.get('tag');
     if (tags) patch.tags = tags.flatMap((value) => value.split(',')).map((tag) => tag.trim()).filter(Boolean);
     const game = one(args, 'game');

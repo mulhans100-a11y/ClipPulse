@@ -314,7 +314,7 @@ export async function importMedia(filePath: string, inputPaths: string[], recurs
             id: hash.slice(0, 32), path: mediaPath, name: path.basename(mediaPath), kind: metadata.kind,
             duration: metadata.duration, width: metadata.width, height: metadata.height, frameRate: metadata.frameRate,
             hasAudio: metadata.hasAudio, sizeBytes: stat.size, modifiedAt, contentHash: hash,
-            importedAt: new Date().toISOString(), favorite: false, tags: []
+            importedAt: new Date().toISOString(), favorite: false, rating: 0, tags: []
           };
         }
       }
@@ -590,17 +590,21 @@ export async function removeClip(filePath: string, clipId: string): Promise<Proj
   return project;
 }
 
-export async function updateMediaMetadata(filePath: string, mediaId: string, patch: { favorite?: boolean; tags?: string[]; game?: string | null }): Promise<Project> {
+export async function updateMediaMetadata(filePath: string, mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null }): Promise<Project> {
   const project = await loadProject(filePath);
   const asset = project.media.find((item) => item.id === mediaId);
   if (!asset) throw new AppError('MEDIA_NOT_FOUND', `Media asset not found: ${mediaId}`);
+  if (patch.rating !== undefined && (!Number.isInteger(patch.rating) || patch.rating < 0 || patch.rating > 5)) {
+    throw new AppError('INVALID_RATING', 'Highlight rating must be an integer from 0 to 5.');
+  }
   if (patch.favorite !== undefined) asset.favorite = patch.favorite;
+  if (patch.rating !== undefined) asset.rating = patch.rating;
   if (patch.tags !== undefined) asset.tags = [...new Set(patch.tags.map((tag) => tag.trim()).filter(Boolean))].slice(0, 100);
   if (patch.game !== undefined) asset.game = patch.game?.trim() || undefined;
   const library = new MediaLibrary(libraryDatabasePath(filePath, project.id));
   try {
     library.upsert(asset);
-    library.updatePreferences(mediaId, { favorite: patch.favorite, tags: asset.tags, game: patch.game });
+    library.updatePreferences(mediaId, { favorite: patch.favorite, rating: patch.rating, tags: asset.tags, game: patch.game });
     await saveProject(filePath, project);
   } finally { library.close(); }
   return project;
