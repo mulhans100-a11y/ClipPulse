@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "replace-with-a-versioned-dataset-id",
+  "game": "replace-with-game-name",
+  "annotators": [
+    { "id": "annotator-a", "independent": true },
+    { "id": "annotator-b", "independent": true }
+  ],
+  "items": [
+    {
+      "mediaPath": "clips/replace-with-gameplay-clip.mp4",
+      "mediaKind": "video",
+      "hasAudio": true,
+      "durationSeconds": 30,
+      "reviewedBy": ["annotator-a", "annotator-b"],
+      "annotations": [
+        {
+          "annotationId": "annotator-a-event-1",
+          "annotatorId": "annotator-a",
+          "eventType": "replace-with-game-event",
+          "startSeconds": 8.5,
+          "decisiveSeconds": 9.2,
+          "endSeconds": 11.1
+        },
+        {
+          "annotationId": "annotator-b-event-1",
+          "annotatorId": "annotator-b",
+          "eventType": "replace-with-game-event",
+          "startSeconds": 8.7,
+          "decisiveSeconds": 9.3,
+          "endSeconds": 11.4
+        }
+      ]
+    },
+    {
+      "mediaPath": "music/replace-with-music-file.wav",
+      "mediaKind": "audio",
+      "hasAudio": true,
+      "durationSeconds": 30,
+      "reviewedBy": ["annotator-a", "annotator-b"],
+      "annotations": [],
+      "musicAnnotations": [
+        {
+          "annotatorId": "annotator-a",
+          "bpm": 120,
+          "beatTimesSeconds": [0.5, 1, 1.5, 2],
+          "downbeatTimesSeconds": [0.5, 2.5]
+        },
+        {
+          "annotatorId": "annotator-b",
+          "bpm": 120,
+          "beatTimesSeconds": [0.51, 1.01, 1.49, 2.01],
+          "downbeatTimesSeconds": [0.52, 2.49]
+        }
+      ]
+    },
+    {
+      "mediaPath": "clips/replace-with-negative-clip.mp4",
+      "mediaKind": "video",
+      "hasAudio": false,
+      "durationSeconds": 15,
+      "reviewedBy": ["annotator-a", "annotator-b"],
+      "annotations": []
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import type { AnalysisEventReview, AudioAnalysis, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TrackKind } from '../core/types';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, TimelineClip, TrackKind } from '../core/types';
 
 export interface OpenMontageApi {
   version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; message?: string }>;
@@ -13,12 +13,21 @@ export interface OpenMontageApi {
   importMedalFolder(path: string): Promise<{ project: Project; result: ImportResult; captureFolder: string } | null>;
   findMissingMedia(path: string): Promise<string[]>;
   relinkMedia(path: string, mediaId: string): Promise<Project | null>;
+  getMediaJobs(path: string): Promise<MediaJobQueueSnapshot>;
+  queueProxy(path: string, mediaId: string): Promise<MediaJob>;
+  queueClipWaveform(path: string, clipId: string, pixelsPerSecond: number): Promise<MediaJob>;
+  pauseMediaJobs(path: string): Promise<void>;
+  resumeMediaJobs(path: string): Promise<void>;
+  clearCachedProxies(path: string): Promise<number>;
+  retryMediaJob(path: string, jobId: string): Promise<MediaJob>;
+  onMediaJobsUpdated(callback: (event: { projectPath: string } & MediaJobQueueSnapshot) => void): () => void;
   updateMediaMetadata(path: string, mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null; analysisEventReviews?: AnalysisEventReview[] }): Promise<Project>;
   searchMedia(path: string, query: string, favoriteOnly: boolean): Promise<MediaAsset[]>;
   getImportRoots(path: string): Promise<ImportRoot[]>;
   setImportRootWatching(path: string, rootPath: string, watching: boolean): Promise<ImportRoot[]>;
   analyzeAudio(path: string, mediaId: string): Promise<AudioAnalysis>;
   analyzeHighlightCues(path: string, mediaId: string): Promise<HighlightAnalysis>;
+  getAnalysisRuntimes(): Promise<AnalysisRuntimeStatus[]>;
   getAudioAnalysisStatuses(path: string): Promise<string[]>;
   addTrack(path: string, kind: TrackKind): Promise<Project>;
   updateTrack(path: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean }): Promise<Project>;

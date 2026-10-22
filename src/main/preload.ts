@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { OpenMontageApi } from '../shared/electron';
-import type { AudioAnalysis, HighlightAnalysis } from '../core/types';
+import type { AnalysisRuntimeStatus, AudioAnalysis, HighlightAnalysis, MediaJob, MediaJobQueueSnapshot } from '../core/types';
 
 function toFileUrl(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/');
@@ -29,12 +29,25 @@ const api: OpenMontageApi = {
   importMedalFolder: (filePath) => ipcRenderer.invoke('media:importMedalFolder', filePath),
   findMissingMedia: (filePath) => ipcRenderer.invoke('media:findMissing', filePath),
   relinkMedia: (filePath, mediaId) => ipcRenderer.invoke('media:relink', filePath, mediaId),
+  getMediaJobs: (filePath) => ipcRenderer.invoke('media:getJobs', filePath) as Promise<MediaJobQueueSnapshot>,
+  queueProxy: (filePath, mediaId) => ipcRenderer.invoke('media:queueProxy', filePath, mediaId) as Promise<MediaJob>,
+  queueClipWaveform: (filePath, clipId, pixelsPerSecond) => ipcRenderer.invoke('media:queueClipWaveform', filePath, clipId, pixelsPerSecond) as Promise<MediaJob>,
+  pauseMediaJobs: (filePath) => ipcRenderer.invoke('media:pauseJobs', filePath),
+  resumeMediaJobs: (filePath) => ipcRenderer.invoke('media:resumeJobs', filePath),
+  clearCachedProxies: (filePath) => ipcRenderer.invoke('media:clearCachedProxies', filePath) as Promise<number>,
+  retryMediaJob: (filePath, jobId) => ipcRenderer.invoke('media:retryJob', filePath, jobId) as Promise<MediaJob>,
+  onMediaJobsUpdated: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, event: { projectPath: string } & MediaJobQueueSnapshot) => callback(event);
+    ipcRenderer.on('media:jobsUpdated', listener);
+    return () => ipcRenderer.removeListener('media:jobsUpdated', listener);
+  },
   updateMediaMetadata: (filePath, mediaId, patch) => ipcRenderer.invoke('media:updateMetadata', filePath, mediaId, patch),
   searchMedia: (filePath, query, favoriteOnly) => ipcRenderer.invoke('media:search', filePath, query, favoriteOnly),
   getImportRoots: (filePath) => ipcRenderer.invoke('media:getImportRoots', filePath),
   setImportRootWatching: (filePath, rootPath, watching) => ipcRenderer.invoke('media:setRootWatching', filePath, rootPath, watching),
   analyzeAudio: (filePath, mediaId) => ipcRenderer.invoke('media:analyzeAudio', filePath, mediaId) as Promise<AudioAnalysis>,
   analyzeHighlightCues: (filePath, mediaId) => ipcRenderer.invoke('media:analyzeHighlightCues', filePath, mediaId) as Promise<HighlightAnalysis>,
+  getAnalysisRuntimes: () => ipcRenderer.invoke('media:getAnalysisRuntimes') as Promise<AnalysisRuntimeStatus[]>,
   getAudioAnalysisStatuses: (filePath) => ipcRenderer.invoke('media:getAudioAnalysisStatuses', filePath) as Promise<string[]>,
   addTrack: (filePath, kind) => ipcRenderer.invoke('timeline:addTrack', filePath, kind),
   updateTrack: (filePath, trackId, patch) => ipcRenderer.invoke('timeline:updateTrack', filePath, trackId, patch),

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
-import type { AnalysisEventReview, AudioAnalysis, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
@@ -13,6 +13,16 @@ function formatTime(value: number): string {
   const ms = Math.max(0, Math.floor(value * 1000));
   const minutes = Math.floor(ms / 60000), seconds = Math.floor(ms / 1000) % 60, centis = Math.floor(ms / 10) % 100;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centis).padStart(2, '0')}`;
+}
+function analysisEventLabel(event: HighlightAnalysis['events'][number]): string {
+  const gameEvent = event.detectors.find((detector) => typeof detector.evidence.gameEvent === 'string')?.evidence.gameEvent;
+  if (typeof gameEvent === 'string') return gameEvent.replaceAll('_', ' ');
+  if (event.kind === 'coincident_activity') return 'Combined activity';
+  if (event.kind === 'scene_change') return 'Scene change';
+  if (event.kind === 'motion_activity') return 'Motion activity';
+  if (event.kind === 'text_recognition') return 'HUD text';
+  if (event.kind === 'gameplay_event') return 'Gameplay event';
+  return 'Audio activity';
 }
 function frameLabel(value: { num: string; den: string }, fps: Project['frameRate']): string {
   return String(toFrame(value, fps));
@@ -41,6 +51,8 @@ export default function App() {
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [audioAnalyses, setAudioAnalyses] = useState<Record<string, AudioAnalysis>>({});
   const [audioAnalysisStatuses, setAudioAnalysisStatuses] = useState<Record<string, AudioAnalysisStatus>>({});
+  const [mediaJobs, setMediaJobs] = useState<MediaJob[]>([]);
+  const [mediaJobsPaused, setMediaJobsPaused] = useState(false);
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
   const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
@@ -65,18 +77,22 @@ export default function App() {
   const [missingMediaIds, setMissingMediaIds] = useState<string[]>([]);
   const mediaRef = useRef<HTMLVideoElement>(null);
   const timelinePlaybackRef = useRef<HTMLVideoElement>(null);
+  const sourcePreviewPosition = useRef<{ mediaId: string; contentHash: string; time: number } | null>(null);
   const timelinePlaybackStart = useRef(0);
   const autoplayTimelinePlayback = useRef(false);
   const previewRequest = useRef(0);
   const historyRequest = useRef(0);
   const missingRequest = useRef(0);
   const analysisStatusRequest = useRef(0);
+  const mediaJobsRequest = useRef(0);
   const projectPathRef = useRef('');
   const timelineRef = useRef<HTMLDivElement>(null);
   const mediaListRef = useRef<HTMLDivElement>(null);
   const currentClip = getClip(project, selectedClipId);
   const selectedMedia = project?.media.find((asset) => asset.id === selectedMediaId) ?? null;
   const activeMedia = currentClip ? project?.media.find((asset) => asset.id === currentClip.clip.mediaId) ?? null : selectedMedia;
+  const activeProxyJob = activeMedia ? mediaJobs.filter((job) => job.kind === 'proxy' && job.mediaId === activeMedia.id && job.sourceContentHash === activeMedia.contentHash).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] : undefined;
+  const sourcePreviewPath = activeProxyJob?.state === 'complete' ? activeProxyJob.outputPath : activeMedia?.path;
   const currentTimelinePlayback = project && timelinePlayback?.revision === project.updatedAt ? timelinePlayback : null;
   const duration = project ? Math.max(20, ...project.tracks.flatMap((track) => track.clips.map(clipEnd))) : 20;
   const visibleMedia = useMemo(() => {
@@ -163,8 +179,14 @@ export default function App() {
     return () => { removeProgress?.(); removeMediaUpdate?.(); };
   }, []);
 
+  useEffect(() => window.openmontage?.onMediaJobsUpdated((event) => {
+    if (event.projectPath.toLocaleLowerCase() !== projectPathRef.current.toLocaleLowerCase()) return;
+    setMediaJobs(event.jobs); setMediaJobsPaused(event.paused);
+  }), []);
+
   const load = useCallback((result: { project: Project; path: string }) => {
     setProject(result.project); setProjectPath(result.path); projectPathRef.current = result.path; setSelectedClipId(null);
+    setMediaJobs([]); setMediaJobsPaused(false);
     setAudioAnalyses({});
     setAudioAnalysisStatuses({});
     const statusRequest = ++analysisStatusRequest.current;
@@ -173,12 +195,31 @@ export default function App() {
         setAudioAnalysisStatuses((current) => ({ ...Object.fromEntries(mediaIds.map((mediaId) => [mediaId, 'complete'])), ...current }));
       }
     }).catch(() => undefined);
+    const jobsRequest = ++mediaJobsRequest.current;
+    void window.openmontage?.getMediaJobs(result.path).then((snapshot) => {
+      if (jobsRequest === mediaJobsRequest.current && projectPathRef.current.toLocaleLowerCase() === result.path.toLocaleLowerCase()) {
+        setMediaJobs(snapshot.jobs); setMediaJobsPaused(snapshot.paused);
+      }
+    }).catch(() => undefined);
     void window.openmontage?.getImportRoots(result.path).then(setImportRoots).catch(() => setImportRoots([]));
     void refreshHistory(result.path);
     void refreshMissingMedia(result.path);
     setSelectedMediaId(result.project.media[0]?.id ?? null); setPlayhead(0);
     setError(''); setNotice(`Opened ${result.project.name}`);
   }, []);
+
+  useEffect(() => {
+    if (!project || !projectPath) return;
+    for (const track of project.tracks) if (track.kind === 'audio') for (const clip of track.clips) {
+      const asset = project.media.find((item) => item.id === clip.mediaId);
+      if (!asset?.hasAudio || missingMediaIds.includes(asset.id)) continue;
+      void window.openmontage.queueClipWaveform(projectPath, clip.id, timelineScale).then((job) => {
+        setMediaJobs((current) => current.some((item) => item.id === job.id)
+          ? current.map((item) => item.id === job.id ? job : item)
+          : [...current, job]);
+      }).catch(() => undefined);
+    }
+  }, [project, projectPath, timelineScale, missingMediaIds]);
 
   async function run<T>(operation: () => Promise<T>, update: (value: T) => Project | void, label: string) {
     if (!project || !projectPath) return;
@@ -196,6 +237,34 @@ export default function App() {
   }
   function setAudioAnalysisStatus(mediaId: string, status: AudioAnalysisStatus) {
     setAudioAnalysisStatuses((current) => ({ ...current, [mediaId]: status }));
+  }
+
+  async function generateProxy(mediaId: string) {
+    try {
+      const job = await window.openmontage.queueProxy(projectPath, mediaId);
+      setMediaJobs((current) => current.some((item) => item.id === job.id) ? current.map((item) => item.id === job.id ? job : item) : [...current, job]);
+      setNotice(job.state === 'complete' ? 'Proxy is ready for source preview' : 'Proxy added to media queue');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+  async function setMediaQueuePaused(paused: boolean) {
+    try {
+      if (paused) await window.openmontage.pauseMediaJobs(projectPath);
+      else await window.openmontage.resumeMediaJobs(projectPath);
+      setMediaJobsPaused(paused);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+  async function retryMediaJob(jobId: string) {
+    try {
+      const job = await window.openmontage.retryMediaJob(projectPath, jobId);
+      setMediaJobs((current) => current.map((item) => item.id === job.id ? job : item));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+  async function clearProxyCache() {
+    try {
+      mediaRef.current?.pause();
+      const removed = await window.openmontage.clearCachedProxies(projectPath);
+      setNotice(`${removed} cached ${removed === 1 ? 'proxy' : 'proxies'} cleared`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
 
   async function createProject() {
@@ -473,12 +542,16 @@ export default function App() {
                   autoplayTimelinePlayback.current = false;
                   void video.play().catch(() => setNotice('Preview rendered — press Play to start'));
                 }
-              }} onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)} onPlay={() => setTimelinePlaying(true)} onPause={() => setTimelinePlaying(false)} onEnded={(event) => { setTimelinePlaying(false); setPlayhead(event.currentTarget.duration); }} /> : timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{(timelinePlaybackBusy || timelinePreviewBusy) && <span className="preview-busy">{timelinePlaybackBusy ? `Rendering playback${timelinePlaybackProgress === null ? '…' : ` ${Math.round(timelinePlaybackProgress * 100)}%`}` : 'Rendering frame…'}</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={activeMedia.id} src={window.openmontage.toFileUrl(activeMedia.path)} controls onTimeUpdate={(event) => {
+              }} onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)} onPlay={() => setTimelinePlaying(true)} onPause={() => setTimelinePlaying(false)} onEnded={(event) => { setTimelinePlaying(false); setPlayhead(event.currentTarget.duration); }} /> : timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{(timelinePlaybackBusy || timelinePreviewBusy) && <span className="preview-busy">{timelinePlaybackBusy ? `Rendering playback${timelinePlaybackProgress === null ? '…' : ` ${Math.round(timelinePlaybackProgress * 100)}%`}` : 'Rendering frame…'}</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={`${activeMedia.id}:${sourcePreviewPath}`} src={window.openmontage.toFileUrl(sourcePreviewPath!)} controls onTimeUpdate={(event) => {
               const videoTime = event.currentTarget.currentTime;
+              sourcePreviewPosition.current = { mediaId: activeMedia.id, contentHash: activeMedia.contentHash, time: videoTime };
               if (currentClip) setPlayhead(secondsOf(currentClip.clip.start) + Math.max(0, videoTime - secondsOf(currentClip.clip.sourceIn)));
               else setPlayhead(videoTime);
             }} onLoadedMetadata={(event) => {
-              if (currentClip) { event.currentTarget.currentTime = secondsOf(currentClip.clip.sourceIn) + Math.max(0, playhead - secondsOf(currentClip.clip.start)); }
+              if (currentClip) event.currentTarget.currentTime = secondsOf(currentClip.clip.sourceIn) + Math.max(0, playhead - secondsOf(currentClip.clip.start));
+              else event.currentTarget.currentTime = sourcePreviewPosition.current?.mediaId === activeMedia.id && sourcePreviewPosition.current.contentHash === activeMedia.contentHash
+                ? Math.min(sourcePreviewPosition.current.time, event.currentTarget.duration || sourcePreviewPosition.current.time)
+                : 0;
             }} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon">{activeMedia ? <Music2 size={32} /> : <Clapperboard size={38} />}</div><strong>{activeMedia ? activeMedia.name : 'Source monitor'}</strong><span>{activeMedia ? 'Audio asset selected' : 'Select a clip or import footage to begin'}</span><div className="playhead-time">{formatTime(playhead)}</div></div>}
           </div>
           <div className="monitor-bottom"><div className="transport"><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime = Math.max(0, mediaRef.current.currentTime - step); else seekTo(Math.max(0, playhead - step)); }} title="Previous frame"><span>◀|</span></button><button className="play-button" disabled={!ffmpeg || timelinePlaybackBusy || (previewMode === 'timeline' && !project.tracks.some((track) => track.clips.length > 0)) || (previewMode === 'source' && activeMedia?.kind !== 'video')} title={previewMode === 'timeline' ? (timelinePlaying ? 'Pause timeline' : 'Render and play timeline') : 'Play source video'} onClick={() => void togglePlayback()}>{timelinePlaying || (previewMode === 'source' && mediaRef.current?.paused === false) ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}</button><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime += step; else seekTo(Math.min(duration, playhead + step)); }} title="Next frame"><span>|▶</span></button></div><div className="time-readout">{formatTime(playhead)} <span>/ {formatTime(duration)}</span></div><div className="monitor-right"><Volume2 size={15} /><span>Fit</span><ChevronDown size={13} /></div></div>
@@ -509,16 +582,18 @@ export default function App() {
                       const asset = project.media.find((item) => item.id === clip.mediaId)!;
                       const trimmed = trimDraft?.clipId === clip.id ? trimDraft : null;
                       const start = trimmed?.start ?? secondsOf(clip.start), clipDuration = trimmed?.duration ?? secondsOf(clip.duration), width = Math.max(22, clipDuration * timelineScale);
-                      const clipArtworkStyle: React.CSSProperties | undefined = asset.kind === 'audio' && asset.thumbnailPath ? {
-                        width: `${secondsOf(asset.duration) / secondsOf(clip.duration) * 100}%`,
-                        left: `${-secondsOf(clip.sourceIn) / secondsOf(clip.duration) * 100}%`,
+                      const clipWaveform = !trimmed && track.kind === 'audio' && asset.hasAudio ? mediaJobs.find((job) => job.kind === 'clip-waveform' && job.mediaId === asset.id && job.sourceContentHash === asset.contentHash && job.clipId === clip.id && job.zoomPixelsPerSecond === timelineScale && job.sourceInSeconds === secondsOf(clip.sourceIn) && job.clipDurationSeconds === secondsOf(clip.duration) && job.state === 'complete') : undefined;
+                      const artworkPath = clipWaveform?.outputPath ?? asset.thumbnailPath;
+                      const clipArtworkStyle: React.CSSProperties | undefined = asset.kind === 'audio' && artworkPath && artworkPath === asset.thumbnailPath ? {
+                        width: `${secondsOf(asset.duration) / clipDuration * 100}%`,
+                        left: `${-(trimmed?.sourceIn ?? secondsOf(clip.sourceIn)) / clipDuration * 100}%`,
                         objectFit: 'fill', opacity: 0.72
-                      } : undefined;
+                      } : clipWaveform ? { width: '100%', left: 0, objectFit: 'fill', opacity: 0.8 } : undefined;
                       const beatOffsets = asset.kind === 'audio' ? audioClipBeatOffsets(clip, audioAnalyses[asset.id]) : [];
                       const downbeatOffsets = asset.kind === 'audio' ? audioClipDownbeatOffsets(clip, audioAnalyses[asset.id]) : [];
                       const dropOffsets = asset.kind === 'audio' ? audioClipDropOffsets(clip, audioAnalyses[asset.id]) : [];
                       return <div key={clip.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/clip-id', clip.id)} onClick={(event) => { event.stopPropagation(); setSelectedClipId(clip.id); setSelectedMediaId(asset.id); setPlayhead(start); }} className={`timeline-clip ${track.kind} ${selectedClipId === clip.id ? 'active' : ''}`} style={{ left: start * timelineScale, width, '--clip-hue': `${(index * 61 + asset.name.length * 13) % 360}` } as React.CSSProperties}>
-                        {asset.thumbnailPath && <img className="clip-filmstrip" style={clipArtworkStyle} src={window.openmontage.toFileUrl(asset.thumbnailPath)} />}
+                        {artworkPath && <img className="clip-filmstrip" style={clipArtworkStyle} src={`${window.openmontage.toFileUrl(artworkPath)}${clipWaveform ? `?v=${clipWaveform.updatedAt}` : ''}`} />}
                         {beatOffsets.length > 0 && <span className="timeline-beat-markers" aria-hidden="true">{beatOffsets.map((offset, beatIndex) => <i key={beatIndex} className={downbeatOffsets.includes(offset) ? 'downbeat' : ''} style={{ left: `${offset * 100}%` }} />)}{dropOffsets.map((offset, dropIndex) => <i key={`drop-${dropIndex}`} className="drop" style={{ left: `${offset * 100}%` }} />)}</span>}
                         <div className="clip-content"><strong>{asset.name}</strong><span>{formatTime(clipDuration)}</span></div>
                         <span className="clip-edge left" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'left')} title="Drag to trim clip start" /><span className="clip-edge right" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'right')} title="Drag to trim clip end" />
@@ -545,7 +620,7 @@ export default function App() {
             <NumberField label="Fade out" unit="s" value={secondsOf(currentClip.clip.fadeOut ?? rational(0))} max={secondsOf(currentClip.clip.duration)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(fadeOut) => void patchClipAudio({ fadeOut })} />
           </section>
           <section className="inspector-section muted-section"><div className="section-label"><span>MORE CONTROLS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Sparkles size={14} /><span>Effects and keyframes</span><small>Planned</small></div><div className="disabled-row"><Activity size={14} /><span>Masking and tracking</span><small>Planned</small></div></section>
-        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} analysisStatus={audioAnalysisStatuses[selectedMedia.id]} onAnalysisStatus={setAudioAnalysisStatus} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} onAnalysis={cacheAudioAnalysis} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
+        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} analysisStatus={audioAnalysisStatuses[selectedMedia.id]} onAnalysisStatus={setAudioAnalysisStatus} mediaJobs={mediaJobs} queuePaused={mediaJobsPaused} onQueueProxy={() => void generateProxy(selectedMedia.id)} onClearProxies={() => void clearProxyCache()} onPauseQueue={() => void setMediaQueuePaused(true)} onResumeQueue={() => void setMediaQueuePaused(false)} onRetryJob={(jobId) => void retryMediaJob(jobId)} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} onAnalysis={cacheAudioAnalysis} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
         <div className="inspector-footer"><span>PROJECT</span><strong>{project.name}</strong><small>{project.width} × {project.height} · {Number(project.frameRate.num) / Number(project.frameRate.den)} fps</small></div>
       </aside>
     </div>
@@ -556,7 +631,7 @@ export default function App() {
   </div>;
 }
 
-function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysisStatus, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; analysisStatus?: AudioAnalysisStatus; onAnalysisStatus: (mediaId: string, status: AudioAnalysisStatus) => void; onRelink: () => void; onSave: (patch: { tags?: string[]; game?: string | null; rating?: number; analysisEventReviews?: AnalysisEventReview[] }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
+function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysisStatus, mediaJobs, queuePaused, onQueueProxy, onClearProxies, onPauseQueue, onResumeQueue, onRetryJob, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; analysisStatus?: AudioAnalysisStatus; onAnalysisStatus: (mediaId: string, status: AudioAnalysisStatus) => void; mediaJobs: MediaJob[]; queuePaused: boolean; onQueueProxy: () => void; onClearProxies: () => void; onPauseQueue: () => void; onResumeQueue: () => void; onRetryJob: (jobId: string) => void; onRelink: () => void; onSave: (patch: { tags?: string[]; game?: string | null; rating?: number; analysisEventReviews?: AnalysisEventReview[] }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
   const [tags, setTags] = useState((asset.tags ?? []).join(', '));
   const [game, setGame] = useState(asset.game ?? '');
   const [rating, setRating] = useState(asset.rating ?? 0);
@@ -571,6 +646,7 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
   const [cueRunningAssetId, setCueRunningAssetId] = useState<string | null>(null);
   const cueRunning = cueRunningAssetId === asset.id;
   const [cueFailure, setCueFailure] = useState<{ assetId: string; message: string } | null>(null);
+  const [analysisRuntimes, setAnalysisRuntimes] = useState<AnalysisRuntimeStatus[]>([]);
   const cueError = cueFailure?.assetId === asset.id ? cueFailure.message : null;
   const [cueCorrections, setCueCorrections] = useState<Record<string, { start: number; decisive: number; end: number }>>({});
   const reviewedDetectorPrecision = useMemo(() => {
@@ -583,12 +659,20 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
     }
     return [...counts].filter(([, count]) => count.accepted + count.rejected > 0).map(([id, count]) => ({ id, accepted: count.accepted, total: count.accepted + count.rejected, precision: count.accepted / (count.accepted + count.rejected) }));
   }, [asset.analysisEventReviews]);
+  const assetJobs = mediaJobs.filter((job) => job.mediaId === asset.id);
+  const proxyJob = assetJobs.filter((job) => job.kind === 'proxy' && job.sourceContentHash === asset.contentHash).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
+  const queuedJobCount = mediaJobs.filter((job) => job.state === 'queued').length;
+  const runningJobCount = mediaJobs.filter((job) => job.state === 'running').length;
+  const failedJobCount = mediaJobs.filter((job) => job.state === 'failed').length;
+  const completeProxyCount = mediaJobs.filter((job) => job.kind === 'proxy' && job.state === 'complete').length;
+  const activeJobs = mediaJobs.filter((job) => job.state === 'queued' || job.state === 'running' || job.state === 'failed').slice(0, 5);
   const energyBins = analysis?.energyCurve.length ? Array.from({ length: Math.min(120, analysis.energyCurve.length) }, (_unused, index) => {
     const start = Math.floor(index * analysis.energyCurve.length / Math.min(120, analysis.energyCurve.length));
     const end = Math.max(start + 1, Math.floor((index + 1) * analysis.energyCurve.length / Math.min(120, analysis.energyCurve.length)));
     return analysis.energyCurve.slice(start, end).reduce((sum, value) => sum + value, 0) / (end - start);
   }) : [];
   useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setRating(asset.rating ?? 0); setAnalysisResult(null); setAnalysisFailure(null); setCueResult(null); setCueFailure(null); setCueCorrections({}); }, [asset.id, asset.tags, asset.game, asset.rating]);
+  useEffect(() => { let active = true; void window.openmontage.getAnalysisRuntimes().then((runtimes) => { if (active) setAnalysisRuntimes(runtimes); }).catch(() => { if (active) setAnalysisRuntimes([]); }); return () => { active = false; }; }, []);
   async function runAnalysis() {
     setAnalyzingAssetId(asset.id); setAnalysisFailure(null); onAnalysisStatus(asset.id, 'running');
     try { const data = await window.openmontage.analyzeAudio(projectPath, asset.id); setAnalysisResult({ assetId: asset.id, data }); onAnalysis(asset.id, data); }
@@ -618,6 +702,15 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
   return <>
     <div className="inspector-asset"><div className="inspector-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <Music2 size={19} />}</div><div><strong>{asset.name}</strong><small>{asset.kind.toUpperCase()} · {formatTime(secondsOf(asset.duration))}</small></div></div>
     {missing && <div className="missing-media-box"><strong>Media file is missing</strong><small title={asset.path}>{asset.path}</small><button onClick={onRelink}><FolderOpen size={13} /> Relink file</button></div>}
+    <section className="inspector-section media-jobs-section"><div className="section-label"><span>DERIVED MEDIA QUEUE</span><button><ChevronDown size={14} /></button></div>
+      {asset.kind === 'video' && <button className="analyze-audio" disabled={missing || proxyJob?.state === 'queued' || proxyJob?.state === 'running' || proxyJob?.state === 'complete'} onClick={onQueueProxy}><Film size={14} />{proxyJob?.state === 'complete' ? 'Proxy ready for source preview' : proxyJob?.state === 'running' ? 'Creating playback proxy…' : proxyJob?.state === 'queued' ? 'Proxy waiting in queue…' : 'Create playback proxy'}</button>}
+      {proxyJob && <div className="media-job-row"><div><strong>Video proxy</strong><span>{proxyJob.state}{proxyJob.state === 'running' || proxyJob.state === 'queued' ? ` · ${Math.round(proxyJob.progress * 100)}%` : ''}</span></div>{(proxyJob.state === 'running' || proxyJob.state === 'queued') && <div className="media-job-progress"><i style={{ width: `${Math.round(proxyJob.progress * 100)}%` }} /></div>}{proxyJob.state === 'failed' && <><small className="media-job-error">{proxyJob.error}</small><button onClick={() => onRetryJob(proxyJob.id)}>Retry</button></>}</div>}
+      <div className="media-job-summary">{runningJobCount} running · {queuedJobCount} queued · {failedJobCount} failed</div>
+      {activeJobs.map((job) => <div className="media-job-row compact" key={job.id}><div><strong>{job.kind === 'proxy' ? 'Proxy' : `Waveform · ${job.clipId?.slice(0, 8) ?? 'clip'}`}</strong><span>{job.state}{job.state === 'running' || job.state === 'queued' ? ` · ${Math.round(job.progress * 100)}%` : ''}</span></div>{job.state === 'failed' && <button onClick={() => onRetryJob(job.id)}>Retry</button>}</div>)}
+      {completeProxyCount > 0 && <button className="queue-toggle" onClick={onClearProxies}>Clear {completeProxyCount} cached {completeProxyCount === 1 ? 'proxy' : 'proxies'}</button>}
+      <button className="queue-toggle" onClick={queuePaused ? onResumeQueue : onPauseQueue}>{queuePaused ? <Play size={12} /> : <Pause size={12} />}{queuePaused ? 'Resume queue' : 'Pause after current job'}</button>
+      <small className="queue-note">Jobs are saved with the project and resume when it opens again. Limits: one FFmpeg job at a time.</small>
+    </section>
     <section className="inspector-section"><div className="section-label"><span>LIBRARY DETAILS</span><button><ChevronDown size={14} /></button></div>
       <div className="rating-field"><span>Highlight rating</span><div role="group" aria-label="Highlight rating">{[1, 2, 3, 4, 5].map((value) => <button type="button" key={value} className={value <= rating ? 'rated' : ''} aria-label={`Rate ${value} out of 5`} aria-pressed={rating === value} onClick={() => setRating(value)}><Star size={14} fill={value <= rating ? 'currentColor' : 'none'} /></button>)}<button type="button" className="rating-clear" onClick={() => setRating(0)} disabled={rating === 0}>Clear</button></div></div>
       <label className="metadata-field"><span>Game</span><input value={game} onChange={(event) => setGame(event.target.value)} placeholder="e.g. Valorant" /></label>
@@ -643,7 +736,7 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
           const review = asset.analysisEventReviews?.find((item) => item.eventId === event.id);
           const correction = cueCorrections[event.id] ?? { start: review?.startSeconds ?? event.startSeconds, decisive: review?.decisiveSeconds ?? event.decisiveSeconds, end: review?.endSeconds ?? event.endSeconds };
           return <div className="cue-event" key={event.id}>
-            <span className="cue-rank">{String(event.rank).padStart(2, '0')}</span><div><strong>{event.kind === 'coincident_activity' ? 'Audio + scene activity' : event.kind === 'scene_change' ? 'Scene change' : 'Audio activity'}</strong><small>{formatTime(review?.startSeconds ?? event.startSeconds)}–{formatTime(review?.endSeconds ?? event.endSeconds)} · event {formatTime(review?.decisiveSeconds ?? event.decisiveSeconds)}</small><small>{event.detectors.map((detector) => detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')).join(' + ')}</small><small>Confidence {Math.round(event.confidence * 100)}% · cue strength {Math.round(event.interestingness * 100)}%</small>
+            <span className="cue-rank">{String(event.rank).padStart(2, '0')}</span><div><strong>{analysisEventLabel(event)}</strong><small>{formatTime(review?.startSeconds ?? event.startSeconds)}–{formatTime(review?.endSeconds ?? event.endSeconds)} · event {formatTime(review?.decisiveSeconds ?? event.decisiveSeconds)}</small><small>{event.detectors.map((detector) => detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')).join(' + ')}</small>{event.detectors.find((detector) => typeof detector.evidence.gameProfile === 'string')?.evidence.gameProfile && <small>Game rules: {String(event.detectors.find((detector) => typeof detector.evidence.gameProfile === 'string')?.evidence.gameProfile)}</small>}{event.detectors.find((detector) => typeof detector.evidence.recognizedText === 'string')?.evidence.recognizedText && <small>HUD: {String(event.detectors.find((detector) => typeof detector.evidence.recognizedText === 'string')?.evidence.recognizedText)}</small>}<small>Confidence {Math.round(event.confidence * 100)}% · cue strength {Math.round(event.interestingness * 100)}%</small>
               <div className="cue-review-actions"><button className={review?.status === 'accepted' ? 'selected' : ''} onClick={() => saveEventReview(event, 'accepted')}>Accept</button><button className={review?.status === 'rejected' ? 'selected' : ''} onClick={() => saveEventReview(event, 'rejected')}>Reject</button><span>{review?.status ?? 'unreviewed'}</span></div>
               <div className="cue-correction-fields"><label>Start<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.start} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, start: Number(e.target.value) } }))} /></label><label>Event<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.decisive} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, decisive: Number(e.target.value) } }))} /></label><label>End<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.end} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, end: Number(e.target.value) } }))} /></label><button onClick={() => saveEventReview(event, 'corrected')}>Save correction</button></div>
             </div><b>{event.rankScore}</b>
@@ -654,7 +747,7 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
         <small>Rank reflects local audio/scene heuristics. It is not a gameplay label or calibrated highlight-quality score.</small>
       </div>}
     </section>
-    <section className="inspector-section muted-section"><div className="section-label"><span>DETECTOR STATUS</span><button><ChevronDown size={14} /></button></div>{cueAnalysis ? cueAnalysis.detectors.map((detector) => <div className="detector-status-row" key={detector.detectorId}><Activity size={13} /><span>{detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')}</span><small>{detector.status}</small></div>) : <div className="disabled-row"><Activity size={14} /><span>Scene and audio cues</span><small>Ready to run</small></div>}<div className="disabled-row"><Sparkles size={14} /><span>Gameplay and OCR models</span><small>Not installed</small></div></section>
+    <section className="inspector-section muted-section"><div className="section-label"><span>DETECTOR STATUS</span><button><ChevronDown size={14} /></button></div>{cueAnalysis ? cueAnalysis.detectors.map((detector) => <div className="detector-status-row" key={detector.detectorId}><Activity size={13} /><span>{detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')}{detector.message && <small className="detector-message">{detector.message}</small>}</span><small className={`detector-state ${detector.status}`}>{detector.status}</small></div>) : <div className="disabled-row"><Activity size={14} /><span>Local detectors</span><small>Run analysis to inspect</small></div>}{analysisRuntimes.map((runtime) => <div className="detector-status-row" key={runtime.id}><Sparkles size={13} /><span>{runtime.label}<small className="detector-message">{runtime.message}</small></span><small className={`detector-state ${runtime.status}`}>{runtime.status}</small></div>)}</section>
   </>;
 }
 

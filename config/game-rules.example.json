@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "profiles": [
+    {
+      "id": "my-game",
+      "gameAliases": ["My Game"],
+      "events": [
+        { "id": "kill", "keywords": ["eliminated", "headshot", "double kill"] },
+        { "id": "round_win", "keywords": ["round won", "match victory"] }
+      ]
+    }
+  ]
+}

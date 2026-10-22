@@ -1,6 +1,36 @@
 export type Rational = { num: string; den: string };
 export type TrackKind = 'video' | 'audio';
 
+export type MediaJobKind = 'proxy' | 'clip-waveform';
+export type MediaJobState = 'queued' | 'running' | 'complete' | 'failed' | 'cancelled';
+
+/** Public, serializable view of a durable derived-media job. Source paths stay in the main process. */
+export interface MediaJob {
+  id: string;
+  key: string;
+  kind: MediaJobKind;
+  mediaId: string;
+  sourceContentHash?: string;
+  state: MediaJobState;
+  progress: number;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  outputPath: string;
+  outputBytes?: number;
+  error?: string;
+  clipId?: string;
+  sourceInSeconds?: number;
+  clipDurationSeconds?: number;
+  zoomPixelsPerSecond?: number;
+  waveformWidth?: number;
+}
+
+export interface MediaJobQueueSnapshot {
+  jobs: MediaJob[];
+  paused: boolean;
+}
+
 export interface BpmHypothesis {
   bpm: number;
   score: number;
@@ -39,7 +69,7 @@ export interface AudioAnalysis {
 }
 
 export type DetectorModality = 'audio' | 'video' | 'text';
-export type AnalysisEventKind = 'audio_activity' | 'scene_change' | 'coincident_activity';
+export type AnalysisEventKind = 'audio_activity' | 'scene_change' | 'motion_activity' | 'text_recognition' | 'gameplay_event' | 'coincident_activity';
 
 export interface DetectorProvenance {
   detectorId: string;
@@ -72,6 +102,14 @@ export interface DetectorRunStatus {
   modality: DetectorModality;
   status: 'complete' | 'skipped' | 'failed';
   message?: string;
+}
+
+export interface AnalysisRuntimeStatus {
+  id: string;
+  label: string;
+  status: 'ready' | 'missing' | 'not-configured';
+  version?: string;
+  message: string;
 }
 
 export interface HighlightScoringWeights {

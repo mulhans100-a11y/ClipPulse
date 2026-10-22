@@ -2,14 +2,17 @@
 
 OpenMontage AI is a local-first, open-source desktop video editor focused on gaming montages and music-synchronized edits. The current `0.1.0` development build implements the first usable editing slice: import local media, preview it, assemble clips on multiple tracks, trim and split clips, save a non-destructive project, and render an MP4 with FFmpeg.
 
-The Phase A editing core is complete. Phase B and C are in progress. Local music analysis and ranked audio/scene activity cues are available, with detector provenance, timestamps, and project-persisted review/correction. Gameplay classification, independently evaluated detector precision/recall, and calibrated highlight-quality ranking are not implemented. Automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are also future work.
+Phases A and B are complete. Phase C now includes local music analysis, audio/scene/motion/HUD-text activity detectors, explicit game-event phrase rules, persisted review/correction, optional runtime reporting, and an independent-annotation evaluation workflow. No game benchmark footage or labels are bundled; a real game-specific benchmark still needs licensed source media and two independent reviewers. Trained gameplay models and calibrated highlight-quality ranking are not available. Automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are future work.
 
 ## Current capabilities
 
 - Electron + React + TypeScript desktop shell with isolated renderer context.
 - `.omproj` project files with versioned JSON, rational time values, autosaved edits, a `.bak` previous snapshot, and persistent 50-state undo/redo history.
 - Editable project name, output dimensions, and rational frame rate, plus four-step timeline zoom from 50% to 400%.
-- Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, cached video thumbnails, and audio waveform images. Original media files are referenced and never modified.
+- Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, content-addressed video thumbnails, and audio waveform images. Original media files are referenced and never modified.
+- Audio-track clips render their own source-trimmed waveform at the current timeline zoom. Results are cached by source content, clip range, and zoom; the waveform cache is capped at 512 MiB.
+- Video proxies can be generated in the source inspector. The source monitor uses a completed proxy automatically; timeline preview and final export continue to use original media.
+- Proxy and clip-waveform jobs share a project-persistent queue with pause/resume, retry, restart recovery, and one derived-media FFmpeg job at a time. Resource limits cap proxies at 960×540, 1.5 GB per file, and 12 GB total; jobs use one FFmpeg thread. Completed proxy caches can be cleared from the inspector. Relinking to different source content invalidates thumbnails, waveforms, proxies, and audio analysis.
 - A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names and manual 0–5 highlight ratings, and watches selected folders for new local clips.
 - The Medal import shortcut checks Medal's documented Windows default capture folder (`<system drive>:\Medal`); if it is not present, choose the custom folder from Medal's storage settings. Imports recurse and register the folder for new-file watching.
 - Media library sorting by modified date, name, duration, or highlight rating, with a virtualized list that only mounts nearby cards and thumbnails.
@@ -23,7 +26,10 @@ The Phase A editing core is complete. Phase B and C are in progress. Local music
 - A JSON-output CLI for project creation, media import/search/metadata, timeline operations, validation, frame extraction, and export.
 - Local audio analysis with BPM hypotheses, beat and downbeat positions, cautious meter estimates, relative energy curves, coarse sections, energy-rise markers, and transient timestamps. Results appear in the inspector and CLI, and validated analysis state appears per asset in the virtualized media list.
 - Beat, downbeat, and energy-rise ticks on analyzed audio clips; optional timeline snapping uses detected beats and clip edges.
-- Ranked local audio-activity and video scene-change cues with event windows, detector provenance, confidence/evidence, a cache, and a CLI command. The ranking is heuristic and does not claim gameplay semantics.
+- Ranked local audio-activity, video scene-change, sampled-frame motion, and optional Tesseract HUD-text cues with event windows, detector provenance, confidence/evidence, a cache, and a CLI command. Missing Tesseract is shown as a skipped detector.
+- OCR phrase rules turn explicit HUD notices into game-event cues for Valorant, Counter-Strike, Fortnite, Apex Legends, Overwatch, Call of Duty, OpenArena, and Anarch. Custom profiles can be supplied through `OPENMONTAGE_GAME_RULES`; rules are heuristic and require Tesseract.
+- Detector and music evaluation with strict-majority consensus from independent annotations. Reports per-detector precision/recall/F1, false positives/negatives, confidence calibration diagnostics, BPM error, and beat/downbeat precision/recall. See [evaluation/README.md](evaluation/README.md) and the manifest template.
+- Runtime inventory in the inspector and CLI reports FFmpeg, optional Tesseract, and the honest no-gameplay-model state. Optional model paths can be detected, but no inference adapter is bundled.
 
 ## Quick start on Windows
 
@@ -80,12 +86,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 ## Current limitations
 
 - Timeline editing currently uses rational seconds; the inspector also shows project-frame positions. UI fields are rounded to microsecond precision when they call the editor core.
-- Timeline zoom is an editor view setting and resets to 100% when the app starts. Waveform images currently stretch with clips rather than being regenerated at each zoom level.
-- Scrubbing shows a still composite frame. Timeline playback first renders the full edit to a revision-cached MP4, then plays that file; edits invalidate the cached playback and require another render. This is not live playback during editing. Audio clips use a duration-scaled source waveform image capped at 16,384 pixels; per-clip zoom regeneration, proxies, transitions, effect parity, and a render queue are not implemented.
+- Timeline zoom is an editor view setting and resets to 100% when the app starts. Waveform output is capped at 16,384 pixels per clip; extremely long clips therefore stop gaining resolution above that limit.
+- Scrubbing shows a still composite frame. Timeline playback first renders the full edit to a revision-cached MP4, then plays that file; edits invalidate the cached playback and require another render. This is not live playback during editing. Transitions, effect parity, and a full export/render queue are not implemented.
 - Rendering composites visible clips in track order over a black canvas. There is no color/effect pipeline or alpha-mask editor yet.
 - Media references are absolute file paths. Relinking keeps the existing media ID, requires the same media kind, and rejects a replacement that is too short for existing clip ranges. SQLite is a rebuildable cache adjacent to the project.
 - The `.bak` auto-backup is a single snapshot. Undo/redo snapshots are stored in a project-adjacent `.openmontage-history-<id>` folder, capped at 50 states; each timeline operation writes the project immediately.
 - The Medal integration currently means authorized local-folder import only. No cloud API integration is claimed.
-- Beat and meter estimates use local RMS/onset heuristics, not a trained music model. Meter confidence is a heuristic, energy sections are coarse four-second summaries, and harmonic analysis, confidence calibration, and varied real-music evaluation remain incomplete.
+- Beat and meter estimates use local RMS/onset heuristics, not a trained music model. Meter confidence and tempo correlation scores remain raw heuristics; the evaluation runner reports their calibration diagnostics from independent annotations. A varied real-music benchmark still needs to be populated locally.
 - Beat snapping uses those estimated beat positions; it does not yet distinguish strong impacts or drops from regular beats.
 - No GitHub remote is configured in this local checkout, so no public repository or release has been published.

@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { analyzeAudio, readCachedAudioAnalysis } from '../core/audioAnalysis';
 import { analyzeHighlightCues } from '../core/highlightAnalysis';
+import { getPublicAnalysisRuntimeStatuses } from '../core/analysisRuntimes';
 import { AppError } from '../core/errors';
 import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
@@ -13,7 +14,8 @@ import { frameTime } from '../core/time';
 import { watchFolder } from '../core/folderWatcher';
 import { medalCaptureFolderPreset } from '../core/medal';
 import { renderTimelineFrame } from '../core/timelinePreview';
-import type { Project, TrackKind } from '../core/types';
+import { PersistentMediaJobQueue, mediaJobQueuePath, type MediaJobSource } from '../core/mediaJobs';
+import type { MediaAsset, Project, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
 
 const here = __dirname;
@@ -22,6 +24,33 @@ const projectLocks = new Map<string, Promise<void>>();
 let folderWatchers = new Map<string, FSWatcher>();
 let watchedProjectPath: string | null = null;
 const previewFrameCounts = new Map<string, number>();
+const mediaJobQueues = new Map<string, Promise<PersistentMediaJobQueue>>();
+
+async function mediaJobQueue(filePath: string): Promise<PersistentMediaJobQueue> {
+  const project = await loadProject(filePath);
+  const cacheDirectory = projectCachePath(filePath, project.id);
+  const cacheKey = path.resolve(cacheDirectory).toLocaleLowerCase();
+  let queue = mediaJobQueues.get(cacheKey);
+  if (!queue) {
+    const projectPath = path.resolve(filePath);
+    queue = Promise.resolve(new PersistentMediaJobQueue(cacheDirectory, mediaJobQueuePath(cacheDirectory), (snapshot) => {
+      mainWindow?.webContents.send('media:jobsUpdated', { projectPath, ...snapshot });
+    }));
+    mediaJobQueues.set(cacheKey, queue);
+  }
+  return queue;
+}
+
+async function mediaJobSource(asset: MediaAsset): Promise<MediaJobSource> {
+  const stat = await fs.stat(asset.path);
+  if (!stat.isFile() || stat.size !== asset.sizeBytes || stat.mtime.toISOString() !== asset.modifiedAt) {
+    throw new Error(`Source media changed since import: ${asset.name}. Re-import or relink it before generating derived media.`);
+  }
+  return {
+    mediaId: asset.id, sourcePath: asset.path, contentHash: asset.contentHash, sourceSizeBytes: stat.size,
+    sourceMtimeMs: stat.mtimeMs, durationSeconds: Number(asset.duration.num) / Number(asset.duration.den)
+  };
+}
 
 async function pruneTimelinePreviews(directory: string, keepPath: string): Promise<void> {
   const files = await fs.readdir(directory).catch(() => [] as string[]);
@@ -185,9 +214,40 @@ ipcMain.handle('media:findMissing', (_event, filePath: string) => findMissingMed
 ipcMain.handle('media:relink', async (_event, filePath: string, mediaId: string) => {
   const response = await dialog.showOpenDialog(mainWindow!, { title: 'Relink missing media', properties: ['openFile'], filters: [{ name: 'Video and audio media', extensions: ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mts', 'm2ts', 'wmv', 'flv', 'mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma'] }] });
   if (response.canceled || !response.filePaths[0]) return null;
-  return withProjectLock(filePath, () => relinkMedia(filePath, mediaId, response.filePaths[0]));
+  return withProjectLock(filePath, async () => {
+    const next = await relinkMedia(filePath, mediaId, response.filePaths[0]);
+    const asset = next.media.find((item) => item.id === mediaId);
+    if (asset) await (await mediaJobQueue(filePath)).invalidateMedia(mediaId, asset.contentHash);
+    return next;
+  });
 });
 ipcMain.handle('media:updateMetadata', (_event, filePath: string, mediaId: string, patch) => withProjectLock(filePath, () => updateMediaMetadata(filePath, mediaId, patch)));
+ipcMain.handle('media:getJobs', async (_event, filePath: string) => (await mediaJobQueue(filePath)).status());
+ipcMain.handle('media:queueProxy', async (_event, filePath: string, mediaId: string) => {
+  const project = await loadProject(filePath);
+  const asset = project.media.find((item) => item.id === mediaId);
+  if (!asset) throw new AppError('MEDIA_NOT_FOUND', `Media asset not found: ${mediaId}`);
+  if (asset.kind !== 'video') throw new AppError('MEDIA_TYPE_MISMATCH', 'Proxy jobs are available for video media only.');
+  return (await mediaJobQueue(filePath)).enqueueProxy(await mediaJobSource(asset));
+});
+ipcMain.handle('media:queueClipWaveform', async (_event, filePath: string, clipId: string, pixelsPerSecond: number) => {
+  const project = await loadProject(filePath);
+  const track = project.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
+  const clip = track?.clips.find((item) => item.id === clipId);
+  if (!clip) throw new AppError('CLIP_NOT_FOUND', `Timeline clip not found: ${clipId}`);
+  const asset = project.media.find((item) => item.id === clip.mediaId);
+  if (!asset) throw new AppError('MEDIA_NOT_FOUND', `Media asset not found: ${clip.mediaId}`);
+  if (track?.kind !== 'audio' || !asset.hasAudio) throw new AppError('NO_AUDIO_STREAM', 'Per-clip waveforms require an audio-track clip with an audio stream.');
+  const source = await mediaJobSource(asset);
+  return (await mediaJobQueue(filePath)).enqueueClipWaveform(source, {
+    clipId, sourceInSeconds: Number(clip.sourceIn.num) / Number(clip.sourceIn.den),
+    durationSeconds: Number(clip.duration.num) / Number(clip.duration.den)
+  }, pixelsPerSecond);
+});
+ipcMain.handle('media:pauseJobs', async (_event, filePath: string) => (await mediaJobQueue(filePath)).pause());
+ipcMain.handle('media:resumeJobs', async (_event, filePath: string) => (await mediaJobQueue(filePath)).resume());
+ipcMain.handle('media:clearCachedProxies', async (_event, filePath: string) => (await mediaJobQueue(filePath)).clearCompletedProxies());
+ipcMain.handle('media:retryJob', async (_event, filePath: string, jobId: string) => (await mediaJobQueue(filePath)).retry(jobId));
 ipcMain.handle('media:search', (_event, filePath: string, query: string, favoriteOnly: boolean) => searchMedia(filePath, query, favoriteOnly));
 ipcMain.handle('media:getImportRoots', (_event, filePath: string) => getImportRoots(filePath));
 ipcMain.handle('media:analyzeAudio', async (_event, filePath: string, mediaId: string) => {
@@ -212,9 +272,10 @@ ipcMain.handle('media:analyzeHighlightCues', async (_event, filePath: string, me
   const cachePath = path.join(analysisDirectory, `cues-${asset.id}.json`);
   return analyzeHighlightCues({
     mediaId: asset.id, mediaPath: asset.path, mediaKind: asset.kind,
-    durationSeconds: Number(asset.duration.num) / Number(asset.duration.den), audioAnalysis, audioAnalysisError
+    durationSeconds: Number(asset.duration.num) / Number(asset.duration.den), game: asset.game, audioAnalysis, audioAnalysisError
   }, cachePath);
 });
+ipcMain.handle('media:getAnalysisRuntimes', () => getPublicAnalysisRuntimeStatuses());
 ipcMain.handle('media:getAudioAnalysisStatuses', async (_event, filePath: string) => {
   const project = await loadProject(filePath);
   const cacheDirectory = path.join(projectCachePath(filePath, project.id), 'analysis');

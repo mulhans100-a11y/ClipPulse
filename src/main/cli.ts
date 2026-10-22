@@ -5,6 +5,8 @@ import path from 'node:path';
 import { AppError, asAppError } from '../core/errors';
 import { analyzeAudio } from '../core/audioAnalysis';
 import { analyzeHighlightCues } from '../core/highlightAnalysis';
+import { evaluateHighlightDataset } from '../core/analysisEvaluation';
+import { getOptionalAnalysisRuntimes } from '../core/analysisRuntimes';
 import { renderTimelineFrame } from '../core/timelinePreview';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable, runCommand } from '../core/ffmpeg';
@@ -40,13 +42,21 @@ function secondsFlag(args: ParsedArgs, key: string, fallback?: string) {
 }
 function json(data: unknown): void { process.stdout.write(`${JSON.stringify({ ok: true, data }, null, 2)}\n`); }
 function help(): void {
-  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nAll successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
+  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]\n  analysis-runtimes\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nAll successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === 'help' || args.flags.has('help')) { help(); return; }
   if (args.command === 'doctor') { json({ platform: process.platform, node: process.version, ffmpeg: await ffmpegAvailable() }); return; }
+  if (args.command === 'analysis-runtimes') { json(await getOptionalAnalysisRuntimes().then((items) => items.map(({ executablePath: _path, ...item }) => item))); return; }
+  if (args.command === 'evaluate-highlights') {
+    const maxGap = one(args, 'max-gap') === undefined ? 2 : Number(one(args, 'max-gap'));
+    const report = await evaluateHighlightDataset(one(args, 'dataset', true)!, maxGap);
+    const output = one(args, 'output');
+    if (output) { const outputPath = path.resolve(output); await fs.mkdir(path.dirname(outputPath), { recursive: true }); await fs.writeFile(outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8'); }
+    json({ report, outputPath: output ? path.resolve(output) : undefined }); return;
+  }
   if (args.command === 'create') {
     const fps = one(args, 'fps', false);
     const project = await createProject(one(args, 'project', true)!, {
@@ -113,7 +123,7 @@ async function main(): Promise<void> {
     }
     const result = await analyzeHighlightCues({
       mediaId: asset.id, mediaPath: asset.path, mediaKind: asset.kind,
-      durationSeconds: Number(asset.duration.num) / Number(asset.duration.den), audioAnalysis, audioAnalysisError
+      durationSeconds: Number(asset.duration.num) / Number(asset.duration.den), game: asset.game, audioAnalysis, audioAnalysisError
     }, path.join(analysisDirectory, `cues-${asset.id}.json`));
     json(result); return;
   }

@@ -21,7 +21,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Adjustable timeline zoom from 50% to 400%.
 - [x] Optional magnetic snapping to clip edges and analyzed music beats.
 
-## Phase B — Media library (in progress)
+## Phase B — Media library (complete)
 
 - [x] SQLite index and incremental path/size/mtime reuse, with exact SHA-256 duplicate detection.
 - [x] Search by name/path/tag/game, plus tags, favorites, and game assignment.
@@ -30,8 +30,8 @@ Status reflects the repository at `0.1.0`.
 - [x] Manual 0–5 highlight ratings, persisted in project and SQLite, editable in the inspector and CLI, with a top-rated sort.
 - [x] Per-asset audio-analysis state (not analyzed, running, ready, failed) in virtualized media cards, with ready state validated against the source file's size and modification time.
 - [x] Sort by modified date, name, or duration, and virtualize media cards while scrolling.
-- [ ] Per-clip waveform rendering that regenerates for timeline zoom (current source-wide waveform cache scales with duration for sharper display through 400% zoom, capped at 16,384 px).
-- [ ] Proxy jobs, resumable queue, resource limits, and thumbnail cache invalidation.
+- [x] Per-clip waveform rendering at the active timeline zoom, cached by source content, clip range, and zoom; output width is capped at 16,384 px and the waveform cache at 512 MiB.
+- [x] Project-persistent proxy and waveform job queue with restart recovery, pause/resume, retries, single-job/single-thread processing, bounded proxy dimensions and file/cache sizes, and content-based thumbnail/proxy/waveform invalidation on relink.
 - [x] Medal capture-folder preset detection on Windows, custom-folder fallback, recursive import, and new-file watcher registration.
 - [x] Verify and document whether Medal offers a public user-authorized cloud API before considering cloud access; no documented personal-library API was found.
 
@@ -39,14 +39,17 @@ Status reflects the repository at `0.1.0`.
 
 - [x] Initial local audio analysis: BPM hypotheses, beat positions, and amplitude-transient timestamps, with cached JSON results.
 - [x] Show analyzed beat positions on audio timeline clips and snap editing positions to them.
-- [ ] Complete audio-analysis improvements: downbeats, heuristic meter, one-second relative energy, coarse sections, and energy-rise markers are implemented; confidence calibration and varied real-music evaluation remain.
+- [x] Audio-analysis outputs: downbeats, heuristic meter, one-second relative energy, coarse sections, and energy-rise markers; independent reference manifests can report BPM/beat/downbeat errors and tempo-score calibration diagnostics.
+- [ ] Populate and evaluate a varied real-music reference set; runtime tempo and meter scores remain raw heuristics.
 - [x] Typed detector plugin interface with built-in local audio-activity and FFmpeg scene-change detectors.
-- [ ] Initial game-specific detector evaluation set.
-- [x] Timestamped scene-change and audio-activity event windows with detector provenance, evidence, and heuristic cue ranking.
-- [ ] Motion and OCR detector provenance/results; gameplay event classifiers are not available yet.
+- [x] Versioned annotation manifest template and CLI evaluator with strict-majority consensus, source-hash pinning, and negative review intervals.
+- [ ] Add a real game-specific evaluation set with licensed source media and independent annotation records; the repository contains no gameplay footage to label.
+- [x] Timestamped scene-change, audio-activity, and motion event windows with detector provenance, evidence, and heuristic cue ranking.
+- [x] Optional Tesseract HUD OCR and explicit game-event phrase profiles with provenance; missing Tesseract is reported as skipped, and trained gameplay models remain unavailable.
 - [x] Accept/reject/correct review UI with project-persisted event times and per-asset reviewed-proposal precision summaries.
-- [ ] Independently annotated game-specific evaluation set and per-detector precision/recall reporting (recall needs labeled missed events).
-- [ ] Optional model/runtime management with honest no-model fallback.
+- [x] Per-detector precision/recall/F1, false-positive/negative, confidence-calibration, BPM, beat, and downbeat reporting from independently reviewed manifest data.
+- [ ] Run and save a benchmark report from a populated game-specific dataset; no matching media or independent annotations are present in this checkout.
+- [x] Optional runtime inventory for FFmpeg, Tesseract OCR, and gameplay-model availability, with an honest no-model fallback.
 
 ## Phase D — Automatic editing
 

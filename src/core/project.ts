@@ -324,16 +324,7 @@ export async function importMedia(filePath: string, inputPaths: string[], recurs
       }
       asset.path = mediaPath;
       asset.name = path.basename(mediaPath);
-      if (asset.kind === 'video' && (!asset.thumbnailPath || !(await fileExists(asset.thumbnailPath)))) {
-        const thumb = path.join(thumbDir, `${asset.id}.jpg`);
-        await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', decimal(rational(BigInt(asset.duration.num), BigInt(asset.duration.den) * 2n)), '-i', mediaPath, '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', thumb]);
-        asset.thumbnailPath = thumb;
-      } else if (asset.kind === 'audio' && (!asset.thumbnailPath?.endsWith('-waveform-zoom.png') || !(await fileExists(asset.thumbnailPath)))) {
-        const waveform = path.join(thumbDir, `${asset.id}-waveform-zoom.png`);
-        const width = waveformWidthForDuration(Number(asset.duration.num) / Number(asset.duration.den));
-        await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', mediaPath, '-filter_complex', `[0:a:0]aformat=channel_layouts=mono,showwavespic=s=${width}x144:colors=0xa6e85f:scale=lin[wave]`, '-map', '[wave]', '-frames:v', '1', '-update', '1', waveform]);
-        asset.thumbnailPath = waveform;
-      }
+      asset.thumbnailPath = await ensureMediaThumbnail(thumbDir, asset, mediaPath);
       const existingProjectAsset = project.media.find((item) => item.id === asset!.id);
       if (existingProjectAsset) {
         Object.assign(existingProjectAsset, asset);
@@ -399,24 +390,56 @@ export async function relinkMedia(filePath: string, mediaId: string, replacement
     asset.contentHash = hash;
     const thumbDir = path.join(projectCachePath(filePath, project.id), 'thumbnails');
     await fs.mkdir(thumbDir, { recursive: true });
-    if (asset.kind === 'video') {
-      const thumbnail = path.join(thumbDir, `${asset.id}.jpg`);
-      const tempThumbnail = path.join(thumbDir, `${asset.id}.${newId()}.tmp.jpg`);
-      await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', decimal(rational(BigInt(asset.duration.num), BigInt(asset.duration.den) * 2n)), '-i', target, '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', tempThumbnail]);
-      await fs.rename(tempThumbnail, thumbnail);
-      asset.thumbnailPath = thumbnail;
-    } else {
-      const waveform = path.join(thumbDir, `${asset.id}-waveform-zoom.png`);
-      const tempWaveform = path.join(thumbDir, `${asset.id}.${newId()}.tmp.png`);
-      const width = waveformWidthForDuration(Number(asset.duration.num) / Number(asset.duration.den));
-      await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', target, '-filter_complex', `[0:a:0]aformat=channel_layouts=mono,showwavespic=s=${width}x144:colors=0xa6e85f:scale=lin[wave]`, '-map', '[wave]', '-frames:v', '1', '-update', '1', tempWaveform]);
-      await fs.rename(tempWaveform, waveform);
-      asset.thumbnailPath = waveform;
-    }
+    asset.thumbnailPath = await ensureMediaThumbnail(thumbDir, asset, target, false);
     await saveProject(filePath, project);
     library.upsert(asset);
+    await pruneMediaThumbnails(thumbDir, asset.id, asset.thumbnailPath);
+    await invalidateAnalysisCache(filePath, project.id, asset.id);
   } finally { library.close(); }
   return project;
+}
+
+async function ensureMediaThumbnail(directory: string, asset: MediaAsset, sourcePath: string, pruneOld = true): Promise<string> {
+  await fs.mkdir(directory, { recursive: true });
+  const variant = asset.kind === 'video' ? 'video.jpg' : 'source-waveform.png';
+  const outputPath = path.join(directory, `asset-${asset.id}-${asset.contentHash}-${variant}`);
+  const existing = await fs.stat(outputPath).catch(() => null);
+  if (!existing?.isFile() || existing.size === 0) {
+    const temporaryPath = `${outputPath}.${newId()}.tmp${path.extname(outputPath)}`;
+    try {
+      const threads = ['-threads', '1', '-filter_threads', '1'];
+      if (asset.kind === 'video') {
+        const midpoint = decimal(rational(BigInt(asset.duration.num), BigInt(asset.duration.den) * 2n));
+        await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...threads, '-ss', midpoint, '-i', sourcePath, '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', temporaryPath]);
+      } else {
+        const width = waveformWidthForDuration(Number(asset.duration.num) / Number(asset.duration.den));
+        await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...threads, '-i', sourcePath, '-filter_complex', `[0:a:0]aformat=channel_layouts=mono,showwavespic=s=${width}x144:colors=0xa6e85f:scale=lin[wave]`, '-map', '[wave]', '-frames:v', '1', '-update', '1', temporaryPath]);
+      }
+      const stat = await fs.stat(temporaryPath);
+      if (!stat.isFile() || stat.size === 0) throw new Error('FFmpeg created an empty media thumbnail.');
+      await fs.rm(outputPath, { force: true });
+      await fs.rename(temporaryPath, outputPath);
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+  if (pruneOld) await pruneMediaThumbnails(directory, asset.id, outputPath);
+  return outputPath;
+}
+
+async function pruneMediaThumbnails(directory: string, mediaId: string, keepPath: string): Promise<void> {
+  const names = await fs.readdir(directory).catch(() => [] as string[]);
+  const obsolete = names.filter((name) => (name.startsWith(`asset-${mediaId}-`) || name === `${mediaId}.jpg` || name === `${mediaId}-waveform-zoom.png`) && path.join(directory, name) !== keepPath);
+  await Promise.all(obsolete.map((name) => fs.rm(path.join(directory, name), { force: true }).catch(() => undefined)));
+}
+
+async function invalidateAnalysisCache(filePath: string, projectId: string, mediaId: string): Promise<void> {
+  const directory = path.join(projectCachePath(filePath, projectId), 'analysis');
+  await Promise.all([
+    fs.rm(path.join(directory, `${mediaId}.json`), { force: true }),
+    fs.rm(path.join(directory, `cues-${mediaId}.json`), { force: true })
+  ]);
 }
 
 async function* walk(root: string): AsyncGenerator<string> {
