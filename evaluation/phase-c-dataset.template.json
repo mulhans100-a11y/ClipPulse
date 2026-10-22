@@ -39,16 +39,19 @@
       "durationSeconds": 30,
       "reviewedBy": ["annotator-a", "annotator-b"],
       "annotations": [],
+      "musicProfile": { "category": "steady-four-four", "description": "Optional reference-set stratum" },
       "musicAnnotations": [
         {
           "annotatorId": "annotator-a",
           "bpm": 120,
+          "meter": { "beatsPerBar": 4, "denominator": 4, "downbeatPhase": 0 },
           "beatTimesSeconds": [0.5, 1, 1.5, 2],
           "downbeatTimesSeconds": [0.5, 2.5]
         },
         {
           "annotatorId": "annotator-b",
           "bpm": 120,
+          "meter": { "beatsPerBar": 4, "denominator": 4, "downbeatPhase": 0 },
           "beatTimesSeconds": [0.51, 1.01, 1.49, 2.01],
           "downbeatTimesSeconds": [0.52, 2.49]
         }

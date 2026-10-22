@@ -12,7 +12,7 @@ npx license-checker --summary
 
 `package-lock.json` records the resolved dependency tree. Re-run the license summary after dependency changes. The npm audit should also be rerun for each release.
 
-On the development checkout's installed npm tree (22 October 2026), the package metadata summary reported 75 MIT, 10 ISC, 8 BSD-3-Clause, 5 Apache-2.0, 2 MPL-2.0, and 1 GPL-3.0-or-later packages. This includes development tooling and is not a count of binaries shipped by a release. The two MPL-2.0 packages were Lightning CSS and its Windows binary package in the Vite development toolchain; they are not production runtime dependencies. The complete resolved tree should be reviewed again before packaging.
+Before the optional Transformers.js segmentation runtime was added, the development checkout's package metadata summary (22 October 2026) reported 75 MIT, 10 ISC, 8 BSD-3-Clause, 5 Apache-2.0, 2 MPL-2.0, and 1 GPL-3.0-or-later packages. This is a historical snapshot that includes development tooling; it is not a count of binaries shipped by a release. The two MPL-2.0 packages were Lightning CSS and its Windows binary package in the Vite development toolchain; they are not production runtime dependencies. Re-run the license summary and review the complete resolved tree before packaging.
 
 ## FFmpeg
 
@@ -22,7 +22,7 @@ This project is GPL-3.0-or-later and does not redistribute the development machi
 
 ## AI models
 
-No model runtime, model weights, or network model download is included in Phase A. A later model integration must record exact model provenance, license, distribution rights, hardware needs, and whether the model runs locally before it is offered in the UI.
+Optional mask segmentation uses `@huggingface/transformers` 4.3.1 and its ONNX Runtime Node backend. The pinned `Xenova/detr-resnet-50-panoptic` ONNX model is downloaded on first use into the platform user-data model cache; no weights ship in the source tree or installer by default. It derives from Meta's DETR panoptic model, whose model card states Apache-2.0; users should review the model card and dataset terms for their own deployment. Inference is local after download, and source frames are not uploaded. The model recognizes COCO classes, so its coverage on rendered game characters is limited. This is separate from Phase C gameplay-event detection, which still has no trained model.
 
 ## Audio analysis
 

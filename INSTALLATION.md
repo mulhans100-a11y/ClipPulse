@@ -23,6 +23,12 @@ To confirm that OpenMontage can use the OCR runtime, run `npm run cli -- analysi
 
 The current editor uses the CPU `libx264` encoder by default for compatibility. Optional `h264_amf`, `h264_nvenc`, and `h264_qsv` CLI encoders depend on the installed FFmpeg build and compatible drivers. Availability does not guarantee that a particular GPU can initialize the encoder.
 
+## Optional AI mask segmentation
+
+The clip inspector can generate masks for common COCO object classes such as `person`, `car`, `dog`, `cat`, and `chair`. The first use downloads a pinned ONNX model from Hugging Face into OpenMontage's user-data model cache. Subsequent inference runs locally; extracted frames are temporary and removed after processing. The model tracks one matching instance across sampled frames and creates editable mask keyframes. It may not recognize game-specific meshes or HUD objects; use a manual mask or chroma key for those.
+
+The CLI exposes the same operation as `segment-mask`; pass `--model-cache DIR` to choose a different cache folder. Model download needs an internet connection the first time. No model weights are bundled by default.
+
 ## Run from source
 
 ```powershell

@@ -19,6 +19,7 @@
     "test": "npm run build:main && node --test dist/tests/*.test.js"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.3.1",
     "lucide-react": "^0.468.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
@@ -31,6 +32,7 @@
     "concurrently": "^10.0.6",
     "cross-env": "^10.1.0",
     "electron": "^45.0.0",
+    "electron-builder": "26.15.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "wait-on": "^9.5.1"

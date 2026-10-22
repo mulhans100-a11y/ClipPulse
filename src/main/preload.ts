@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { OpenMontageApi } from '../shared/electron';
-import type { AnalysisRuntimeStatus, AudioAnalysis, GeneratedAutoMontages, HighlightAnalysis, MediaJob, MediaJobQueueSnapshot } from '../core/types';
+import type { AnalysisRuntimeStatus, AudioAnalysis, GeneratedAutoMontages, HighlightAnalysis, MediaJob, MediaJobQueueSnapshot, SegmentationOptions, SegmentationProgress } from '../core/types';
 
 function toFileUrl(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/');
@@ -27,6 +27,7 @@ const api: OpenMontageApi = {
   undoProject: (filePath) => ipcRenderer.invoke('project:undo', filePath),
   redoProject: (filePath) => ipcRenderer.invoke('project:redo', filePath),
   importMedia: (filePath) => ipcRenderer.invoke('media:import', filePath),
+  importMusic: (filePath) => ipcRenderer.invoke('media:importMusic', filePath),
   importMedalFolder: (filePath) => ipcRenderer.invoke('media:importMedalFolder', filePath),
   findMissingMedia: (filePath) => ipcRenderer.invoke('media:findMissing', filePath),
   relinkMedia: (filePath, mediaId) => ipcRenderer.invoke('media:relink', filePath, mediaId),
@@ -57,6 +58,12 @@ const api: OpenMontageApi = {
   duplicateClip: (filePath, clipId, start) => ipcRenderer.invoke('timeline:duplicateClip', filePath, clipId, start),
   setClipAudio: (filePath, clipId, patch) => ipcRenderer.invoke('timeline:setClipAudio', filePath, clipId, patch),
   setClipEffects: (filePath, clipId, patch) => ipcRenderer.invoke('timeline:setClipEffects', filePath, clipId, patch),
+  generateClipModelMask: (filePath, clipId, options) => ipcRenderer.invoke('timeline:generateModelMask', filePath, clipId, options),
+  onSegmentationProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: { clipId: string } & SegmentationProgress) => callback(progress);
+    ipcRenderer.on('timeline:segmentationProgress', listener);
+    return () => ipcRenderer.removeListener('timeline:segmentationProgress', listener);
+  },
   trimClip: (filePath, clipId, patch) => ipcRenderer.invoke('timeline:trimClip', filePath, clipId, patch),
   moveClip: (filePath, clipId, start, trackId) => ipcRenderer.invoke('timeline:moveClip', filePath, clipId, start, trackId),
   splitClip: (filePath, clipId, at) => ipcRenderer.invoke('timeline:splitClip', filePath, clipId, at),

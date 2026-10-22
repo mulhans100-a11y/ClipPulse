@@ -7,7 +7,18 @@ import { analyzeHighlightCues, builtInDetectors } from './highlightAnalysis';
 import type { DetectorContext } from './highlightAnalysis';
 import type { AnalysisEvent, AudioAnalysis, HighlightAnalysis } from './types';
 
-export interface EvaluationAnnotator { id: string; independent: boolean; }
+export interface EvaluationAnnotator { id: string; independent: boolean; kind?: 'human' | 'published-reference'; }
+export interface EvaluationMusicMeter { beatsPerBar: number; denominator: number; downbeatPhase?: number; }
+export interface EvaluationReferenceSource {
+  kind: 'published-music-reference';
+  name: string;
+  sourceUrl: string;
+  license: string;
+  citation: string;
+  annotationMethod: string;
+  sourceRevision?: string;
+}
+export interface EvaluationExcludedItem { mediaPath: string; reason: string; }
 export interface EvaluationAnnotation {
   annotationId: string;
   annotatorId: string;
@@ -25,13 +36,18 @@ export interface EvaluationDatasetItem {
   /** IDs of annotators who reviewed the complete interval, including negative intervals. */
   reviewedBy: string[];
   annotations: EvaluationAnnotation[];
-  musicAnnotations?: Array<{ annotatorId: string; bpm?: number; beatTimesSeconds: number[]; downbeatTimesSeconds: number[] }>;
+  musicProfile?: { category: string; description?: string };
+  musicAnnotations?: Array<{ annotatorId: string; bpm?: number; meter?: EvaluationMusicMeter; beatTimesSeconds: number[]; downbeatTimesSeconds: number[] }>;
 }
 export interface EvaluationDataset {
   schemaVersion: 1;
   datasetId: string;
   game: string;
+  /** Omitted manifests retain the original independent-review requirement. */
+  annotationMode?: 'independent-review' | 'single-reviewer-pilot';
   annotators: EvaluationAnnotator[];
+  referenceSource?: EvaluationReferenceSource;
+  excludedItems?: EvaluationExcludedItem[];
   items: EvaluationDatasetItem[];
 }
 
@@ -54,22 +70,32 @@ export interface DetectorEvaluationResult {
 export interface HighlightEvaluationReport {
   datasetId: string;
   game: string;
+  annotationMode: 'independent-review' | 'single-reviewer-pilot' | 'published-music-reference';
+  evaluationNotes: string[];
+  referenceSource?: EvaluationReferenceSource;
+  excludedItems: EvaluationExcludedItem[];
   mediaItems: number;
-  consensusEvents: number;
+  referenceEvents: number;
   disputedAnnotations: number;
   matchToleranceSeconds: number;
   detectorResults: DetectorEvaluationResult[];
   musicResults: MusicEvaluationResult[];
-  musicSummary: { bpmMeanAbsoluteError: number | null; beatPrecision: number | null; beatRecall: number | null; beatF1: number | null; downbeatPrecision: number | null; downbeatRecall: number | null; downbeatF1: number | null; tempoScoreCalibration: { brierScore: number; expectedCalibrationError: number } | null };
-  items: Array<{ mediaPath: string; analysis: HighlightAnalysis; consensusEvents: number }>;
+  musicByCategory: Array<{ category: string; items: number; bpmMeanAbsoluteError: number | null; beatF1: number | null; downbeatF1: number | null; meterAccuracy: number | null; meterCoverage: number | null }>;
+  musicSummary: { bpmMeanAbsoluteError: number | null; beatPrecision: number | null; beatRecall: number | null; beatF1: number | null; downbeatPrecision: number | null; downbeatRecall: number | null; downbeatF1: number | null; tempoScoreCalibration: { brierScore: number; expectedCalibrationError: number } | null; meterAccuracy: number | null; meterCoverage: number | null; meterScoreCalibration: { brierScore: number; expectedCalibrationError: number } | null };
+  items: Array<{ mediaPath: string; analysis: HighlightAnalysis; referenceEvents: number }>;
 }
 
 export interface MusicEvaluationResult {
   mediaPath: string;
+  category: string | null;
   referenceBpm: number | null;
   estimatedBpm: number | null;
   absoluteBpmError: number | null;
   topTempoScore: number | null;
+  referenceMeter: EvaluationMusicMeter | null;
+  estimatedMeter: EvaluationMusicMeter | null;
+  meterConfidence: number | null;
+  meterCorrect: boolean | null;
   beatTruePositives: number;
   beatFalsePositives: number;
   beatFalseNegatives: number;
@@ -87,6 +113,7 @@ export async function evaluateHighlightDataset(datasetPath: string, matchToleran
   try { dataset = JSON.parse(await fs.readFile(absoluteDatasetPath, 'utf8')) as EvaluationDataset; }
   catch (error) { throw new AppError('EVALUATION_DATASET_READ_FAILED', `Could not read evaluation dataset: ${error instanceof Error ? error.message : error}`); }
   validateDataset(dataset);
+  const publishedMusicReference = dataset.referenceSource?.kind === 'published-music-reference';
 
   const analyses: Array<{ mediaPath: string; analysis: HighlightAnalysis; consensus: ConsensusLabel[]; disputedAnnotations: number; audioAnalysis?: AudioAnalysis }> = [];
   for (const item of dataset.items) {
@@ -160,36 +187,98 @@ export async function evaluateHighlightDataset(datasetPath: string, matchToleran
     return referenceBpm !== null && top ? [{ confidence: clamp(top.score, 0, 1), correct: Math.abs(top.bpm - referenceBpm) <= 2 }] : [];
   });
   const tempoCalibration = calculateConfidenceCalibration(tempoCalibrationSamples);
+  const meterReferenceItems = musicResults.filter((item) => item.referenceMeter !== null);
+  const meterPredictedItems = meterReferenceItems.filter((item) => item.estimatedMeter !== null);
+  const meterCalibration = calculateConfidenceCalibration(meterPredictedItems.flatMap((item) => item.meterConfidence === null || item.meterCorrect === null ? [] : [{ confidence: item.meterConfidence, correct: item.meterCorrect }]));
   return {
-    datasetId: dataset.datasetId, game: dataset.game, mediaItems: dataset.items.length,
-    consensusEvents: analyses.reduce((sum, entry) => sum + entry.consensus.length, 0),
+    datasetId: dataset.datasetId,
+    game: dataset.game,
+    annotationMode: publishedMusicReference ? 'published-music-reference' : dataset.annotationMode ?? 'independent-review',
+    evaluationNotes: dataset.annotationMode === 'single-reviewer-pilot'
+      ? ['Labels come from one human reviewer; this report does not measure inter-annotator agreement and is not a representative accuracy benchmark.']
+      : publishedMusicReference
+        ? ['Reference labels are taken from a published dataset; this report does not represent new independent listener annotations.']
+        : [],
+    ...(dataset.referenceSource ? { referenceSource: dataset.referenceSource } : {}), excludedItems: dataset.excludedItems ?? [], mediaItems: dataset.items.length,
+    referenceEvents: analyses.reduce((sum, entry) => sum + entry.consensus.length, 0),
     disputedAnnotations: analyses.reduce((sum, entry) => sum + entry.disputedAnnotations, 0),
     matchToleranceSeconds,
     detectorResults,
     musicResults,
+    musicByCategory: summarizeMusicByCategory(musicResults),
     musicSummary: {
       bpmMeanAbsoluteError: meanOrNull(musicResults.flatMap((item) => item.absoluteBpmError === null ? [] : [item.absoluteBpmError])),
       beatPrecision: safeRatio(beatCounts.tp, beatCounts.tp + beatCounts.fp), beatRecall: safeRatio(beatCounts.tp, beatCounts.tp + beatCounts.fn), beatF1: f1Score(beatCounts.tp, beatCounts.fp, beatCounts.fn),
       downbeatPrecision: safeRatio(downbeatCounts.tp, downbeatCounts.tp + downbeatCounts.fp), downbeatRecall: safeRatio(downbeatCounts.tp, downbeatCounts.tp + downbeatCounts.fn), downbeatF1: f1Score(downbeatCounts.tp, downbeatCounts.fp, downbeatCounts.fn),
-      tempoScoreCalibration: tempoCalibration ? { brierScore: tempoCalibration.brierScore, expectedCalibrationError: tempoCalibration.expectedCalibrationError } : null
+      tempoScoreCalibration: tempoCalibration ? { brierScore: tempoCalibration.brierScore, expectedCalibrationError: tempoCalibration.expectedCalibrationError } : null,
+      meterAccuracy: meterReferenceItems.length ? meterReferenceItems.filter((item) => item.meterCorrect === true).length / meterReferenceItems.length : null,
+      meterCoverage: meterReferenceItems.length ? meterPredictedItems.length / meterReferenceItems.length : null,
+      meterScoreCalibration: meterCalibration ? { brierScore: meterCalibration.brierScore, expectedCalibrationError: meterCalibration.expectedCalibrationError } : null
     },
-    items: analyses.map(({ mediaPath, analysis, consensus }) => ({ mediaPath, analysis, consensusEvents: consensus.length }))
+    items: analyses.map(({ mediaPath, analysis, consensus }) => ({ mediaPath, analysis, referenceEvents: consensus.length }))
   };
+}
+
+function summarizeMusicByCategory(items: MusicEvaluationResult[]): HighlightEvaluationReport['musicByCategory'] {
+  const categories = new Map<string, MusicEvaluationResult[]>();
+  for (const item of items) {
+    const category = item.category ?? 'uncategorized';
+    categories.set(category, [...(categories.get(category) ?? []), item]);
+  }
+  return [...categories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([category, rows]) => {
+    const beat = rows.reduce((sum, row) => ({ tp: sum.tp + row.beatTruePositives, fp: sum.fp + row.beatFalsePositives, fn: sum.fn + row.beatFalseNegatives }), { tp: 0, fp: 0, fn: 0 });
+    const downbeat = rows.reduce((sum, row) => ({ tp: sum.tp + row.downbeatTruePositives, fp: sum.fp + row.downbeatFalsePositives, fn: sum.fn + row.downbeatFalseNegatives }), { tp: 0, fp: 0, fn: 0 });
+    const meterRows = rows.filter((row) => row.referenceMeter !== null);
+    const predictedMeters = meterRows.filter((row) => row.estimatedMeter !== null);
+    return {
+      category,
+      items: rows.length,
+      bpmMeanAbsoluteError: meanOrNull(rows.flatMap((row) => row.absoluteBpmError === null ? [] : [row.absoluteBpmError])),
+      beatF1: f1Score(beat.tp, beat.fp, beat.fn),
+      downbeatF1: f1Score(downbeat.tp, downbeat.fp, downbeat.fn),
+      meterAccuracy: meterRows.length ? meterRows.filter((row) => row.meterCorrect === true).length / meterRows.length : null,
+      meterCoverage: meterRows.length ? predictedMeters.length / meterRows.length : null
+    };
+  });
 }
 
 function validateDataset(dataset: EvaluationDataset): void {
   if (!dataset || dataset.schemaVersion !== 1 || typeof dataset.datasetId !== 'string' || !dataset.datasetId.trim() || typeof dataset.game !== 'string' || !dataset.game.trim() || !Array.isArray(dataset.items) || dataset.items.length === 0) {
     throw new AppError('INVALID_EVALUATION_DATASET', 'Dataset needs schemaVersion 1, a datasetId, a game name, and at least one annotated media item.');
   }
-  if (!Array.isArray(dataset.annotators) || dataset.annotators.length < 2 || dataset.annotators.some((item) => !item.id?.trim() || item.independent !== true) || new Set(dataset.annotators.map((item) => item.id)).size !== dataset.annotators.length) {
-    throw new AppError('INVALID_EVALUATION_ANNOTATORS', 'At least two uniquely named annotators must be declared independent.');
+  const referenceSource = dataset.referenceSource;
+  const publishedMusicReference = referenceSource?.kind === 'published-music-reference';
+  const singleReviewerPilot = dataset.annotationMode === 'single-reviewer-pilot';
+  if (dataset.annotationMode !== undefined && dataset.annotationMode !== 'independent-review' && !singleReviewerPilot) {
+    throw new AppError('INVALID_EVALUATION_ANNOTATION_MODE', 'Annotation mode must be independent-review or single-reviewer-pilot.');
+  }
+  if (singleReviewerPilot && publishedMusicReference) {
+    throw new AppError('INVALID_EVALUATION_ANNOTATION_MODE', 'Single-reviewer pilot mode cannot be combined with a published music reference source.');
+  }
+  if (referenceSource?.kind === 'published-music-reference' && (!referenceSource.name?.trim() || !/^https:\/\//.test(referenceSource.sourceUrl) || !referenceSource.license?.trim() || !referenceSource.citation?.trim() || !referenceSource.annotationMethod?.trim())) {
+    throw new AppError('INVALID_EVALUATION_REFERENCE_SOURCE', 'Published music references need a name, HTTPS source URL, license, citation, and annotation method.');
+  }
+  const minimumAnnotators = publishedMusicReference || singleReviewerPilot ? 1 : 2;
+  const validAnnotatorCount = singleReviewerPilot ? dataset.annotators?.length === 1 : (dataset.annotators?.length ?? 0) >= minimumAnnotators;
+  if (!Array.isArray(dataset.annotators) || !validAnnotatorCount || dataset.annotators.some((item) => !item.id?.trim() || item.independent !== true) || new Set(dataset.annotators.map((item) => item.id)).size !== dataset.annotators.length) {
+    throw new AppError('INVALID_EVALUATION_ANNOTATORS', publishedMusicReference ? 'A published music reference source must have one uniquely named independent reference record.' : singleReviewerPilot ? 'Single-reviewer pilot mode requires exactly one uniquely named human reviewer.' : 'At least two uniquely named annotators must be declared independent.');
+  }
+  if (singleReviewerPilot && dataset.annotators[0].kind !== 'human') {
+    throw new AppError('INVALID_EVALUATION_ANNOTATORS', 'Single-reviewer pilot mode requires one human reviewer.');
   }
   const knownAnnotators = new Set(dataset.annotators.map((item) => item.id));
+  if (dataset.excludedItems !== undefined && (!Array.isArray(dataset.excludedItems) || dataset.excludedItems.some((item) => !item.mediaPath?.trim() || !item.reason?.trim()))) {
+    throw new AppError('INVALID_EVALUATION_EXCLUSIONS', 'Excluded reference items need a media path and a reason.');
+  }
+  if (publishedMusicReference && (dataset.annotators.length !== 1 || dataset.annotators[0].kind !== 'published-reference' || dataset.items.some((item) => item.mediaKind !== 'audio' || item.annotations.length > 0))) {
+    throw new AppError('INVALID_EVALUATION_REFERENCE_SOURCE', 'Published reference mode is limited to audio-only datasets with one published-reference annotator and no gameplay labels.');
+  }
   for (const [itemIndex, item] of dataset.items.entries()) {
     if (!item || typeof item.mediaPath !== 'string' || !item.mediaPath.trim() || !['video', 'audio'].includes(item.mediaKind) || typeof item.hasAudio !== 'boolean' || !Number.isFinite(item.durationSeconds) || item.durationSeconds <= 0 || !Array.isArray(item.reviewedBy) || !Array.isArray(item.annotations)) {
       throw new AppError('INVALID_EVALUATION_ITEM', `Evaluation media item ${itemIndex + 1} has invalid media metadata or annotations.`);
     }
-    if (new Set(item.reviewedBy).size < 2 || item.reviewedBy.some((id) => !knownAnnotators.has(id))) throw new AppError('INSUFFICIENT_INDEPENDENT_ANNOTATIONS', `Media item ${itemIndex + 1} must be completely reviewed by at least two declared annotators.`);
+    const requiredReviewers = (publishedMusicReference && item.mediaKind === 'audio') || singleReviewerPilot ? 1 : 2;
+    if (new Set(item.reviewedBy).size < requiredReviewers || item.reviewedBy.some((id) => !knownAnnotators.has(id))) throw new AppError('INSUFFICIENT_INDEPENDENT_ANNOTATIONS', `Media item ${itemIndex + 1} must be completely reviewed by at least ${requiredReviewers} declared reviewer(s).`);
     const ids = new Set<string>();
     for (const [annotationIndex, annotation] of item.annotations.entries()) {
       if (!annotation?.annotationId?.trim() || ids.has(annotation.annotationId) || !knownAnnotators.has(annotation.annotatorId) || !annotation.eventType?.trim() || ![annotation.startSeconds, annotation.decisiveSeconds, annotation.endSeconds].every(Number.isFinite) || annotation.startSeconds < 0 || annotation.startSeconds > annotation.decisiveSeconds || annotation.decisiveSeconds > annotation.endSeconds || annotation.endSeconds > item.durationSeconds) {
@@ -198,7 +287,8 @@ function validateDataset(dataset: EvaluationDataset): void {
       ids.add(annotation.annotationId);
     }
     if (item.annotations.some((annotation) => !item.reviewedBy.includes(annotation.annotatorId))) throw new AppError('INVALID_EVALUATION_ANNOTATION', `Every label in media item ${itemIndex + 1} must belong to an annotator who reviewed that item.`);
-    if (item.musicAnnotations !== undefined && (!Array.isArray(item.musicAnnotations) || new Set(item.musicAnnotations.map((annotation) => annotation.annotatorId)).size < 2 || item.musicAnnotations.some((annotation) => !knownAnnotators.has(annotation.annotatorId) || !item.reviewedBy.includes(annotation.annotatorId) || (annotation.bpm !== undefined && (!Number.isFinite(annotation.bpm) || annotation.bpm < 30 || annotation.bpm > 300)) || !Array.isArray(annotation.beatTimesSeconds) || !Array.isArray(annotation.downbeatTimesSeconds) || [...annotation.beatTimesSeconds, ...annotation.downbeatTimesSeconds].some((time) => !Number.isFinite(time) || time < 0 || time > item.durationSeconds)))) {
+    const requiredMusicReferences = (publishedMusicReference && item.mediaKind === 'audio') || singleReviewerPilot ? 1 : 2;
+    if (item.musicAnnotations !== undefined && (!Array.isArray(item.musicAnnotations) || new Set(item.musicAnnotations.map((annotation) => annotation.annotatorId)).size < requiredMusicReferences || item.musicAnnotations.some((annotation) => !knownAnnotators.has(annotation.annotatorId) || !item.reviewedBy.includes(annotation.annotatorId) || (annotation.bpm !== undefined && (!Number.isFinite(annotation.bpm) || annotation.bpm < 30 || annotation.bpm > 300)) || (annotation.meter !== undefined && (!Number.isInteger(annotation.meter.beatsPerBar) || annotation.meter.beatsPerBar < 1 || annotation.meter.beatsPerBar > 16 || ![2, 4, 8, 16].includes(annotation.meter.denominator) || (annotation.meter.downbeatPhase !== undefined && (!Number.isInteger(annotation.meter.downbeatPhase) || annotation.meter.downbeatPhase < 0 || annotation.meter.downbeatPhase >= annotation.meter.beatsPerBar)))) || !Array.isArray(annotation.beatTimesSeconds) || !Array.isArray(annotation.downbeatTimesSeconds) || [...annotation.beatTimesSeconds, ...annotation.downbeatTimesSeconds].some((time) => !Number.isFinite(time) || time < 0 || time > item.durationSeconds)))) {
       throw new AppError('INVALID_MUSIC_ANNOTATIONS', `Music annotations in media item ${itemIndex + 1} must contain valid independent beat references.`);
     }
     if (item.musicAnnotations?.length && !item.hasAudio) throw new AppError('INVALID_MUSIC_ANNOTATIONS', `Music annotations in media item ${itemIndex + 1} require an audio stream.`);
@@ -253,13 +343,19 @@ function evaluateMusicItem(item: EvaluationDatasetItem, analysis: AudioAnalysis 
   const referenceBeats = consensusTimes(references.map((annotation) => ({ id: annotation.annotatorId, values: annotation.beatTimesSeconds })), 0.08, item.reviewedBy.length);
   const referenceDownbeats = consensusTimes(references.map((annotation) => ({ id: annotation.annotatorId, values: annotation.downbeatTimesSeconds })), 0.12, item.reviewedBy.length);
   const referenceBpm = consensusBpm(references, item.reviewedBy);
+  const referenceMeter = consensusMeter(references, item.reviewedBy);
+  const estimatedMeter = analysis?.meter ? { beatsPerBar: analysis.meter.beatsPerBar, denominator: analysis.meter.denominator, downbeatPhase: analysis.meter.downbeatPhase } : null;
+  const meterCorrect = referenceMeter && estimatedMeter
+    ? referenceMeter.beatsPerBar === estimatedMeter.beatsPerBar && referenceMeter.denominator === estimatedMeter.denominator && (referenceMeter.downbeatPhase === undefined || referenceMeter.downbeatPhase === estimatedMeter.downbeatPhase)
+    : referenceMeter ? false : null;
   const beatCounts = matchTimes(analysis?.beats ?? [], referenceBeats, 0.08);
   const downbeatCounts = matchTimes(analysis?.downbeats ?? [], referenceDownbeats, 0.12);
   const estimatedBpm = analysis?.estimatedBpm ?? null;
   return {
-    mediaPath, referenceBpm, estimatedBpm,
+    mediaPath, category: item.musicProfile?.category ?? null, referenceBpm, estimatedBpm,
     absoluteBpmError: estimatedBpm === null || referenceBpm === null ? null : Math.abs(estimatedBpm - referenceBpm),
     topTempoScore: analysis?.bpmHypotheses[0]?.score ?? null,
+    referenceMeter, estimatedMeter, meterConfidence: analysis?.meter?.confidence ?? null, meterCorrect,
     beatTruePositives: beatCounts.tp, beatFalsePositives: beatCounts.fp, beatFalseNegatives: beatCounts.fn,
     downbeatTruePositives: downbeatCounts.tp, downbeatFalsePositives: downbeatCounts.fp, downbeatFalseNegatives: downbeatCounts.fn
   };
@@ -269,6 +365,23 @@ function consensusBpm(annotations: NonNullable<EvaluationDatasetItem['musicAnnot
   const valid = annotations.filter((annotation) => annotation.bpm !== undefined && reviewedBy.includes(annotation.annotatorId));
   if (new Set(valid.map((annotation) => annotation.annotatorId)).size < Math.floor(reviewedBy.length / 2) + 1) return null;
   return median(valid.map((annotation) => annotation.bpm!));
+}
+
+function consensusMeter(annotations: NonNullable<EvaluationDatasetItem['musicAnnotations']>, reviewedBy: string[]): EvaluationMusicMeter | null {
+  const valid = annotations.filter((annotation) => annotation.meter && reviewedBy.includes(annotation.annotatorId));
+  if (new Set(valid.map((annotation) => annotation.annotatorId)).size < Math.floor(reviewedBy.length / 2) + 1) return null;
+  const groups = new Map<string, typeof valid>();
+  for (const annotation of valid) {
+    const meter = annotation.meter!;
+    const key = `${meter.beatsPerBar}/${meter.denominator}`;
+    groups.set(key, [...(groups.get(key) ?? []), annotation]);
+  }
+  const required = Math.floor(reviewedBy.length / 2) + 1;
+  const group = [...groups.values()].find((members) => new Set(members.map((member) => member.annotatorId)).size >= required);
+  if (!group) return null;
+  const meter = group[0].meter!;
+  const phases = group.flatMap((member) => member.meter?.downbeatPhase === undefined ? [] : [member.meter.downbeatPhase]);
+  return { beatsPerBar: meter.beatsPerBar, denominator: meter.denominator, ...(phases.length ? { downbeatPhase: median(phases) } : {}) };
 }
 
 function consensusTimes(annotations: Array<{ id: string; values: number[] }>, tolerance: number, reviewerCount: number): number[] {

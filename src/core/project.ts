@@ -260,6 +260,8 @@ export function validateProject(project: Project): void {
         if (clip.mask !== undefined) {
           if (!Number.isFinite(clip.mask.featherPx) || clip.mask.featherPx < 0 || clip.mask.featherPx > 256 || !Number.isFinite(clip.mask.expansionPx) || clip.mask.expansionPx < -256 || clip.mask.expansionPx > 256 || (clip.mask.keyframes !== undefined && (!Array.isArray(clip.mask.keyframes) || clip.mask.keyframes.length > 256)))
             throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid mask feather, expansion, or tracking data.`);
+          if (clip.mask.provenance !== undefined && (!clip.mask.provenance || typeof clip.mask.provenance.modelId !== 'string' || clip.mask.provenance.modelId.length > 200 || typeof clip.mask.provenance.revision !== 'string' || clip.mask.provenance.revision.length > 100 || typeof clip.mask.provenance.className !== 'string' || clip.mask.provenance.className.length > 80 || !Number.isInteger(clip.mask.provenance.sampleCount) || clip.mask.provenance.sampleCount < 1 || clip.mask.provenance.sampleCount > 96 || !['temporal-majority-v1', 'single-frame-v1'].includes(clip.mask.provenance.stabilization)))
+            throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid model segmentation provenance.`);
           let maskPoints: ReturnType<typeof maskPathPoints>;
           try { maskPoints = maskPathPoints(clip.mask.path); }
           catch (error) { throw new AppError('INVALID_PROJECT', `Clip ${clip.id} mask path is invalid: ${error instanceof Error ? error.message : String(error)}`); }

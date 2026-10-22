@@ -15,8 +15,9 @@ import { frameTime } from '../core/time';
 import { watchFolder } from '../core/folderWatcher';
 import { medalCaptureFolderPreset } from '../core/medal';
 import { renderTimelineFrame } from '../core/timelinePreview';
+import { generateClipModelMask } from '../core/modelSegmentation';
 import { PersistentMediaJobQueue, mediaJobQueuePath, type MediaJobSource } from '../core/mediaJobs';
-import type { AutoMontageOptions, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
+import type { AutoMontageOptions, MediaAsset, Project, SegmentationOptions, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
 
 const here = __dirname;
@@ -197,6 +198,16 @@ ipcMain.handle('media:import', async (_event, filePath: string) => {
   await activateFolderWatchers(filePath);
   return { project: await loadProject(filePath), result };
 });
+ipcMain.handle('media:importMusic', async (_event, filePath: string) => {
+  const response = await dialog.showOpenDialog(mainWindow!, {
+    title: 'Import your music',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Audio files', extensions: ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma'] }]
+  });
+  if (response.canceled || !response.filePaths.length) return null;
+  const result = await withProjectLock(filePath, () => importMedia(filePath, response.filePaths, false));
+  return { project: await loadProject(filePath), result };
+});
 ipcMain.handle('media:importMedalFolder', async (_event, filePath: string) => {
   const preset = medalCaptureFolderPreset();
   let captureFolder: string | null = null;
@@ -321,6 +332,33 @@ ipcMain.handle('timeline:setClipAudio', async (_event, filePath: string, clipId:
   return withProjectLock(filePath, () => setClipAudio(filePath, clipId, converted));
 });
 ipcMain.handle('timeline:setClipEffects', (_event, filePath: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>) => withProjectLock(filePath, () => setClipEffects(filePath, clipId, patch)));
+ipcMain.handle('timeline:generateModelMask', async (_event, filePath: string, clipId: string, options: SegmentationOptions = {}) => {
+  const source = await withProjectLock(filePath, async () => {
+    const project = await loadProject(filePath);
+    const track = project.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
+    const clip = track?.clips.find((item) => item.id === clipId);
+    const media = clip ? project.media.find((item) => item.id === clip.mediaId) : undefined;
+    if (!clip || !media || media.kind !== 'video' || track?.kind !== 'video') throw new AppError('SEGMENTATION_NOT_VIDEO', 'Select a video clip on a video track before generating an AI mask.');
+    const stat = await fs.stat(media.path);
+    if (!stat.isFile() || stat.size !== media.sizeBytes || stat.mtime.toISOString() !== media.modifiedAt) throw new AppError('SEGMENTATION_SOURCE_CHANGED', 'The source video changed since it was imported. Re-import or relink it before generating a mask.');
+    return { project, clip: structuredClone(clip), media: structuredClone(media) };
+  });
+  const mask = await generateClipModelMask(source.media.path, source.clip, source.project, path.join(app.getPath('userData'), 'models'), options,
+    (progress) => mainWindow?.webContents.send('timeline:segmentationProgress', { clipId, ...progress }));
+  return withProjectLock(filePath, async () => {
+    const current = await loadProject(filePath);
+    const currentTrack = current.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
+    const currentClip = currentTrack?.clips.find((item) => item.id === clipId);
+    const currentMedia = currentClip ? current.media.find((item) => item.id === currentClip.mediaId) : undefined;
+    const clipSignature = (clip: TimelineClip) => JSON.stringify({ mediaId: clip.mediaId, sourceIn: clip.sourceIn, duration: clip.duration, playbackRate: clip.playbackRate, speedKeyframes: clip.speedKeyframes, transform: clip.transform });
+    const currentStat = currentMedia ? await fs.stat(currentMedia.path).catch(() => undefined) : undefined;
+    const profileChanged = current.width !== source.project.width || current.height !== source.project.height || JSON.stringify(current.frameRate) !== JSON.stringify(source.project.frameRate);
+    if (!currentClip || !currentMedia || currentMedia.contentHash !== source.media.contentHash || !currentStat || currentStat.size !== source.media.sizeBytes || currentStat.mtime.toISOString() !== source.media.modifiedAt || profileChanged || clipSignature(currentClip) !== clipSignature(source.clip) || JSON.stringify(currentClip.mask ?? null) !== JSON.stringify(source.clip.mask ?? null)) {
+      throw new AppError('SEGMENTATION_PROJECT_CHANGED', 'The selected clip changed while the model was generating its mask. Select it again and retry.');
+    }
+    return setClipEffects(filePath, clipId, { mask });
+  });
+});
 ipcMain.handle('timeline:trimClip', async (_event, filePath: string, clipId: string, patch: { start?: number; sourceIn?: number; duration?: number }) => {
   const converted = Object.fromEntries(await Promise.all(Object.entries(patch).map(async ([key, value]) => [key, value === undefined ? undefined : await uiFrameTime(filePath, value)])));
   return withProjectLock(filePath, () => trimClip(filePath, clipId, converted));

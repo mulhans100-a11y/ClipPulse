@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import { AppError, asAppError } from '../core/errors';
 import { analyzeAudio } from '../core/audioAnalysis';
@@ -13,7 +14,11 @@ import { exportVideo } from '../core/export';
 import { ffmpegAvailable, runCommand } from '../core/ffmpeg';
 import { addClip, addTrack, createProject, duplicateClip, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, searchMedia, setClipAudio, setClipEffects, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateTrackSettings, validateProject } from '../core/project';
 import { decimal, frameTime, parseDecimal, rational, toFrame } from '../core/time';
-import type { AutoMontageCustomRules, AutoMontageFormat, AutoMontageStyle } from '../core/types';
+import type { AutoMontageCustomRules, AutoMontageFormat, AutoMontageStyle, SegmentationProgress } from '../core/types';
+import { AGENT_SCHEMA_VERSION, AgentService } from './agent';
+import { startAgentRest } from './agentRest';
+import { runAgentMcp } from './agentMcp';
+import { generateClipModelMask, MODEL_SEGMENTATION_MODEL } from '../core/modelSegmentation';
 
 interface ParsedArgs { command: string; flags: Map<string, string[]>; positional: string[]; }
 function parseArgs(args: string[]): ParsedArgs {
@@ -42,14 +47,34 @@ function secondsFlag(args: ParsedArgs, key: string, fallback?: string) {
   const value = one(args, key) ?? fallback;
   return value === undefined ? undefined : parseDecimal(value);
 }
-function json(data: unknown): void { process.stdout.write(`${JSON.stringify({ ok: true, data }, null, 2)}\n`); }
+function json(data: unknown): void { process.stdout.write(`${JSON.stringify({ schemaVersion: AGENT_SCHEMA_VERSION, ok: true, data }, null, 2)}\n`); }
 function help(): void {
-  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C/D/E/F)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  generate-montage --project FILE --music ID --duration SEC [--style clean|aggressive|cinematic|velocity|custom] [--custom-rules JSON] [--video ID ...] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]\n  evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]\n  analysis-runtimes\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false] [--volume 0-8] [--role standard|dialogue|music] [--normalize true|false] [--duck-under-dialogue true|false] [--volume-keyframes FILE.json]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-effects --project FILE --clip ID --effects FILE.json\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nGenerated montage variants are separate editable .omproj files; the source project is not modified. Preview by opening a variant, then use export as usual. All successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
+  process.stdout.write(`Agent interfaces (JSON schema v${AGENT_SCHEMA_VERSION}): schema | agent-call --allow-root DIR --tool NAME --arguments JSON | serve --allow-root DIR [--allow-root DIR] [--port 43173] [--token TOKEN] | mcp-server --allow-root DIR [--allow-root DIR]\n\n`);
+  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C/D/E/F/G; JSON schema v1)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  generate-montage --project FILE --music ID --duration SEC [--style clean|aggressive|cinematic|velocity|custom] [--custom-rules JSON] [--video ID ...] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]\n  evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]\n  segment-mask --project FILE --clip ID [--class person] [--sample-fps 2] [--model-cache DIR]\n  analysis-runtimes\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false] [--volume 0-8] [--role standard|dialogue|music] [--normalize true|false] [--duck-under-dialogue true|false] [--volume-keyframes FILE.json]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-effects --project FILE --clip ID --effects FILE.json\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nModel-backed masks download the pinned ONNX model on first use and run locally afterward. All successful commands return JSON on stdout; progress goes to stderr. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === 'help' || args.flags.has('help')) { help(); return; }
+  if (args.command === 'schema') { const service = new AgentService({ allowedRoots: [process.cwd()] }); json(await service.schemaDocument()); return; }
+  if (args.command === 'agent-call') {
+    const service = new AgentService({ allowedRoots: args.flags.get('allow-root') ?? [] }); await service.initialize();
+    let input: unknown;
+    try { input = JSON.parse(one(args, 'arguments') ?? '{}'); }
+    catch (error) { throw new AppError('INVALID_ARGUMENTS', `--arguments must be valid JSON: ${error instanceof Error ? error.message : error}`); }
+    json(await service.call(one(args, 'tool', true)!, input)); return;
+  }
+  if (args.command === 'serve' || args.command === 'mcp-server') {
+    const roots = args.flags.get('allow-root') ?? [];
+    const service = new AgentService({ allowedRoots: roots }); await service.initialize();
+    if (args.command === 'mcp-server') { await runAgentMcp(service); return; }
+    const portValue = one(args, 'port'); const port = portValue === undefined ? 43173 : Number(portValue);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new AppError('INVALID_ARGUMENTS', '--port must be an integer between 0 and 65535.');
+    const server = await startAgentRest(service, { port, token: one(args, 'token') });
+    json({ schemaVersion: AGENT_SCHEMA_VERSION, url: `http://127.0.0.1:${server.port}/v1`, token: server.token, allowedRoots: service.allowedRoots });
+    await new Promise<void>((resolve) => { const stop = () => { void server.close().finally(resolve); }; process.once('SIGINT', stop); process.once('SIGTERM', stop); });
+    return;
+  }
   if (args.command === 'doctor') { json({ platform: process.platform, node: process.version, ffmpeg: await ffmpegAvailable() }); return; }
   if (args.command === 'analysis-runtimes') { json(await getOptionalAnalysisRuntimes().then((items) => items.map(({ executablePath: _path, ...item }) => item))); return; }
   if (args.command === 'evaluate-highlights') {
@@ -240,6 +265,31 @@ async function main(): Promise<void> {
     const project = await setClipEffects(file, clipId, patch);
     json(project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === clipId)); return;
   }
+  if (args.command === 'segment-mask') {
+    const clipId = one(args, 'clip', true)!;
+    const project = await loadProject(file);
+    const track = project.tracks.find((item) => item.clips.some((clip) => clip.id === clipId));
+    const clip = track?.clips.find((item) => item.id === clipId);
+    const media = clip ? project.media.find((item) => item.id === clip.mediaId) : undefined;
+    if (!clip || !media || media.kind !== 'video' || track?.kind !== 'video') throw new AppError('SEGMENTATION_NOT_VIDEO', 'The clip must be a video clip on a video track.');
+    const stat = await fs.stat(media.path);
+    if (!stat.isFile() || stat.size !== media.sizeBytes || stat.mtime.toISOString() !== media.modifiedAt) throw new AppError('SEGMENTATION_SOURCE_CHANGED', 'The source video changed since import. Re-import or relink it before generating a mask.');
+    const defaultCache = process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'OpenMontageAI', 'models')
+      : path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), '.cache'), 'openmontage-ai', 'models');
+    const cacheDirectory = path.resolve(one(args, 'model-cache') ?? defaultCache);
+    process.stderr.write(`Loading ${MODEL_SEGMENTATION_MODEL}; first run downloads its model weights.\n`);
+    const mask = await generateClipModelMask(media.path, clip, project, cacheDirectory, {
+      className: one(args, 'class') ?? 'person',
+      sampleFps: Number(one(args, 'sample-fps') ?? 2)
+    }, (progress: SegmentationProgress) => {
+      if (progress.stage === 'segmenting') process.stderr.write(`Segmenting frame ${progress.current}/${progress.total}\r`);
+    });
+    const updated = await setClipEffects(file, clipId, { mask });
+    const updatedClip = updated.tracks.flatMap((item) => item.clips).find((item) => item.id === clipId);
+    json({ clip: updatedClip, model: mask.provenance, modelCacheDirectory: cacheDirectory });
+    return;
+  }
   if (args.command === 'clip-trim') {
     const patch: Record<string, any> = {};
     for (const key of ['start', 'source-in', 'duration']) {
@@ -298,6 +348,6 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   const appError = asAppError(error);
-  process.stderr.write(`${JSON.stringify({ ok: false, error: { code: appError.code, message: appError.message } })}\n`);
+  process.stderr.write(`${JSON.stringify({ schemaVersion: AGENT_SCHEMA_VERSION, ok: false, error: { code: appError.code, message: appError.message } })}\n`);
   process.exitCode = 1;
 });

@@ -28,4 +28,5 @@
 - Phase D adds automatic montage planning, scoring, style strategies, separate editable variants, timeline preview, duration/source validation, and normal FFmpeg export.
 - Phase E adds shared preview/export filter semantics, keyframes, speed ramps, dissolve/wipe transitions, title overlays, transforms, color/LUT controls, track/clip audio automation, normalization, ducking, gain envelopes, and FFmpeg parity tests.
 - Phase F adds normalized polygon/Bézier masks, feather and expansion controls, chroma keying, alpha-aware layer blending, manually corrected mask tracking, and shared preview/export composition.
+- Phase F adds optional local ONNX instance segmentation by COCO object class, overlap-based instance following, temporally stabilized contours, editable generated mask keyframes, and editor, CLI, and MCP entry points.
 - Automatic model-backed segmentation/tracking, REST, MCP, and real-game evaluation datasets remain future work.

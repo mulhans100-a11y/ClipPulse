@@ -1,6 +1,6 @@
-# CLI and project API (Phase A/B/C/D/E/F)
+# CLI and project API (Phase A/B/C/D/E/F/G)
 
-The desktop app and CLI use the same `src/core` operations. The CLI supports project, media library, audio and highlight analysis, automatic montage generation, timeline, and export operations; there is no REST or MCP server yet.
+The desktop app, CLI, loopback REST service, and MCP stdio server use the same `src/core` operations. The stable agent interfaces and typed tool catalog are documented in [`AGENT_API.md`](AGENT_API.md); generated JSON Schemas are in [`config/agent-api-v1.schema.json`](config/agent-api-v1.schema.json).
 
 Run `npm run build` once, then invoke `npm run cli -- <command> ...`.
 
@@ -16,6 +16,7 @@ analyze-audio --project FILE --media ID
 analyze-highlights --project FILE --media ID
 generate-montage --project FILE --music ID --duration SEC [--style clean|aggressive|cinematic|velocity|custom] [--custom-rules FILE.json] [--video ID ...] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]
 evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]
+segment-mask --project FILE --clip ID [--class person] [--sample-fps 2] [--model-cache DIR]
 analysis-runtimes
 history --project FILE
 undo --project FILE
@@ -68,7 +69,9 @@ In the desktop timeline, analyzed audio clips display beat ticks. The Snap toggl
 
 `clip-effects --project FILE --clip ID --effects FILE.json` applies a JSON patch to a clip. Start from [`config/clip-effects.example.json`](config/clip-effects.example.json), validated by [`config/clip-effects.schema.json`](config/clip-effects.schema.json). Use `null` for optional fields to clear them. Playback rate and speed-keyframe rates are rational source-seconds-per-timeline-second values from 0.25× to 4×. Speed-keyframe times are relative to the clip's timeline start; linear rates are integrated to choose source frames. The clip's source range must cover that integral. Video keyframes support opacity, brightness, contrast, saturation, and clip gain. Interpolation is linear by default; `hold` keeps the previous value until the next keyframe.
 
-Clip effects also support scale, pixel position, rotation, brightness/contrast/saturation, an optional `.cube` LUT file, dissolve/wipe transitions, and a title with font, color, position, timing, and optional backing box. Phase F adds alpha-aware polygon and Bézier path masks (`M`, `L`, `Q`, `C`, `Z`; normalized 0–1 coordinates), feather and expansion in pixels, time-keyed paths for manually corrected tracking, a YUV chroma key, and normal/multiply/screen/add/difference layer blending. Example mask syntax and the JSON schema are in `config/clip-effects.example.json` and `config/clip-effects.schema.json`. Tracking interpolates corresponding flattened path points; each correction must produce the same flattened point count. Automatic optical-flow tracking and model-based segmentation are not configured. LUT and custom font paths are read-only render inputs. Timeline still preview and final export use the same video and compositing filters. Audio speed ramps are rendered as pitch-preserving tempo sections averaging the linear rate over at most 250 ms chunks. Clip and track loudness normalization uses FFmpeg `loudnorm`; music ducking uses `sidechaincompress` keyed by dialogue-role tracks. Audio gain keyframes are shown as an envelope over the cached waveform.
+`segment-mask --project FILE --clip ID [--class person] [--sample-fps 2] [--model-cache DIR]` generates a model-based mask for a video clip. It downloads the pinned ONNX instance-segmentation model on first use, runs inference locally on sampled clip frames, follows the matching object by mask overlap, stabilizes isolated one-frame flicker, and writes an editable, time-keyed mask into the project. The default model recognizes common COCO classes such as `person`, `car`, `dog`, `cat`, and `chair`; it does not know arbitrary in-game meshes. Model weights are stored in the platform user cache (or the supplied `--model-cache` folder). The desktop inspector provides the same control and progress status. The MCP API exposes the `mask_segment` tool.
+
+Clip effects also support scale, pixel position, rotation, brightness/contrast/saturation, an optional `.cube` LUT file, dissolve/wipe transitions, and a title with font, color, position, timing, and optional backing box. Phase F adds alpha-aware polygon and Bézier path masks (`M`, `L`, `Q`, `C`, `Z`; normalized 0–1 coordinates), feather and expansion in pixels, time-keyed paths for manually corrected or model-generated tracking, a YUV chroma key, and normal/multiply/screen/add/difference layer blending. Model masks use sampled ONNX instance segmentation, overlap-based instance following, and temporal majority stabilization. Example mask syntax and the JSON schema are in `config/clip-effects.example.json` and `config/clip-effects.schema.json`. Tracking corrections interpolate corresponding flattened path points; each correction must produce the same flattened point count. Dense optical-flow tracking and arbitrary text-prompt segmentation are unavailable. LUT and custom font paths are read-only render inputs. Timeline still preview and final export use the same video and compositing filters. Audio speed ramps are rendered as pitch-preserving tempo sections averaging the linear rate over at most 250 ms chunks. Clip and track loudness normalization uses FFmpeg `loudnorm`; music ducking uses `sidechaincompress` keyed by dialogue-role tracks. Audio gain keyframes are shown as an envelope over the cached waveform.
 
 `timeline-frame --project FILE --time TIME` renders one frame-snapped composite from the active, unmuted video tracks. The desktop Timeline monitor uses this command's shared core operation for its still preview; source video playback remains available in the Source monitor.
 
@@ -81,13 +84,13 @@ Clip effects also support scale, pixel position, rotation, brightness/contrast/s
 Success:
 
 ```json
-{ "ok": true, "data": { "...": "command result" } }
+{ "schemaVersion": 1, "ok": true, "data": { "...": "command result" } }
 ```
 
 Failure (exit code 1):
 
 ```json
-{ "ok": false, "error": { "code": "TRACK_NOT_FOUND", "message": "Track not found: ..." } }
+{ "schemaVersion": 1, "ok": false, "error": { "code": "TRACK_NOT_FOUND", "message": "Track not found: ..." } }
 ```
 
 Stable error codes include `INVALID_ARGUMENTS`, `UNKNOWN_COMMAND`, `PROJECT_READ_FAILED`, `INVALID_PROJECT`, `PROJECT_EXISTS`, `MEDIA_NOT_FOUND`, `TRACK_NOT_FOUND`, `CLIP_NOT_FOUND`, `TRACK_LOCKED`, `MEDIA_TYPE_MISMATCH`, `SOURCE_RANGE_EXCEEDED`, `SPLIT_OUTSIDE_CLIP`, `MISSING_MEDIA`, `OUTPUT_EXISTS`, `SOURCE_OVERWRITE_BLOCKED`, `EMPTY_TIMELINE`, and `EXPORT_FAILED`.
@@ -110,4 +113,4 @@ All time fields are reduced rational seconds encoded as strings:
 - `splitClip` keeps the source ranges contiguous and creates a new right-hand clip.
 - `exportVideo` refuses to replace any imported source path and only finalizes output after FFprobe confirms a video stream.
 
-Desktop IPC is private to the app renderer and is defined by `src/shared/electron.d.ts`. A stable external network API and MCP JSON Schemas are roadmap items, not current capabilities.
+Desktop IPC is private to the app renderer and is defined by `src/shared/electron.d.ts`. Agent REST and MCP are loopback/local-process interfaces with explicit path grants; see [`AGENT_API.md`](AGENT_API.md) for startup, authentication, transaction, job-recovery, and tool-call details.

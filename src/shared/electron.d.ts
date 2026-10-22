@@ -1,4 +1,4 @@
-import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageOptions, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageOptions, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 
 export interface OpenMontageApi {
   version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; message?: string }>;
@@ -11,6 +11,7 @@ export interface OpenMontageApi {
   undoProject(path: string): Promise<Project>;
   redoProject(path: string): Promise<Project>;
   importMedia(path: string): Promise<{ project: Project; result: ImportResult }>;
+  importMusic(path: string): Promise<{ project: Project; result: ImportResult } | null>;
   importMedalFolder(path: string): Promise<{ project: Project; result: ImportResult; captureFolder: string } | null>;
   findMissingMedia(path: string): Promise<string[]>;
   relinkMedia(path: string, mediaId: string): Promise<Project | null>;
@@ -37,6 +38,8 @@ export interface OpenMontageApi {
   duplicateClip(path: string, clipId: string, start?: number): Promise<Project>;
   setClipAudio(path: string, clipId: string, patch: { audioEnabled?: boolean; volume?: number; fadeIn?: number; fadeOut?: number }): Promise<Project>;
   setClipEffects(path: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>): Promise<Project>;
+  generateClipModelMask(path: string, clipId: string, options?: SegmentationOptions): Promise<Project>;
+  onSegmentationProgress(callback: (event: { clipId: string } & SegmentationProgress) => void): () => void;
   trimClip(path: string, clipId: string, patch: { start?: number; sourceIn?: number; duration?: number }): Promise<Project>;
   moveClip(path: string, clipId: string, start: number, trackId?: string): Promise<Project>;
   splitClip(path: string, clipId: string, at: number): Promise<Project>;

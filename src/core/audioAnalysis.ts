@@ -8,12 +8,16 @@ import { AppError } from './errors';
 import type { AudioAnalysis, BpmHypothesis, EnergySection, MeterEstimate } from './types';
 
 const SAMPLE_RATE = 11_025;
-const WINDOW_SAMPLES = 220; // about 20 ms
+const FFT_SIZE = 2_048;
+const HOP_SAMPLES = 256; // about 23 ms
+const FFT_WINDOW = Float64Array.from({ length: FFT_SIZE }, (_value, index) => 0.5 - 0.5 * Math.cos(2 * Math.PI * index / (FFT_SIZE - 1)));
+const FFT_BIT_REVERSE = makeBitReverseTable(FFT_SIZE);
+const FFT_STAGES = makeFftStages(FFT_SIZE);
 
 /**
- * Decode audio to a small mono PCM stream, then estimate rhythmic energy
- * transients and BPM locally. Scores are comparative autocorrelation values,
- * not calibrated probabilities; ambiguous music should keep multiple options.
+ * Decode audio to mono PCM, derive a spectrally weighted onset-strength curve,
+ * then track a tempo-tolerant beat path locally. Scores are comparative
+ * autocorrelation values, not calibrated probabilities.
  */
 export async function analyzeAudio(filePath: string, cacheFilePath?: string): Promise<AudioAnalysis> {
   const source = path.resolve(filePath);
@@ -29,25 +33,25 @@ export async function analyzeAudio(filePath: string, cacheFilePath?: string): Pr
     const onsetData = await buildOnsetEnvelope(pcmPath);
     const onsetEnvelope = onsetData.transients;
     if (onsetEnvelope.length < 25) throw new AppError('AUDIO_TOO_SHORT', 'Audio is too short for beat analysis.');
-    const hopSeconds = WINDOW_SAMPLES / SAMPLE_RATE;
-    const bpmHypotheses = findBpmHypotheses(onsetEnvelope, hopSeconds);
-    const best = bpmHypotheses[0];
-    const phase = best ? findBeatPhase(onsetEnvelope, 60 / best.bpm / hopSeconds) : undefined;
-    const beats = best && phase !== undefined
-      ? refineBeatPositions(onsetEnvelope, phase, 60 / best.bpm / hopSeconds, hopSeconds)
-      : [];
-    const meter = estimateMeter(onsetData.rms, beats, hopSeconds);
+    const hopSeconds = HOP_SAMPLES / SAMPLE_RATE;
+    const pulseHypotheses = findBpmHypotheses(onsetEnvelope, hopSeconds);
+    const best = pulseHypotheses[0];
+    const beats = best ? trackBeats(onsetEnvelope, 60 / best.bpm / hopSeconds, hopSeconds) : [];
+    const phase = beats[0] === undefined ? undefined : beats[0] / hopSeconds;
+    const meter = estimateMeter(onsetData.rms, onsetData.bassEnergy, onsetEnvelope, beats, hopSeconds);
+    const tempoScale = meter?.denominator === 8 ? 0.5 : 1;
+    const bpmHypotheses = pulseHypotheses.map((hypothesis) => ({ ...hypothesis, bpm: roundBpm(hypothesis.bpm * tempoScale) }));
     const downbeats = meter ? beats.filter((_beat, index) => index % meter.beatsPerBar === meter.downbeatPhase) : [];
     const energyCurve = normalizeEnergy(onsetData.energyBySecond);
     const energySections = findEnergySections(energyCurve);
     const drops = findEnergyDrops(energyCurve);
     const onsets = pickOnsets(onsetEnvelope, hopSeconds);
     const result: AudioAnalysis = {
-      method: 'rms-onset-autocorrelation-v2',
+      method: 'spectral-flux-dynamic-beat-v4',
       sampleRate: SAMPLE_RATE,
       hopSeconds,
       durationSeconds: onsetEnvelope.length * hopSeconds,
-      estimatedBpm: best?.bpm,
+      estimatedBpm: bpmHypotheses[0]?.bpm,
       bpmHypotheses,
       beatPhaseSeconds: phase === undefined ? undefined : phase * hopSeconds,
       beats,
@@ -79,7 +83,7 @@ export async function readCachedAudioAnalysis(filePath: string, cacheFilePath: s
     const sourceStat = sourceSizeBytes === undefined || sourceMtimeMs === undefined ? await fs.stat(filePath) : undefined;
     const cached = JSON.parse(await fs.readFile(cacheFilePath, 'utf8')) as { sourceSizeBytes: number; sourceMtimeMs: number; analysis: AudioAnalysis };
     if (cached.sourceSizeBytes !== (sourceSizeBytes ?? sourceStat!.size) || cached.sourceMtimeMs !== (sourceMtimeMs ?? sourceStat!.mtimeMs)) return null;
-    if (cached.analysis?.method !== 'rms-onset-autocorrelation-v2' || !Array.isArray(cached.analysis.beats) || !Array.isArray(cached.analysis.onsets) || !Array.isArray(cached.analysis.downbeats) || !Array.isArray(cached.analysis.energyCurve)) return null;
+    if (cached.analysis?.method !== 'spectral-flux-dynamic-beat-v4' || !Array.isArray(cached.analysis.beats) || !Array.isArray(cached.analysis.onsets) || !Array.isArray(cached.analysis.downbeats) || !Array.isArray(cached.analysis.energyCurve)) return null;
     return cached.analysis;
   } catch { return null; }
 }
@@ -101,24 +105,42 @@ function decodePcm(source: string, output: string): Promise<void> {
   });
 }
 
-async function buildOnsetEnvelope(pcmPath: string): Promise<{ transients: Float64Array; rms: Float64Array; energyBySecond: number[] }> {
-  const transients: number[] = [];
+async function buildOnsetEnvelope(pcmPath: string): Promise<{ transients: Float64Array; rms: Float64Array; bassEnergy: Float64Array; energyBySecond: number[] }> {
+  const novelty: number[] = [];
   const rmsLevels: number[] = [];
+  const bassLevels: number[] = [];
   const energyBySecond: number[] = [];
+  const ring = new Float64Array(FFT_SIZE);
+  const previousSpectrum = new Float64Array(FFT_SIZE / 2 + 1);
+  const real = new Float64Array(FFT_SIZE);
+  const imaginary = new Float64Array(FFT_SIZE);
+  let writeIndex = 0;
+  let totalSamples = 0;
+  let previousLogRms = 0;
+  let hasPreviousSpectrum = false;
   let pending = Buffer.alloc(0);
-  let energy = 0;
-  let samples = 0;
   let secondEnergy = 0;
   let secondSamples = 0;
-  let previousRms = 0;
   for await (const chunk of createReadStream(pcmPath)) {
     const data = pending.length ? Buffer.concat([pending, chunk]) : chunk;
     const completeBytes = data.length - (data.length % 2);
     const completeSamples = completeBytes / 2;
     for (let i = 0; i < completeSamples; i++) {
-      const sample = data.readInt16LE(i * 2) / 32768;
-      energy += sample * sample;
-      samples++;
+      consumeSample(data.readInt16LE(i * 2) / 32768, true);
+    }
+    pending = completeBytes < data.length ? data.subarray(completeBytes) : Buffer.alloc(0);
+  }
+  if (secondSamples) energyBySecond.push(Math.sqrt(secondEnergy / secondSamples));
+
+  // Zero padding completes centered FFT frames up to the final source sample.
+  for (let index = 0; index < FFT_SIZE / 2; index++) consumeSample(0, false);
+  return { transients: normalizeNovelty(novelty, HOP_SAMPLES / SAMPLE_RATE), rms: Float64Array.from(rmsLevels), bassEnergy: Float64Array.from(bassLevels), energyBySecond };
+
+  function consumeSample(sample: number, includeInEnergy: boolean): void {
+    ring[writeIndex] = sample;
+    writeIndex = (writeIndex + 1) % FFT_SIZE;
+    totalSamples++;
+    if (includeInEnergy) {
       secondEnergy += sample * sample;
       secondSamples++;
       if (secondSamples === SAMPLE_RATE) {
@@ -126,32 +148,121 @@ async function buildOnsetEnvelope(pcmPath: string): Promise<{ transients: Float6
         secondEnergy = 0;
         secondSamples = 0;
       }
-      if (samples === WINDOW_SAMPLES) {
-        const rms = Math.sqrt(energy / samples);
-        const logRms = Math.log1p(rms * 100);
-        transients.push(Math.max(0, logRms - Math.log1p(previousRms * 100)));
-        rmsLevels.push(rms);
-        previousRms = rms;
-        energy = 0;
-        samples = 0;
-      }
     }
-    pending = completeBytes < data.length ? data.subarray(completeBytes) : Buffer.alloc(0);
+    if (totalSamples < FFT_SIZE / 2 || (totalSamples - FFT_SIZE / 2) % HOP_SAMPLES !== 0) return;
+
+    let frameEnergy = 0;
+    for (let index = 0; index < FFT_SIZE; index++) {
+      const value = ring[(writeIndex + index) % FFT_SIZE] * FFT_WINDOW[index];
+      real[index] = value;
+      imaginary[index] = 0;
+      frameEnergy += value * value;
+    }
+    fft(real, imaginary);
+    let spectralFlux = 0;
+    let spectralMass = 0;
+    let bassMass = 0;
+    for (let bin = 1; bin <= FFT_SIZE / 2; bin++) {
+      const magnitude = Math.hypot(real[bin], imaginary[bin]);
+      const compressed = Math.sqrt(magnitude);
+      if (hasPreviousSpectrum) spectralFlux += Math.max(0, compressed - previousSpectrum[bin]);
+      spectralMass += compressed;
+      if (bin <= 64) bassMass += magnitude;
+      previousSpectrum[bin] = compressed;
+    }
+    const rms = Math.sqrt(frameEnergy / FFT_SIZE);
+    const logRms = Math.log1p(rms * 100);
+    const rmsRise = hasPreviousSpectrum ? Math.max(0, logRms - previousLogRms) : 0;
+    novelty.push((hasPreviousSpectrum ? spectralFlux / Math.max(spectralMass, 1e-8) : 0) + 0.35 * rmsRise);
+    rmsLevels.push(rms);
+    bassLevels.push(Math.log1p(bassMass / FFT_SIZE));
+    previousLogRms = logRms;
+    hasPreviousSpectrum = true;
   }
-  if (secondSamples) energyBySecond.push(Math.sqrt(secondEnergy / secondSamples));
-  return { transients: Float64Array.from(transients), rms: Float64Array.from(rmsLevels), energyBySecond };
 }
 
-function estimateMeter(rms: Float64Array, beats: number[], hopSeconds: number): MeterEstimate | undefined {
+function makeBitReverseTable(size: number): Uint32Array {
+  const bits = Math.log2(size);
+  return Uint32Array.from({ length: size }, (_value, index) => {
+    let source = index, reversed = 0;
+    for (let bit = 0; bit < bits; bit++) { reversed = (reversed << 1) | (source & 1); source >>>= 1; }
+    return reversed;
+  });
+}
+
+function makeFftStages(size: number): Array<{ half: number; cos: Float64Array; sin: Float64Array }> {
+  const stages = [];
+  for (let width = 2; width <= size; width *= 2) {
+    const half = width / 2;
+    stages.push({
+      half,
+      cos: Float64Array.from({ length: half }, (_value, index) => Math.cos(2 * Math.PI * index / width)),
+      sin: Float64Array.from({ length: half }, (_value, index) => -Math.sin(2 * Math.PI * index / width))
+    });
+  }
+  return stages;
+}
+
+function fft(real: Float64Array, imaginary: Float64Array): void {
+  for (let index = 0; index < real.length; index++) {
+    const reversed = FFT_BIT_REVERSE[index];
+    if (reversed <= index) continue;
+    const realValue = real[index], imaginaryValue = imaginary[index];
+    real[index] = real[reversed]; imaginary[index] = imaginary[reversed];
+    real[reversed] = realValue; imaginary[reversed] = imaginaryValue;
+  }
+  for (let stageIndex = 0, width = 2; width <= real.length; stageIndex++, width *= 2) {
+    const stage = FFT_STAGES[stageIndex];
+    for (let base = 0; base < real.length; base += width) {
+      for (let offset = 0; offset < stage.half; offset++) {
+        const even = base + offset, odd = even + stage.half;
+        const oddReal = real[odd] * stage.cos[offset] - imaginary[odd] * stage.sin[offset];
+        const oddImaginary = real[odd] * stage.sin[offset] + imaginary[odd] * stage.cos[offset];
+        const evenReal = real[even], evenImaginary = imaginary[even];
+        real[even] = evenReal + oddReal;
+        imaginary[even] = evenImaginary + oddImaginary;
+        real[odd] = evenReal - oddReal;
+        imaginary[odd] = evenImaginary - oddImaginary;
+      }
+    }
+  }
+}
+
+function normalizeNovelty(raw: number[], hopSeconds: number): Float64Array {
+  if (!raw.length) return new Float64Array();
+  const radius = Math.max(1, Math.round(0.75 / hopSeconds));
+  const prefix = new Float64Array(raw.length + 1);
+  raw.forEach((value, index) => { prefix[index + 1] = prefix[index] + value; });
+  const residual = raw.map((value, index) => {
+    const start = Math.max(0, index - radius), end = Math.min(raw.length, index + radius + 1);
+    const baseline = (prefix[end] - prefix[start]) / (end - start);
+    return Math.max(0, value - baseline * 0.8);
+  });
+  const sorted = [...residual].sort((a, b) => a - b);
+  const scale = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] || residual.reduce((maximum, value) => Math.max(maximum, value), 1e-8);
+  return Float64Array.from(residual, (value) => Math.min(2, value / scale));
+}
+
+function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, onset: Float64Array, beats: number[], hopSeconds: number): MeterEstimate | undefined {
   if (beats.length < 12) return undefined;
-  const strengths = beats.map((beat) => {
+  const localPeaks = (values: Float64Array) => beats.map((beat) => {
     const center = Math.round(beat / hopSeconds);
     let strongest = 0;
-    for (let index = Math.max(0, center - 2); index <= Math.min(rms.length - 1, center + 2); index++) strongest = Math.max(strongest, rms[index]);
+    for (let index = Math.max(0, center - 2); index <= Math.min(values.length - 1, center + 2); index++) strongest = Math.max(strongest, values[index]);
     return strongest;
   });
+  const robustZ = (values: number[]) => {
+    const logged = values.map((value) => Math.log1p(Math.max(0, value)));
+    const mean = logged.reduce((sum, value) => sum + value, 0) / logged.length;
+    const deviation = Math.sqrt(logged.reduce((sum, value) => sum + (value - mean) ** 2, 0) / logged.length);
+    return deviation < 1e-5 ? logged.map(() => 0) : logged.map((value) => Math.max(-2.5, Math.min(2.5, (value - mean) / deviation)));
+  };
+  const rmsAccent = robustZ(localPeaks(rms));
+  const bassAccent = robustZ(localPeaks(bassEnergy));
+  const onsetAccent = robustZ(localPeaks(onset));
+  const strengths = beats.map((_beat, index) => 0.5 * bassAccent[index] + 0.3 * rmsAccent[index] + 0.2 * onsetAccent[index]);
   const candidates: Array<{ beatsPerBar: number; phase: number; score: number }> = [];
-  for (let beatsPerBar = 2; beatsPerBar <= 6; beatsPerBar++) {
+  for (let beatsPerBar = 2; beatsPerBar <= 12; beatsPerBar++) {
     const bars = strengths.length / beatsPerBar;
     if (bars < 3) continue;
     const sums = Array.from({ length: beatsPerBar }, () => 0);
@@ -159,16 +270,19 @@ function estimateMeter(rms: Float64Array, beats: number[], hopSeconds: number): 
     strengths.forEach((strength, index) => { sums[index % beatsPerBar] += strength; counts[index % beatsPerBar]++; });
     const profile = sums.map((sum, index) => sum / Math.max(1, counts[index]));
     const mean = profile.reduce((sum, value) => sum + value, 0) / profile.length;
-    if (mean < 1e-5) continue;
     const variance = profile.reduce((sum, value) => sum + (value - mean) ** 2, 0) / profile.length;
-    const confidence = Math.sqrt(variance) / mean;
+    const deviation = Math.sqrt(variance);
+    if (deviation < 0.15) continue;
     const phase = profile.indexOf(Math.max(...profile));
-    candidates.push({ beatsPerBar, phase, score: confidence * Math.min(1, Math.sqrt(bars / 6)) });
+    const otherMean = (profile.reduce((sum, value) => sum + value, 0) - profile[phase]) / (profile.length - 1);
+    const contrast = (profile[phase] - otherMean) / Math.max(0.2, deviation);
+    candidates.push({ beatsPerBar, phase, score: contrast * Math.min(1, Math.sqrt(bars / 6)) - (beatsPerBar === 2 ? 0.05 : 0) });
   }
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0], runnerUp = candidates[1];
-  if (!best || best.score < 0.16 || (runnerUp && best.score - runnerUp.score < 0.035)) return undefined;
-  return { beatsPerBar: best.beatsPerBar, denominator: 4, downbeatPhase: best.phase, confidence: Math.min(1, best.score) };
+  if (!best || best.score < 0.45 || (runnerUp && best.score - runnerUp.score < 0.12)) return undefined;
+  const denominator = [5, 6, 7, 9, 10, 11, 12].includes(best.beatsPerBar) ? 8 : 4;
+  return { beatsPerBar: best.beatsPerBar, denominator, downbeatPhase: best.phase, confidence: Math.max(0, Math.min(1, best.score / (best.score + 1))) };
 }
 
 function normalizeEnergy(raw: number[]): number[] {
@@ -220,59 +334,93 @@ function findEnergyDrops(curve: number[]): number[] {
 }
 
 function findBpmHypotheses(envelope: Float64Array, hopSeconds: number): BpmHypothesis[] {
-  const minLag = Math.max(1, Math.floor(60 / (200 * hopSeconds)));
-  const maxLag = Math.min(envelope.length - 2, Math.ceil(60 / (60 * hopSeconds)));
-  const scores: BpmHypothesis[] = [];
-  for (let lag = minLag; lag <= maxLag; lag++) {
+  const minLag = Math.max(1, Math.ceil(60 / (300 * hopSeconds)));
+  const maxLag = Math.min(envelope.length - 2, Math.floor(60 / (40 * hopSeconds)));
+  if (maxLag <= minLag) return [];
+  const mean = envelope.reduce((sum, value) => sum + value, 0) / envelope.length;
+  const centered = Float64Array.from(envelope, (value) => value - mean);
+  const energy = centered.reduce((sum, value) => sum + value * value, 0);
+  if (energy < 1e-8) return [];
+  const correlationMaxLag = Math.min(envelope.length - 2, maxLag * 2);
+  const correlation = new Float64Array(correlationMaxLag + 2);
+  for (let lag = 1; lag <= correlationMaxLag; lag++) {
     let xy = 0, xx = 0, yy = 0;
-    for (let i = lag; i < envelope.length; i++) {
-      const x = envelope[i];
-      const y = envelope[i - lag];
-      xy += x * y;
-      xx += x * x;
-      yy += y * y;
+    for (let index = lag; index < centered.length; index++) {
+      const a = centered[index], b = centered[index - lag];
+      xy += a * b; xx += a * a; yy += b * b;
     }
-    if (xx === 0 || yy === 0) continue;
-    const score = xy / Math.sqrt(xx * yy);
-    scores.push({ bpm: roundBpm(60 / (lag * hopSeconds)), score: Number(score.toFixed(4)) });
+    correlation[lag] = xx && yy ? xy / Math.sqrt(xx * yy) : 0;
   }
-  scores.sort((a, b) => b.score - a.score || b.bpm - a.bpm);
+  const correlationAt = (lag: number) => {
+    const lower = Math.max(1, Math.floor(lag)), fraction = lag - lower;
+    const smooth = (index: number) => (correlation[index - 1] + 2 * correlation[index] + correlation[index + 1]) / 4;
+    return smooth(lower) * (1 - fraction) + smooth(lower + 1) * fraction;
+  };
+  const candidates: Array<{ bpm: number; score: number }> = [];
+  const candidateLags = new Set<number>();
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    if (correlation[lag] <= 0 || correlation[lag] < correlation[lag - 1] || correlation[lag] < correlation[lag + 1]) continue;
+    candidateLags.add(lag);
+    candidateLags.add(Math.round(lag / 2));
+    candidateLags.add(Math.round(lag * 2 / 3));
+    candidateLags.add(Math.round(lag * 2));
+  }
+  for (const lag of candidateLags) {
+    if (lag < minLag || lag > maxLag) continue;
+    const bpm = 60 / (lag * hopSeconds);
+    const baseScore = correlationAt(lag);
+    const subdivisionEvidence = Math.max(0, correlationAt(lag / 2), correlationAt(lag * 2 / 3), correlationAt(lag * 3 / 4));
+    const tempoPrior = 0.22 * Math.exp(-0.5 * (Math.log2(bpm / 112) / 0.6) ** 2);
+    const score = baseScore - 0.42 * subdivisionEvidence + tempoPrior;
+    const left = correlation[lag - 1], center = correlation[lag], right = correlation[lag + 1];
+    const curvature = left - 2 * center + right;
+    const offset = Math.abs(curvature) < 1e-8 ? 0 : Math.max(-0.5, Math.min(0.5, 0.5 * (left - right) / curvature));
+    candidates.push({ bpm: roundBpm(60 / ((lag + offset) * hopSeconds)), score: Number(score.toFixed(4)) });
+  }
+  candidates.sort((a, b) => b.score - a.score || Math.abs(Math.log2(a.bpm / 112)) - Math.abs(Math.log2(b.bpm / 112)));
   const selected: BpmHypothesis[] = [];
-  for (const candidate of scores) {
-    if (selected.every((item) => Math.abs(item.bpm - candidate.bpm) > 4)) selected.push(candidate);
-    if (selected.length === 3) break;
+  for (const candidate of candidates) {
+    if (selected.every((item) => Math.abs(item.bpm - candidate.bpm) > Math.max(3, candidate.bpm * 0.035))) selected.push(candidate);
+    if (selected.length === 5) break;
   }
   return selected;
 }
 
-function findBeatPhase(envelope: Float64Array, period: number): number {
-  const maxPhase = Math.ceil(period);
-  let bestPhase = 0;
-  let bestScore = -Infinity;
-  for (let phase = 0; phase < maxPhase; phase++) {
-    let score = 0;
-    for (let beat = phase; beat < envelope.length; beat += period) {
-      const center = Math.round(beat);
-      for (let offset = -1; offset <= 1; offset++) {
-        const index = center + offset;
-        if (index >= 0 && index < envelope.length) score += envelope[index] * (offset === 0 ? 1 : 0.5);
-      }
+function trackBeats(envelope: Float64Array, period: number, hopSeconds: number): number[] {
+  if (envelope.length < 2 || !Number.isFinite(period) || period < 2) return [];
+  const scores = new Float64Array(envelope.length);
+  const previous = new Int32Array(envelope.length).fill(-1);
+  const minGap = Math.max(1, Math.floor(period * 0.68));
+  const maxGap = Math.ceil(period * 1.48);
+  let bestEnd = -1, bestScore = -Infinity;
+  for (let index = 0; index < envelope.length; index++) {
+    let score = envelope[index];
+    const firstPrevious = Math.max(0, index - maxGap);
+    const lastPrevious = index - minGap;
+    for (let prior = firstPrevious; prior <= lastPrevious; prior++) {
+      const ratio = (index - prior) / period;
+      const penalty = 2.4 * Math.log2(ratio) ** 2;
+      const candidate = scores[prior] + envelope[index] - penalty;
+      if (candidate > score) { score = candidate; previous[index] = prior; }
     }
-    if (score > bestScore) { bestScore = score; bestPhase = phase; }
+    scores[index] = score;
+    if (score > bestScore) { bestScore = score; bestEnd = index; }
   }
-  return bestPhase;
-}
-
-function refineBeatPositions(envelope: Float64Array, phase: number, period: number, hopSeconds: number): number[] {
+  const path: number[] = [];
+  for (let cursor = bestEnd; cursor >= 0; cursor = previous[cursor]) path.push(cursor);
+  path.reverse();
+  if (path.length < 3) return [];
   const beats: number[] = [];
-  for (let predicted = phase; predicted < envelope.length; predicted += period) {
-    const center = Math.round(predicted);
-    let strongest = center;
-    for (let index = Math.max(0, center - 2); index <= Math.min(envelope.length - 1, center + 2); index++) {
+  for (let position = 0; position < path.length; position++) {
+    const predicted = path[position];
+    const gap = position === 0 ? period : path[position] - path[position - 1];
+    const radius = Math.max(1, Math.round(Math.min(period * 0.1, gap * 0.2)));
+    let strongest = predicted;
+    for (let index = Math.max(0, predicted - radius); index <= Math.min(envelope.length - 1, predicted + radius); index++) {
       if (envelope[index] > envelope[strongest]) strongest = index;
     }
     const seconds = Number((strongest * hopSeconds).toFixed(4));
-    if (!beats.length || seconds - beats[beats.length - 1] > hopSeconds) beats.push(seconds);
+    if (!beats.length || seconds - beats[beats.length - 1] > hopSeconds * 2) beats.push(seconds);
   }
   return beats;
 }

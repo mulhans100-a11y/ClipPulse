@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
-import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import { add as addTime, compare, decimal, frameTime, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
@@ -312,6 +312,21 @@ export default function App() {
       if (result.errors.length) setError(result.errors.map((item) => `${item.path}: ${item.message}`).join('\n'));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
+  async function importMusicForMontage(): Promise<MediaAsset | null> {
+    if (!project) return null;
+    const imported = await window.openmontage.importMusic(projectPath);
+    if (!imported) return null;
+    setProject(imported.project);
+    await refreshHistory(projectPath);
+    const musicId = imported.result.added[0]?.id ?? imported.result.duplicates
+      .map((duplicate) => duplicate.existingId)
+      .find((id) => imported.project.media.some((asset) => asset.id === id && asset.hasAudio));
+    const asset = imported.project.media.find((item) => item.id === musicId && item.hasAudio) ?? null;
+    if (asset) setSelectedMediaId(asset.id);
+    setNotice(`Music import · ${toastMessage(imported.result)}`);
+    if (imported.result.errors.length) setError(imported.result.errors.map((item) => `${item.path}: ${item.message}`).join('\n'));
+    return asset;
+  }
   async function importMedalFolder() {
     if (!project) return;
     try {
@@ -446,6 +461,20 @@ export default function App() {
   async function patchClipEffects(patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>) {
     if (!project || !currentClip) return;
     await run(() => window.openmontage.setClipEffects(projectPath, currentClip.clip.id, patch), (next) => next, 'Clip effects updated');
+  }
+  async function generateModelMask(clipId: string, options: SegmentationOptions) {
+    if (!project || !projectPath) return;
+    try {
+      setError('');
+      const next = await window.openmontage.generateClipModelMask(projectPath, clipId, options);
+      setProject(next);
+      await refreshHistory(projectPath);
+      setNotice('AI mask generated');
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message);
+      throw cause;
+    }
   }
   function beginClipTrim(event: React.PointerEvent<HTMLSpanElement>, clip: TimelineClip, asset: MediaAsset, edge: 'left' | 'right') {
     if (!project) return;
@@ -676,14 +705,14 @@ export default function App() {
             <NumberField label="Fade out" unit="s" value={secondsOf(currentClip.clip.fadeOut ?? rational(0))} max={secondsOf(currentClip.clip.duration)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(fadeOut) => void patchClipAudio({ fadeOut })} />
             <div className="toggle-row"><span><Activity size={14} /> Loudness normalization</span><button className={`switch ${currentClip.clip.normalizeAudio ? 'on' : ''}`} onClick={() => void patchClipEffects({ normalizeAudio: !currentClip.clip.normalizeAudio })}><i /></button></div>
           </section>
-          <ClipEffectsInspector key={currentClip.clip.id} clip={currentClip.clip} project={project} playhead={playhead} onPatch={(patch) => void patchClipEffects(patch)} />
+          <ClipEffectsInspector key={currentClip.clip.id} clip={currentClip.clip} project={project} playhead={playhead} onPatch={(patch) => void patchClipEffects(patch)} onGenerateModelMask={(options) => generateModelMask(currentClip.clip.id, options)} />
         </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} analysisStatus={audioAnalysisStatuses[selectedMedia.id]} onAnalysisStatus={setAudioAnalysisStatus} mediaJobs={mediaJobs} queuePaused={mediaJobsPaused} onQueueProxy={() => void generateProxy(selectedMedia.id)} onClearProxies={() => void clearProxyCache()} onPauseQueue={() => void setMediaQueuePaused(true)} onResumeQueue={() => void setMediaQueuePaused(false)} onRetryJob={(jobId) => void retryMediaJob(jobId)} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} onAnalysis={cacheAudioAnalysis} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
         <div className="inspector-footer"><span>PROJECT</span><strong>{project.name}</strong><small>{project.width} × {project.height} · {Number(project.frameRate.num) / Number(project.frameRate.den)} fps</small></div>
       </aside>
     </div>
 
     {showProjectSettings && <ProjectSettingsModal project={project} onClose={() => setShowProjectSettings(false)} onSave={saveProjectSettings} />}
-    {showMontageGenerator && <AutoMontageModal project={project} onClose={() => setShowMontageGenerator(false)} onGenerate={generateAutomaticMontage} onOpenVariant={openAutomaticMontageVariant} />}
+    {showMontageGenerator && <AutoMontageModal project={project} onClose={() => setShowMontageGenerator(false)} onGenerate={generateAutomaticMontage} onOpenVariant={openAutomaticMontageVariant} onImportMusic={importMusicForMontage} />}
 
     <footer className="statusbar"><span className={error ? 'status-error' : ''}>{error ? error : notice}</span><span className="status-right"><i className={ffmpeg ? 'online' : ''} />{ffmpeg ? 'Ready' : 'FFmpeg missing'} <span className="status-separator" />{project ? `${project.media.length} media` : ''}</span></footer>
   </div>;
@@ -691,7 +720,7 @@ export default function App() {
 
 type ClipEffectPatch = Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>;
 
-function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: TimelineClip; project: Project; playhead: number; onPatch: (patch: ClipEffectPatch) => void }) {
+function ClipEffectsInspector({ clip, project, playhead, onPatch, onGenerateModelMask }: { clip: TimelineClip; project: Project; playhead: number; onPatch: (patch: ClipEffectPatch) => void; onGenerateModelMask: (options: SegmentationOptions) => Promise<void> }) {
   const canComposite = project.media.find((asset) => asset.id === clip.mediaId)?.kind === 'video';
   const transform = clip.transform ?? { scale: 1, x: 0, y: 0, rotationDegrees: 0 };
   const color = clip.color ?? { brightness: 0, contrast: 1, saturation: 1 };
@@ -702,15 +731,23 @@ function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: Time
   const [speedValue, setSpeedValue] = useState(String(secondsOf(clip.playbackRate ?? rational(1))));
   const [titleText, setTitleText] = useState(clip.title?.text ?? '');
   const [maskPathDraft, setMaskPathDraft] = useState(clip.mask ? maskPathAt(clip.mask, localTime) : '');
+  const [segmentationClass, setSegmentationClass] = useState('person');
+  const [segmentationFps, setSegmentationFps] = useState(2);
+  const [segmentationBusy, setSegmentationBusy] = useState(false);
+  const [segmentationProgress, setSegmentationProgress] = useState<SegmentationProgress | null>(null);
   useEffect(() => { setSpeedValue(String(secondsOf(clip.playbackRate ?? rational(1)))); }, [clip.playbackRate]);
   useEffect(() => { setTitleText(clip.title?.text ?? ''); }, [clip.title?.text]);
   useEffect(() => { setMaskPathDraft(clip.mask ? maskPathAt(clip.mask, localTime) : ''); }, [clip.mask, localTime]);
+  useEffect(() => window.openmontage.onSegmentationProgress((event) => {
+    if (event.clipId === clip.id) setSegmentationProgress(event);
+  }), [clip.id]);
 
   function updateTransform(patch: Partial<NonNullable<TimelineClip['transform']>>) { onPatch({ transform: { ...transform, ...patch } }); }
   function updateColor(patch: Partial<NonNullable<TimelineClip['color']>>) { onPatch({ color: { ...color, ...patch } }); }
   function updateMask(patch: Partial<NonNullable<TimelineClip['mask']>>) {
     const mask = clip.mask ?? { path: maskPathDraft || 'M 0.2 0.2 L 0.8 0.2 L 0.8 0.8 L 0.2 0.8 Z', featherPx: 0, expansionPx: 0, keyframes: [] };
-    onPatch({ mask: { ...mask, ...patch } });
+    const manualEdit = patch.path !== undefined || patch.keyframes !== undefined;
+    onPatch({ mask: { ...mask, ...patch, ...(manualEdit ? { provenance: undefined } : {}) } });
   }
   function saveMaskPath() {
     if (!clip.mask || !maskPathDraft.trim()) return;
@@ -743,6 +780,19 @@ function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: Time
     const duration = Math.min(0.5, secondsOf(clip.duration));
     onPatch({ transitionIn: { type: type as NonNullable<TimelineClip['transitionIn']>['type'], duration: parseDecimal(duration) } });
   }
+  async function generateAiMask() {
+    const className = segmentationClass.trim();
+    if (!className) return;
+    setSegmentationBusy(true);
+    setSegmentationProgress({ stage: 'loading-model', current: 0, total: 0 });
+    try { await onGenerateModelMask({ className, sampleFps: segmentationFps }); }
+    catch { /* The parent reports the actionable error in the app status area. */ }
+    finally { setSegmentationBusy(false); setSegmentationProgress(null); }
+  }
+  const segmentationStatus = segmentationProgress?.stage === 'loading-model' ? 'Loading model; first use downloads it'
+    : segmentationProgress?.stage === 'extracting' ? `Preparing frame ${segmentationProgress.current}/${segmentationProgress.total}`
+      : segmentationProgress?.stage === 'segmenting' ? `Segmenting frame ${segmentationProgress.current}/${segmentationProgress.total}`
+        : segmentationProgress?.stage === 'stabilizing' ? 'Stabilizing mask motion…' : '';
   const keyframeRange: Record<typeof property, [number, number]> = { opacity: [0, 1], brightness: [-1, 1], contrast: [0, 4], saturation: [0, 4], volume: [0, 8] };
   return <>
     <section className="inspector-section"><div className="section-label"><span>VIDEO EFFECTS</span><ChevronDown size={14} /></div>
@@ -757,11 +807,19 @@ function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: Time
     </section>
     {canComposite && <section className="inspector-section"><div className="section-label"><span>COMPOSITING · PHASE F</span><ChevronDown size={14} /></div>
       <label className="text-field"><span>Blend mode</span><select value={clip.blendMode ?? 'normal'} onChange={(event) => onPatch({ blendMode: event.target.value as NonNullable<TimelineClip['blendMode']> })}><option value="normal">Normal alpha</option><option value="multiply">Multiply</option><option value="screen">Screen</option><option value="add">Add</option><option value="difference">Difference</option></select></label>
+      <div className="model-mask-controls">
+        <label className="text-field"><span>AI object class</span><input aria-label="AI object class" value={segmentationClass} maxLength={80} placeholder="person, car, dog…" onChange={(event) => setSegmentationClass(event.target.value)} /></label>
+        <label className="text-field"><span>Samples per second</span><select aria-label="Mask samples per second" value={segmentationFps} onChange={(event) => setSegmentationFps(Number(event.target.value))}><option value={0.5}>0.5</option><option value={1}>1</option><option value={2}>2</option><option value={4}>4</option><option value={8}>8</option></select></label>
+        <button className="small-action" disabled={segmentationBusy || !segmentationClass.trim()} onClick={() => void generateAiMask()}><WandSparkles size={13} />{segmentationBusy ? 'Generating mask…' : clip.mask?.provenance ? 'Regenerate AI mask' : 'Generate AI mask'}</button>
+        <small className="compositing-help">Tracks one recognized COCO object in the clip. The ONNX model downloads on first use; frames are processed locally, then mask motion is temporally stabilized.</small>
+        {segmentationBusy && <small className="compositing-help">{segmentationStatus}</small>}
+      </div>
       {!clip.mask ? <button className="small-action" onClick={() => { const path = 'M 0.2 0.2 L 0.8 0.2 L 0.8 0.8 L 0.2 0.8 Z'; setMaskPathDraft(path); onPatch({ mask: { path, featherPx: 0, expansionPx: 0, keyframes: [] } }); }}>Create polygon mask</button> : <>
         <label className="text-field mask-path-field"><span>Closed polygon / Bézier path · normalized 0–1</span><textarea aria-label="Mask path" value={maskPathDraft} spellCheck={false} onChange={(event) => setMaskPathDraft(event.target.value)} onBlur={saveMaskPath} /></label>
         <div className="compositing-help">SVG path commands M, L, Q, C and Z. Coordinates are relative to the frame. Keep the same number of path points when adding tracking corrections.</div>
         <NumberField label="Feather" unit="px" value={clip.mask.featherPx} max={256} step={1} onCommit={(featherPx) => updateMask({ featherPx })} />
         <NumberField label="Expansion" unit="px" value={clip.mask.expansionPx} min={-256} max={256} step={1} onCommit={(expansionPx) => updateMask({ expansionPx })} />
+        {clip.mask.provenance && <small className="compositing-help">AI class: {clip.mask.provenance.className} · {clip.mask.provenance.sampleCount} temporal samples · {clip.mask.provenance.stabilization}</small>}
         <div className="keyframe-add-row"><button onClick={addMaskTrackingKeyframe}>Add tracking correction at {formatTime(local)}</button><small>{clip.mask.keyframes?.length ?? 0} points</small></div>
         {!!clip.mask.keyframes?.length && <div className="keyframe-list">{clip.mask.keyframes.map((frame, index) => <div key={`mask-${index}`}><span>{formatTime(secondsOf(frame.time))} · mask correction</span><button title="Remove tracking correction" onClick={() => updateMask({ keyframes: clip.mask!.keyframes!.filter((_, frameIndex) => frameIndex !== index) })}>×</button></div>)}</div>}
         <button className="text-action" onClick={() => { setMaskPathDraft(''); onPatch({ mask: undefined }); }}>Remove mask</button>
@@ -771,7 +829,7 @@ function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: Time
         <NumberField label="Similarity" unit="" value={clip.chromaKey.similarity} max={1} step={0.01} onCommit={(similarity) => onPatch({ chromaKey: { ...clip.chromaKey!, similarity } })} />
         <NumberField label="Edge blend" unit="" value={clip.chromaKey.blend} max={1} step={0.01} onCommit={(blend) => onPatch({ chromaKey: { ...clip.chromaKey!, blend } })} />
       </>}
-      <small className="compositing-help">Masks and keys are applied in both monitor preview and export. Model-based segmentation is not configured.</small>
+      <small className="compositing-help">Manual and AI masks and chroma keys are applied in both monitor preview and export.</small>
     </section>}
     <section className="inspector-section"><div className="section-label"><span>SPEED & TRANSITION</span><ChevronDown size={14} /></div>
       <NumberField label="Playback rate" unit="×" value={secondsOf(clip.playbackRate ?? rational(1))} min={0.25} max={4} step={0.05} onCommit={(rate) => onPatch({ playbackRate: parseDecimal(rate) })} />
@@ -944,11 +1002,12 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
   </>;
 }
 
-function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant }: {
+function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImportMusic }: {
   project: Project;
   onClose: () => void;
   onGenerate: (options: AutoMontageOptions) => Promise<GeneratedAutoMontages | null>;
   onOpenVariant: (variant: GeneratedAutoMontageVariant) => Promise<void>;
+  onImportMusic: () => Promise<MediaAsset | null>;
 }) {
   const videos = project.media.filter((asset) => asset.kind === 'video');
   const musicAssets = project.media.filter((asset) => asset.hasAudio);
@@ -965,6 +1024,7 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant }: {
     anchorPreference: { drop: 1, downbeat: 0.9, beat: 0.68, onset: 0.4 }
   });
   const [busy, setBusy] = useState(false);
+  const [importingMusic, setImportingMusic] = useState(false);
   const [error, setError] = useState('');
   const [generated, setGenerated] = useState<GeneratedAutoMontages | null>(null);
 
@@ -986,6 +1046,18 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant }: {
     finally { setBusy(false); }
   }
 
+  async function importMusic() {
+    setError(''); setImportingMusic(true);
+    try {
+      const asset = await onImportMusic();
+      if (asset) {
+        setMusicMediaId(asset.id);
+        setDuration(String(Math.min(30, secondsOf(asset.duration))));
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setImportingMusic(false); }
+  }
+
   function toggleVideo(id: string, checked: boolean) {
     setVideoMediaIds((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
   }
@@ -1003,7 +1075,7 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant }: {
       <div className="montage-modal-heading"><div><span className="eyebrow">AUTOMATIC EDITING · PHASE D</span><h2>Generate a montage</h2></div><button type="button" className="square-button" disabled={busy} onClick={onClose} title="Close">×</button></div>
       <p className="montage-intro">Analyze local highlights, align their decisive moments to music anchors, and create separate editable project variants. Your current timeline is preserved.</p>
       <div className="modal-field-pair">
-        <label><span>Music / audio</span><select value={musicMediaId} onChange={(event) => setMusicMediaId(event.target.value)} required><option value="" disabled>Select audio</option>{musicAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name} · {formatTime(secondsOf(asset.duration))}</option>)}</select></label>
+        <div className="montage-music-field"><label><span>Music / audio</span><select value={musicMediaId} onChange={(event) => setMusicMediaId(event.target.value)} required><option value="" disabled>Select audio</option>{musicAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name} · {formatTime(secondsOf(asset.duration))}</option>)}</select></label><button type="button" className="music-import-button" disabled={busy || importingMusic} onClick={() => void importMusic()}><Music2 size={13} />{importingMusic ? 'Importing…' : 'Import music'}</button></div>
         <label><span>Editing style</span><select value={style} onChange={(event) => setStyle(event.target.value as AutoMontageStyle)}><option value="clean">Clean Competitive</option><option value="aggressive">Aggressive Gaming</option><option value="cinematic">Cinematic</option><option value="velocity">Velocity pacing</option><option value="custom">Custom pacing</option></select></label>
       </div>
       <div className="modal-field-pair">

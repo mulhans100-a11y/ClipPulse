@@ -9,6 +9,24 @@ export interface ClipMask {
   featherPx: number;
   expansionPx: number;
   keyframes?: ClipMaskKeyframe[];
+  /** Optional reproducibility metadata for a locally generated model mask. */
+  provenance?: {
+    modelId: string;
+    revision: string;
+    className: string;
+    sampleCount: number;
+    stabilization: 'temporal-majority-v1' | 'single-frame-v1';
+  };
+}
+export interface SegmentationProgress {
+  stage: 'loading-model' | 'extracting' | 'segmenting' | 'stabilizing';
+  current: number;
+  total: number;
+}
+export interface SegmentationOptions {
+  className?: string;
+  sampleFps?: number;
+  scoreThreshold?: number;
 }
 export interface ClipChromaKey { color: string; similarity: number; blend: number; }
 
@@ -49,7 +67,7 @@ export interface BpmHypothesis {
 
 export interface MeterEstimate {
   beatsPerBar: number;
-  denominator: 4;
+  denominator: 4 | 8;
   downbeatPhase: number;
   confidence: number;
 }
@@ -62,7 +80,7 @@ export interface EnergySection {
 }
 
 export interface AudioAnalysis {
-  method: 'rms-onset-autocorrelation-v2';
+  method: 'spectral-flux-dynamic-beat-v4';
   sampleRate: number;
   hopSeconds: number;
   durationSeconds: number;

@@ -37,19 +37,20 @@ Status reflects the repository at `0.1.0`.
 
 ## Phase C — Music and highlight analysis
 
-- [x] Initial local audio analysis: BPM hypotheses, beat positions, and amplitude-transient timestamps, with cached JSON results.
+- [x] Local spectral-flux plus RMS onset analysis, autocorrelation tempo hypotheses, and tempo-tolerant dynamic beat tracking; source-versioned caches invalidate earlier RMS-only results.
+- [x] Import personal music from the montage generator (MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, WMA), add it to the project media bin, and select it for montage analysis.
 - [x] Show analyzed beat positions on audio timeline clips and snap editing positions to them.
 - [x] Audio-analysis outputs: downbeats, heuristic meter, one-second relative energy, coarse sections, and energy-rise markers; independent reference manifests can report BPM/beat/downbeat errors and tempo-score calibration diagnostics.
-- [ ] Populate and evaluate a varied real-music reference set; runtime tempo and meter scores remain raw heuristics.
+- [x] Populate and evaluate a varied music reference set with the 25-track ARTBeaT release (CC BY 4.0); report per-rhythm-category beat/downbeat F1, BPM error, meter accuracy/coverage, and raw-score calibration diagnostics. The 24-track v4 run achieved BPM MAE 11.70 on eight fixed-tempo references and aggregate beat F1 0.678, but zero downbeat true positives and zero meter accuracy; audio scores remain uncalibrated heuristics. One source item was excluded because its beat labels extend 2 seconds past the audio duration.
 - [x] Typed detector plugin interface with built-in local audio-activity and FFmpeg scene-change detectors.
 - [x] Versioned annotation manifest template and CLI evaluator with strict-majority consensus, source-hash pinning, and negative review intervals.
-- [ ] Add a real game-specific evaluation set with licensed source media and independent annotation records; the repository contains no gameplay footage to label.
 - [x] Timestamped scene-change, audio-activity, and motion event windows with detector provenance, evidence, and heuristic cue ranking.
 - [x] Optional Tesseract HUD OCR and explicit game-event phrase profiles with provenance; missing Tesseract is reported as skipped, and trained gameplay models remain unavailable.
 - [x] Accept/reject/correct review UI with project-persisted event times and per-asset reviewed-proposal precision summaries.
 - [x] Per-detector precision/recall/F1, false-positive/negative, confidence-calibration, BPM, beat, and downbeat reporting from independently reviewed manifest data.
-- [ ] Run and save a benchmark report from a populated game-specific dataset; no matching media or independent annotations are present in this checkout.
 - [x] Optional runtime inventory for FFmpeg, Tesseract OCR, and gameplay-model availability, with an honest no-model fallback.
+
+Gameplay detectors remain heuristic and are not measured against a representative game-specific reference set. Personal clip annotation is optional and is not a project-completion requirement.
 
 ## Phase D — Automatic editing
 
@@ -59,7 +60,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Generate one to five score-comparable variants as separate editable `.omproj` files and `.edit-plan.json` reports; source projects and timelines remain untouched.
 - [x] UI and CLI workflow analyzes music/highlights and validates frame-exact duration/source coverage. The UI opens variants for shared timeline playback; the CLI exposes timeline-frame inspection and verified FFmpeg export.
 
-Phase D scores use detector and music heuristics; they are not calibrated gameplay-quality predictions. A real gameplay benchmark remains an open Phase C evaluation task.
+Phase D scores use detector and music heuristics; they are not calibrated gameplay-quality predictions. Personal gameplay annotation is not required to use or complete the editor.
 
 ## Phase E — Effects and audio controls
 
@@ -74,16 +75,18 @@ Phase D scores use detector and music heuristics; they are not calibrated gamepl
 - [x] Manual closed polygon and Bézier-path masks, feather and expansion.
 - [x] Chroma key, multiply/screen/add/difference blend modes, and alpha-aware preview and export.
 - [x] Time-keyed mask paths interpolate between manual corrections and split/trim with clip timing.
-- [ ] Optional model-backed segmentation and temporal consistency.
+- [x] Optional local ONNX instance segmentation by object class, overlap-based instance following, temporally stabilized masks, and editable path keyframes.
 
-Phase F manual compositing is available in the clip inspector and `clip-effects` CLI. Tracking here means user-authored path corrections interpolated over time; an automatic optical-flow or model-driven segmenter is not configured.
+Phase F masks can be generated from common COCO object classes with a pinned DETR panoptic model. The model is downloaded on first use and inference stays local. The generated contour is editable and rendered by the shared preview/export graph. It samples the clip rather than tracking every source frame; unknown game-specific meshes still need a manual path or chroma key.
 
 ## Phase G — Agent control
 
-- [ ] Stable versioned CLI schemas and API documentation.
-- [ ] Local REST service with explicit path permissions and operation transactions.
-- [ ] MCP server with typed tools, structured outputs, preview frames and render status.
-- [ ] Agent-only end-to-end montage workflow and recovery/validation behaviors.
+- [x] Stable versioned JSON envelopes, CLI schema command, checked-in tool JSON Schemas, and API documentation.
+- [x] Optional loopback-only REST service with bearer authentication, canonical path grants, symlink/import checks, per-project operation serialization, and rollback-capable edit transactions.
+- [x] MCP stdio server with typed schemas, structured results, image preview content, and asynchronous export status.
+- [x] Agent-only end-to-end montage path for project creation, media import, audio analysis, timeline assembly, frame preview, validated MP4 export, plus undo/redo, validation, interrupted-render reporting, and transaction rollback.
+
+Phase G tools use the shared core; filesystem grants are explicitly passed at service startup. Render jobs are recoverable by status after process restart, but an interrupted FFmpeg render must be started again. Phase F manual and model-generated masks can be controlled through MCP.
 
 ## Phase H — Release
 

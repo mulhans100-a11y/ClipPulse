@@ -97,7 +97,7 @@ test('timeline snap points include clip edges and analyzed beats within an audio
     media: [{ id: 'music', path: 'music.wav', name: 'music.wav', kind: 'audio', duration: rational(5), hasAudio: true, sizeBytes: 1, modifiedAt: '', contentHash: 'music-hash', importedAt: '' }],
     tracks: [{ id: 'audio-track', name: 'A1', kind: 'audio', muted: false, locked: false, clips: [clip] }]
   };
-  const analysis = { method: 'rms-onset-autocorrelation-v2' as const, sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 5, beats: [0.5, 1, 1.5, 2, 2.5, 3], downbeats: [1, 1.5, 2.5], energyHopSeconds: 1, energyCurve: [0, 0.5, 1], energySections: [], drops: [1.75], onsets: [], bpmHypotheses: [] };
+  const analysis = { method: 'spectral-flux-dynamic-beat-v4' as const, sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 5, beats: [0.5, 1, 1.5, 2, 2.5, 3], downbeats: [1, 1.5, 2.5], energyHopSeconds: 1, energyCurve: [0, 0.5, 1], energySections: [], drops: [1.75], onsets: [], bpmHypotheses: [] };
   assert.deepEqual(audioClipBeatOffsets(clip, analysis), [0, 0.25, 0.5, 0.75]);
   assert.deepEqual(audioClipDownbeatOffsets(clip, analysis), [0, 0.25, 0.75]);
   assert.deepEqual(audioClipDropOffsets(clip, analysis), [0.375]);
@@ -125,7 +125,7 @@ test('automatic montage planner aligns reviewed highlights to music, diversifies
   };
   const sourceBefore = JSON.stringify(project);
   const musicAnalysis: AudioAnalysis = {
-    method: 'rms-onset-autocorrelation-v2', sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 20, estimatedBpm: 120,
+    method: 'spectral-flux-dynamic-beat-v4', sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 20, estimatedBpm: 120,
     bpmHypotheses: [{ bpm: 120, score: 0.9 }], beatPhaseSeconds: 0, beats: Array.from({ length: 40 }, (_value, index) => index * 0.5),
     meter: { beatsPerBar: 4, denominator: 4, downbeatPhase: 0, confidence: 0.7 }, downbeats: Array.from({ length: 10 }, (_value, index) => index * 2),
     energyHopSeconds: 1, energyCurve: Array(20).fill(0.75), energySections: [], drops: [6, 12], onsets: []
@@ -180,7 +180,7 @@ test('automatic montage variants assemble into a continuous editable timeline th
   const music: MediaAsset = { id: 'export-music', path: musicPath, name: 'music.wav', kind: 'audio', duration: rational(10), hasAudio: true, sizeBytes: (await stat(musicPath)).size, modifiedAt: '', contentHash: 'export-music-hash', importedAt: '' };
   const project: Project = { schemaVersion: 1, id: 'export-source', name: 'Export source', createdAt: '', updatedAt: '', frameRate: rational(30), width: 320, height: 180, media: [video, music], tracks: [] };
   const musicAnalysis: AudioAnalysis = {
-    method: 'rms-onset-autocorrelation-v2', sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 10, estimatedBpm: 120,
+    method: 'spectral-flux-dynamic-beat-v4', sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 10, estimatedBpm: 120,
     bpmHypotheses: [{ bpm: 120, score: 0.9 }], beatPhaseSeconds: 0, beats: Array.from({ length: 20 }, (_value, index) => index * 0.5),
     downbeats: [0, 2, 4, 6, 8], energyHopSeconds: 1, energyCurve: Array(10).fill(0.8), energySections: [], drops: [6], onsets: []
   };
@@ -545,7 +545,7 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
   assert.ok(result.beats.length >= 25, `expected beat positions, got ${result.beats.length}`);
   assert.ok(result.onsets.length >= 25, `expected detected onsets, got ${result.onsets.length}`);
   assert.ok(result.beatPhaseSeconds !== undefined && result.beatPhaseSeconds < 0.1);
-  assert.equal(result.method, 'rms-onset-autocorrelation-v2');
+  assert.equal(result.method, 'spectral-flux-dynamic-beat-v4');
   assert.ok(result.energyCurve.length >= 15);
   assert.ok(result.energySections.length > 0);
   assert.equal(result.meter, undefined, 'even beats without bar accents do not invent a meter');
@@ -629,12 +629,12 @@ test('evaluation reports independent gameplay consensus and real-music beat metr
         { annotationId: 'b-kill', annotatorId: reviewerIds[1], eventType: 'kill', startSeconds: 1.1, decisiveSeconds: 1.6, endSeconds: 2.1 }
       ] },
       { mediaPath: 'music.wav', mediaKind: 'audio', hasAudio: true, durationSeconds: 8, reviewedBy: reviewerIds, annotations: [], musicAnnotations: reviewerIds.map((annotatorId) => ({
-        annotatorId, bpm: 120, beatTimesSeconds: Array.from({ length: 16 }, (_value, index) => index / 2), downbeatTimesSeconds: [0, 2, 4, 6]
+        annotatorId, bpm: 120, meter: { beatsPerBar: 4, denominator: 4, downbeatPhase: 0 }, beatTimesSeconds: Array.from({ length: 16 }, (_value, index) => index / 2), downbeatTimesSeconds: [0, 2, 4, 6]
       })) }
     ]
   }));
   const report = await evaluateHighlightDataset(manifest);
-  assert.equal(report.consensusEvents, 1);
+  assert.equal(report.referenceEvents, 1);
   assert.equal(report.disputedAnnotations, 0);
   assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.frame-difference-motion')?.evaluatedMediaItems, 1);
   assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.tesseract-hud-ocr')?.evaluatedMediaItems, 0);
@@ -644,6 +644,22 @@ test('evaluation reports independent gameplay consensus and real-music beat metr
   assert.ok(report.musicSummary.bpmMeanAbsoluteError !== null && report.musicSummary.bpmMeanAbsoluteError <= 2);
   assert.ok(report.musicSummary.beatF1 !== null && report.musicSummary.beatF1 > 0.7);
   assert.ok(report.musicSummary.tempoScoreCalibration, 'tempo score calibration diagnostics are reported');
+  assert.equal(report.musicSummary.meterAccuracy, 1);
+  assert.equal(report.musicSummary.meterCoverage, 1);
+  assert.equal(report.musicByCategory.find((item) => item.category === 'uncategorized')?.items, 1);
+
+  const publishedManifest = path.join(directory, 'published-music.json');
+  await writeFile(publishedManifest, JSON.stringify({
+    schemaVersion: 1, datasetId: 'published-reference-check', game: 'Music reference',
+    referenceSource: { kind: 'published-music-reference', name: 'Test reference set', sourceUrl: 'https://example.org/reference', license: 'CC BY 4.0', citation: 'Test citation', annotationMethod: 'Published reference timestamps.' },
+    annotators: [{ id: 'published-reference', independent: true, kind: 'published-reference' }],
+    items: [{ mediaPath: 'music.wav', mediaKind: 'audio', hasAudio: true, durationSeconds: 8, reviewedBy: ['published-reference'], annotations: [], musicAnnotations: [{
+      annotatorId: 'published-reference', bpm: 120, meter: { beatsPerBar: 4, denominator: 4, downbeatPhase: 0 }, beatTimesSeconds: Array.from({ length: 16 }, (_value, index) => index / 2), downbeatTimesSeconds: [0, 2, 4, 6]
+    }], musicProfile: { category: 'steady-meter' } }]
+  }));
+  const referenceReport = await evaluateHighlightDataset(publishedManifest);
+  assert.equal(referenceReport.referenceSource?.name, 'Test reference set');
+  assert.equal(referenceReport.musicByCategory.find((item) => item.category === 'steady-meter')?.items, 1);
 });
 
 test('timeline preview composites active video tracks in track order and renders black across gaps', async () => {

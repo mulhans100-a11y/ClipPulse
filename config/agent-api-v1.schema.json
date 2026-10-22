@@ -1,0 +1,2560 @@
+{
+  "schemaVersion": 1,
+  "protocol": "OpenMontage Agent API",
+  "tools": [
+    {
+      "name": "project_create",
+      "description": "Create a versioned editable project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "name": {
+            "type": "string",
+            "description": "Project name."
+          },
+          "width": {
+            "type": "number",
+            "description": "Output width in pixels.",
+            "minimum": 16,
+            "maximum": 8192
+          },
+          "height": {
+            "type": "number",
+            "description": "Output height in pixels.",
+            "minimum": 16,
+            "maximum": 8192
+          },
+          "frameRate": {
+            "type": "string",
+            "description": "Exact rational FPS, e.g. 30000/1001."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_update_profile",
+      "description": "Update project name, output dimensions, or exact rational frame rate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "name": {
+            "type": "string",
+            "description": "Project name."
+          },
+          "width": {
+            "type": "number",
+            "description": "Output width in pixels.",
+            "minimum": 16,
+            "maximum": 8192
+          },
+          "height": {
+            "type": "number",
+            "description": "Output height in pixels.",
+            "minimum": 16,
+            "maximum": 8192
+          },
+          "frameRate": {
+            "type": "string",
+            "description": "Exact rational FPS, e.g. 30000/1001."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_open",
+      "description": "Open and return the complete machine-readable project state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_inspect",
+      "description": "Return exact timeline timecodes, tracks, clips, media references, effects, and history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_validate",
+      "description": "Validate project structure and report missing or ungranted media.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_save",
+      "description": "Validate and atomically save the current project representation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_undo",
+      "description": "Restore the previous persistent project state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_redo",
+      "description": "Restore the next persistent project state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "project_transaction",
+      "description": "Run up to 32 timeline/effect edits atomically; a failed step restores project and history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Editing tool name."
+                },
+                "arguments": {
+                  "type": "object",
+                  "description": "Arguments for that editing tool."
+                }
+              },
+              "required": [
+                "name",
+                "arguments"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Ordered editing operations.",
+            "minItems": 1,
+            "maxItems": 32
+          }
+        },
+        "required": [
+          "projectPath",
+          "operations"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "media_import",
+      "description": "Import files or recursively scan granted folders; source media remains read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Absolute local file or folder path."
+            },
+            "description": "Media files or directories.",
+            "minItems": 1,
+            "maxItems": 64
+          },
+          "recursive": {
+            "type": "boolean",
+            "description": "Scan folders recursively; defaults to true."
+          }
+        },
+        "required": [
+          "projectPath",
+          "paths"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "media_search",
+      "description": "Search the project library by name, path, tags, and game.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "query": {
+            "type": "string",
+            "description": "Optional search text."
+          },
+          "favoritesOnly": {
+            "type": "boolean",
+            "description": "Only return favorites."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "media_get",
+      "description": "Return metadata for one imported media asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Media asset ID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "media_update",
+      "description": "Set asset tags, game, favorite/rating, and accept, reject, or correct analyzed event proposals.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Media asset ID."
+          },
+          "favorite": {
+            "type": "boolean",
+            "description": "Favorite state."
+          },
+          "rating": {
+            "type": "number",
+            "description": "Manual highlight rating.",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Tag."
+            },
+            "description": "Replacement tag list.",
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "game": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Game label, or null to clear."
+          },
+          "analysisEventReviews": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "eventId": {
+                  "type": "string",
+                  "description": "Stable detected event ID."
+                },
+                "detectorIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "description": "Detector provenance ID."
+                  },
+                  "description": "Detector IDs.",
+                  "minItems": 0,
+                  "maxItems": 16
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "accepted",
+                    "rejected",
+                    "corrected"
+                  ]
+                },
+                "startSeconds": {
+                  "type": "number",
+                  "description": "Reviewed event window start.",
+                  "minimum": 0
+                },
+                "decisiveSeconds": {
+                  "type": "number",
+                  "description": "Decisive event time.",
+                  "minimum": 0
+                },
+                "endSeconds": {
+                  "type": "number",
+                  "description": "Reviewed event window end.",
+                  "minimum": 0
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "description": "Review timestamp in ISO-8601 form."
+                }
+              },
+              "required": [
+                "eventId",
+                "detectorIds",
+                "status",
+                "startSeconds",
+                "decisiveSeconds",
+                "endSeconds",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Full replacement review list.",
+            "minItems": 0,
+            "maxItems": 5000
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "media_relink",
+      "description": "Relink a missing asset to a compatible granted source file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Media asset ID."
+          },
+          "path": {
+            "type": "string",
+            "description": "Replacement media path."
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "media_get_frames",
+      "description": "Extract up to 12 source preview frames as JPEG images.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Video media asset ID."
+          },
+          "times": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "description": "Source time in seconds.",
+              "minimum": 0
+            },
+            "description": "Frame times in source seconds.",
+            "minItems": 1,
+            "maxItems": 12
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId",
+          "times"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "media_analyze",
+      "description": "Analyze audio beats or detect highlight cues for an imported asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Media asset ID."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "audio",
+              "highlights"
+            ],
+            "description": "Analysis type."
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "audio_analyze",
+      "description": "Analyze music locally and cache BPM hypotheses, beats, downbeats, energy and drops.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Audio-capable asset ID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "audio_get_beat_grid",
+      "description": "Return the cached or newly computed exact beat-grid data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Audio-capable asset ID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "highlights_detect",
+      "description": "Run available local event detectors and return timestamped, provenance-tagged proposals.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Media asset ID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "highlights_rank",
+      "description": "Return detected proposals ordered by their heuristic rank score.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Media asset ID."
+          },
+          "minimumScore": {
+            "type": "number",
+            "description": "Optional minimum heuristic score.",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_inspect",
+      "description": "Return frame-snapped timeline state with exact rational clip times.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_add_track",
+      "description": "Add a video or audio track.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "audio"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional track name."
+          }
+        },
+        "required": [
+          "projectPath",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_add_clip",
+      "description": "Insert a media source range on a compatible track.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "mediaId": {
+            "type": "string",
+            "description": "Media asset ID."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "Track ID."
+          },
+          "start": {
+            "type": "string",
+            "description": "Timeline start in seconds or rational form."
+          },
+          "sourceIn": {
+            "type": "string",
+            "description": "Source in point; defaults to zero."
+          },
+          "duration": {
+            "type": "string",
+            "description": "Optional duration; defaults to remaining source."
+          }
+        },
+        "required": [
+          "projectPath",
+          "mediaId",
+          "trackId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_duplicate_clip",
+      "description": "Duplicate a clip and its effects/audio settings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "start": {
+            "type": "string",
+            "description": "Optional new timeline start."
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_trim_clip",
+      "description": "Change clip timeline start, source in point, or duration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "start": {
+            "type": "string",
+            "description": "New timeline start."
+          },
+          "sourceIn": {
+            "type": "string",
+            "description": "New source in point."
+          },
+          "duration": {
+            "type": "string",
+            "description": "New duration."
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_move_clip",
+      "description": "Move a clip to a new timeline position and optional track.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "start": {
+            "type": "string",
+            "description": "New timeline start."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "Optional destination track ID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "start"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_split_clip",
+      "description": "Split a clip at a timeline time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "at": {
+            "type": "string",
+            "description": "Timeline split point in seconds."
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "at"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_remove_clip",
+      "description": "Remove a clip from the timeline.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_align_event",
+      "description": "Move a clip so a source event lands on an exact target timeline time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "sourceTime": {
+            "type": "string",
+            "description": "Decisive source time in seconds."
+          },
+          "targetTime": {
+            "type": "string",
+            "description": "Desired timeline time in seconds."
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "sourceTime",
+          "targetTime"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_set_track",
+      "description": "Set track mute/solo/lock, gain, role, normalization, ducking, or gain automation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "Track ID."
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "muted": {
+                "type": "boolean",
+                "description": "Mute this track."
+              },
+              "solo": {
+                "type": "boolean",
+                "description": "Solo this track."
+              },
+              "locked": {
+                "type": "boolean",
+                "description": "Lock editing."
+              },
+              "volume": {
+                "type": "number",
+                "description": "Track gain multiplier.",
+                "minimum": 0,
+                "maximum": 8
+              },
+              "audioRole": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "dialogue",
+                  "music"
+                ]
+              },
+              "normalizeAudio": {
+                "type": "boolean",
+                "description": "Normalize track loudness."
+              },
+              "duckUnderDialogue": {
+                "type": "boolean",
+                "description": "Duck this music track under dialogue."
+              },
+              "volumeKeyframes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "time": {
+                      "type": "string",
+                      "description": "Track-local time."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Gain multiplier.",
+                      "minimum": 0,
+                      "maximum": 8
+                    },
+                    "interpolation": {
+                      "type": "string",
+                      "enum": [
+                        "linear",
+                        "hold"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "time",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Track gain automation.",
+                "minItems": 0,
+                "maxItems": 1024
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "projectPath",
+          "trackId",
+          "settings"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "timeline_set_clip_audio",
+      "description": "Set clip audio enable, gain and fade durations.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "audioEnabled": {
+                "type": "boolean",
+                "description": "Enable source audio."
+              },
+              "volume": {
+                "type": "number",
+                "description": "Clip gain multiplier.",
+                "minimum": 0,
+                "maximum": 8
+              },
+              "fadeIn": {
+                "type": "string",
+                "description": "Fade-in time."
+              },
+              "fadeOut": {
+                "type": "string",
+                "description": "Fade-out time."
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "settings"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "effect_add",
+      "description": "Apply clip effect parameters through the shared preview/export engine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "effects": {
+            "type": "object",
+            "description": "Patch matching config/clip-effects.schema.json.",
+            "properties": {
+              "playbackRate": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Source-seconds per timeline-second, for example 3/2."
+              },
+              "speedKeyframes": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "time": {
+                      "type": "string",
+                      "description": "Clip-local time."
+                    },
+                    "rate": {
+                      "type": "string",
+                      "description": "Exact source-seconds per timeline-second."
+                    }
+                  },
+                  "required": [
+                    "time",
+                    "rate"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Linear speed-ramp points.",
+                "minItems": 0,
+                "maxItems": 256
+              },
+              "transform": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "scale": {
+                    "type": "number",
+                    "description": "Scale.",
+                    "minimum": 0.1,
+                    "maximum": 4
+                  },
+                  "x": {
+                    "type": "number",
+                    "description": "Horizontal position in pixels."
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Vertical position in pixels."
+                  },
+                  "rotationDegrees": {
+                    "type": "number",
+                    "description": "Rotation angle.",
+                    "minimum": -360,
+                    "maximum": 360
+                  }
+                },
+                "required": [
+                  "scale",
+                  "x",
+                  "y",
+                  "rotationDegrees"
+                ],
+                "additionalProperties": false
+              },
+              "color": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "brightness": {
+                    "type": "number",
+                    "description": "Brightness adjustment.",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "contrast": {
+                    "type": "number",
+                    "description": "Contrast multiplier.",
+                    "minimum": 0,
+                    "maximum": 4
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "description": "Saturation multiplier.",
+                    "minimum": 0,
+                    "maximum": 4
+                  },
+                  "lutPath": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Optional granted .cube file path.",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "brightness",
+                  "contrast",
+                  "saturation"
+                ],
+                "additionalProperties": false
+              },
+              "keyframes": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "property": {
+                      "type": "string",
+                      "enum": [
+                        "opacity",
+                        "brightness",
+                        "contrast",
+                        "saturation",
+                        "volume"
+                      ]
+                    },
+                    "time": {
+                      "type": "string",
+                      "description": "Clip-local time."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Keyframe value."
+                    },
+                    "interpolation": {
+                      "type": "string",
+                      "enum": [
+                        "linear",
+                        "hold"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "property",
+                    "time",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Animated property points.",
+                "minItems": 0,
+                "maxItems": 1024
+              },
+              "transitionIn": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "dissolve",
+                      "wipe-left",
+                      "wipe-right"
+                    ]
+                  },
+                  "duration": {
+                    "type": "string",
+                    "description": "Transition duration."
+                  }
+                },
+                "required": [
+                  "type",
+                  "duration"
+                ],
+                "additionalProperties": false
+              },
+              "title": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Title text.",
+                    "maxLength": 500
+                  },
+                  "fontSize": {
+                    "type": "number",
+                    "description": "Font size.",
+                    "minimum": 8,
+                    "maximum": 256
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9a-fA-F]{6}$"
+                  },
+                  "x": {
+                    "type": "number",
+                    "description": "Horizontal position.",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Vertical position.",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "start": {
+                    "type": "string",
+                    "description": "Clip-local start."
+                  },
+                  "duration": {
+                    "type": "string",
+                    "description": "Title duration."
+                  },
+                  "box": {
+                    "type": "boolean",
+                    "description": "Draw a backing box."
+                  },
+                  "fontFile": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Optional granted font file path.",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "text",
+                  "fontSize",
+                  "color",
+                  "x",
+                  "y",
+                  "start",
+                  "duration"
+                ],
+                "additionalProperties": false
+              },
+              "normalizeAudio": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Normalize clip loudness."
+              },
+              "blendMode": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "normal",
+                  "multiply",
+                  "screen",
+                  "add",
+                  "difference"
+                ]
+              },
+              "chromaKey": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9a-fA-F]{6}$"
+                  },
+                  "similarity": {
+                    "type": "number",
+                    "description": "Similarity threshold.",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "blend": {
+                    "type": "number",
+                    "description": "Edge blend.",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [
+                  "color",
+                  "similarity",
+                  "blend"
+                ],
+                "additionalProperties": false
+              },
+              "mask": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Closed normalized SVG path.",
+                    "maxLength": 4096
+                  },
+                  "featherPx": {
+                    "type": "number",
+                    "description": "Feather in pixels.",
+                    "minimum": 0,
+                    "maximum": 256
+                  },
+                  "expansionPx": {
+                    "type": "number",
+                    "description": "Expansion in pixels.",
+                    "minimum": -256,
+                    "maximum": 256
+                  },
+                  "keyframes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "time": {
+                          "type": "string",
+                          "description": "Clip-local correction time."
+                        },
+                        "path": {
+                          "type": "string",
+                          "description": "Closed normalized SVG mask path.",
+                          "maxLength": 4096
+                        }
+                      },
+                      "required": [
+                        "time",
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Manual tracking corrections.",
+                    "minItems": 0,
+                    "maxItems": 256
+                  },
+                  "provenance": {
+                    "type": "object",
+                    "properties": {
+                      "modelId": {
+                        "type": "string",
+                        "description": "Pinned model repository."
+                      },
+                      "revision": {
+                        "type": "string",
+                        "description": "Pinned model revision."
+                      },
+                      "className": {
+                        "type": "string",
+                        "description": "Tracked object class."
+                      },
+                      "sampleCount": {
+                        "type": "number",
+                        "description": "Number of temporal samples.",
+                        "minimum": 1,
+                        "maximum": 96
+                      },
+                      "stabilization": {
+                        "type": "string",
+                        "enum": [
+                          "temporal-majority-v1",
+                          "single-frame-v1"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "modelId",
+                      "revision",
+                      "className",
+                      "sampleCount",
+                      "stabilization"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "path",
+                  "featherPx",
+                  "expansionPx"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "effects"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "effect_update",
+      "description": "Update selected clip effects without replacing unrelated effect fields.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "effects": {
+            "type": "object",
+            "description": "Patch matching config/clip-effects.schema.json.",
+            "properties": {
+              "playbackRate": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Source-seconds per timeline-second, for example 3/2."
+              },
+              "speedKeyframes": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "time": {
+                      "type": "string",
+                      "description": "Clip-local time."
+                    },
+                    "rate": {
+                      "type": "string",
+                      "description": "Exact source-seconds per timeline-second."
+                    }
+                  },
+                  "required": [
+                    "time",
+                    "rate"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Linear speed-ramp points.",
+                "minItems": 0,
+                "maxItems": 256
+              },
+              "transform": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "scale": {
+                    "type": "number",
+                    "description": "Scale.",
+                    "minimum": 0.1,
+                    "maximum": 4
+                  },
+                  "x": {
+                    "type": "number",
+                    "description": "Horizontal position in pixels."
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Vertical position in pixels."
+                  },
+                  "rotationDegrees": {
+                    "type": "number",
+                    "description": "Rotation angle.",
+                    "minimum": -360,
+                    "maximum": 360
+                  }
+                },
+                "required": [
+                  "scale",
+                  "x",
+                  "y",
+                  "rotationDegrees"
+                ],
+                "additionalProperties": false
+              },
+              "color": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "brightness": {
+                    "type": "number",
+                    "description": "Brightness adjustment.",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "contrast": {
+                    "type": "number",
+                    "description": "Contrast multiplier.",
+                    "minimum": 0,
+                    "maximum": 4
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "description": "Saturation multiplier.",
+                    "minimum": 0,
+                    "maximum": 4
+                  },
+                  "lutPath": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Optional granted .cube file path.",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "brightness",
+                  "contrast",
+                  "saturation"
+                ],
+                "additionalProperties": false
+              },
+              "keyframes": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "property": {
+                      "type": "string",
+                      "enum": [
+                        "opacity",
+                        "brightness",
+                        "contrast",
+                        "saturation",
+                        "volume"
+                      ]
+                    },
+                    "time": {
+                      "type": "string",
+                      "description": "Clip-local time."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Keyframe value."
+                    },
+                    "interpolation": {
+                      "type": "string",
+                      "enum": [
+                        "linear",
+                        "hold"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "property",
+                    "time",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Animated property points.",
+                "minItems": 0,
+                "maxItems": 1024
+              },
+              "transitionIn": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "dissolve",
+                      "wipe-left",
+                      "wipe-right"
+                    ]
+                  },
+                  "duration": {
+                    "type": "string",
+                    "description": "Transition duration."
+                  }
+                },
+                "required": [
+                  "type",
+                  "duration"
+                ],
+                "additionalProperties": false
+              },
+              "title": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Title text.",
+                    "maxLength": 500
+                  },
+                  "fontSize": {
+                    "type": "number",
+                    "description": "Font size.",
+                    "minimum": 8,
+                    "maximum": 256
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9a-fA-F]{6}$"
+                  },
+                  "x": {
+                    "type": "number",
+                    "description": "Horizontal position.",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Vertical position.",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "start": {
+                    "type": "string",
+                    "description": "Clip-local start."
+                  },
+                  "duration": {
+                    "type": "string",
+                    "description": "Title duration."
+                  },
+                  "box": {
+                    "type": "boolean",
+                    "description": "Draw a backing box."
+                  },
+                  "fontFile": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Optional granted font file path.",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "text",
+                  "fontSize",
+                  "color",
+                  "x",
+                  "y",
+                  "start",
+                  "duration"
+                ],
+                "additionalProperties": false
+              },
+              "normalizeAudio": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Normalize clip loudness."
+              },
+              "blendMode": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "normal",
+                  "multiply",
+                  "screen",
+                  "add",
+                  "difference"
+                ]
+              },
+              "chromaKey": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9a-fA-F]{6}$"
+                  },
+                  "similarity": {
+                    "type": "number",
+                    "description": "Similarity threshold.",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "blend": {
+                    "type": "number",
+                    "description": "Edge blend.",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [
+                  "color",
+                  "similarity",
+                  "blend"
+                ],
+                "additionalProperties": false
+              },
+              "mask": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Closed normalized SVG path.",
+                    "maxLength": 4096
+                  },
+                  "featherPx": {
+                    "type": "number",
+                    "description": "Feather in pixels.",
+                    "minimum": 0,
+                    "maximum": 256
+                  },
+                  "expansionPx": {
+                    "type": "number",
+                    "description": "Expansion in pixels.",
+                    "minimum": -256,
+                    "maximum": 256
+                  },
+                  "keyframes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "time": {
+                          "type": "string",
+                          "description": "Clip-local correction time."
+                        },
+                        "path": {
+                          "type": "string",
+                          "description": "Closed normalized SVG mask path.",
+                          "maxLength": 4096
+                        }
+                      },
+                      "required": [
+                        "time",
+                        "path"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "Manual tracking corrections.",
+                    "minItems": 0,
+                    "maxItems": 256
+                  },
+                  "provenance": {
+                    "type": "object",
+                    "properties": {
+                      "modelId": {
+                        "type": "string",
+                        "description": "Pinned model repository."
+                      },
+                      "revision": {
+                        "type": "string",
+                        "description": "Pinned model revision."
+                      },
+                      "className": {
+                        "type": "string",
+                        "description": "Tracked object class."
+                      },
+                      "sampleCount": {
+                        "type": "number",
+                        "description": "Number of temporal samples.",
+                        "minimum": 1,
+                        "maximum": 96
+                      },
+                      "stabilization": {
+                        "type": "string",
+                        "enum": [
+                          "temporal-majority-v1",
+                          "single-frame-v1"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "modelId",
+                      "revision",
+                      "className",
+                      "sampleCount",
+                      "stabilization"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "path",
+                  "featherPx",
+                  "expansionPx"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "effects"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "effect_remove",
+      "description": "Clear selected effect fields by setting them to null.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "playbackRate",
+                "speedKeyframes",
+                "transform",
+                "color",
+                "keyframes",
+                "transitionIn",
+                "title",
+                "normalizeAudio",
+                "blendMode",
+                "chromaKey",
+                "mask"
+              ]
+            },
+            "description": "Fields to clear; defaults to all effect fields."
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "keyframe_set",
+      "description": "Insert or replace a clip keyframe at an exact local clip time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "property": {
+            "type": "string",
+            "enum": [
+              "opacity",
+              "brightness",
+              "contrast",
+              "saturation",
+              "volume"
+            ]
+          },
+          "time": {
+            "type": "string",
+            "description": "Clip-local seconds."
+          },
+          "value": {
+            "type": "number",
+            "description": "Keyframe value."
+          },
+          "interpolation": {
+            "type": "string",
+            "enum": [
+              "linear",
+              "hold"
+            ]
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "property",
+          "time",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "mask_create",
+      "description": "Set a closed normalized polygon or Bézier path mask.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "path": {
+            "type": "string",
+            "description": "Closed SVG M/L/Q/C/Z path in normalized 0–1 frame coordinates.",
+            "maxLength": 4096
+          },
+          "featherPx": {
+            "type": "number",
+            "description": "Feather radius in pixels.",
+            "minimum": 0,
+            "maximum": 256
+          },
+          "expansionPx": {
+            "type": "number",
+            "description": "Mask expansion in pixels.",
+            "minimum": -256,
+            "maximum": 256
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "mask_track",
+      "description": "Set manually corrected time-keyed mask paths; points must correspond across corrections.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Timeline clip ID."
+          },
+          "keyframes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "time": {
+                  "type": "string",
+                  "description": "Clip-local time."
+                },
+                "path": {
+                  "type": "string",
+                  "description": "Closed normalized SVG mask path.",
+                  "maxLength": 4096
+                }
+              },
+              "required": [
+                "time",
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Ordered correction keyframes.",
+            "minItems": 1,
+            "maxItems": 256
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId",
+          "keyframes"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "mask_segment",
+      "description": "Generate a local ONNX object mask for a recognized class; track the matching instance and temporally stabilize its path.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "clipId": {
+            "type": "string",
+            "description": "Video timeline clip ID."
+          },
+          "className": {
+            "type": "string",
+            "description": "Recognized object class such as person, car, dog, cat, or chair.",
+            "maxLength": 80
+          },
+          "sampleFps": {
+            "type": "number",
+            "description": "Mask inference samples per second.",
+            "minimum": 0.25,
+            "maximum": 8
+          },
+          "scoreThreshold": {
+            "type": "number",
+            "description": "Minimum instance score.",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "projectPath",
+          "clipId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "composition_create",
+      "description": "Configure blend modes and masks on one or more existing compositing layers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "layers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "clipId": {
+                  "type": "string",
+                  "description": "Timeline clip ID."
+                },
+                "blendMode": {
+                  "type": "string",
+                  "enum": [
+                    "normal",
+                    "multiply",
+                    "screen",
+                    "add",
+                    "difference"
+                  ]
+                }
+              },
+              "required": [
+                "clipId"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Layer effect settings."
+          }
+        },
+        "required": [
+          "projectPath",
+          "layers"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "montage_generate",
+      "description": "Generate explainable editable montage project variants without modifying the source project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "musicId": {
+            "type": "string",
+            "description": "Music media asset ID."
+          },
+          "durationSeconds": {
+            "type": "number",
+            "description": "Target montage duration.",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "clean",
+              "aggressive",
+              "cinematic",
+              "velocity",
+              "custom"
+            ]
+          },
+          "videoIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Optional video media ID."
+            },
+            "description": "Optional video asset selection."
+          },
+          "variants": {
+            "type": "number",
+            "description": "Number of variants.",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "intensity": {
+            "type": "number",
+            "description": "Pacing intensity.",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "project",
+              "landscape-1080p",
+              "portrait-1080p",
+              "square-1080p"
+            ]
+          },
+          "outputDirectory": {
+            "type": "string",
+            "description": "Output directory inside a granted root."
+          }
+        },
+        "required": [
+          "projectPath",
+          "musicId",
+          "durationSeconds"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "preview_render",
+      "description": "Render the composite timeline frame at the exact project frame nearest the requested time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "time": {
+            "type": "string",
+            "description": "Timeline time in seconds."
+          }
+        },
+        "required": [
+          "projectPath",
+          "time"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "preview_analyze",
+      "description": "Render and inspect a composite frame using FFmpeg signal statistics.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "time": {
+            "type": "string",
+            "description": "Timeline time in seconds."
+          }
+        },
+        "required": [
+          "projectPath",
+          "time"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "video_export",
+      "description": "Start a validated asynchronous MP4 export; poll render_status for progress.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "outputPath": {
+            "type": "string",
+            "description": "Output MP4 inside a granted root."
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Replace an existing output after validation."
+          },
+          "encoder": {
+            "type": "string",
+            "enum": [
+              "libx264",
+              "h264_amf",
+              "h264_nvenc",
+              "h264_qsv"
+            ]
+          }
+        },
+        "required": [
+          "projectPath",
+          "outputPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "render_status",
+      "description": "Read progress, completion, or failure for an export job, including after service restart.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "jobId": {
+            "type": "string",
+            "description": "Render job ID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "jobId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "diagnostics",
+      "description": "Report platform, Node, FFmpeg, and optional local analysis runtimes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    }
+  ],
+  "envelopes": {
+    "success": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "ok",
+        "data"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "ok": {
+          "const": true
+        },
+        "data": {}
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
