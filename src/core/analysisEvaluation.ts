@@ -116,7 +116,7 @@ export async function evaluateHighlightDataset(datasetPath: string, matchToleran
   analyses.forEach(({ analysis }, mediaIndex) => {
     for (const status of analysis.detectors) {
       detectorIds.add(status.detectorId);
-      if (status.status === 'complete') {
+      if (status.status === 'complete' && dataset.items[mediaIndex].mediaKind === 'video') {
         const evaluated = evaluatedMediaByDetector.get(status.detectorId) ?? new Set<number>();
         evaluated.add(mediaIndex);
         evaluatedMediaByDetector.set(status.detectorId, evaluated);

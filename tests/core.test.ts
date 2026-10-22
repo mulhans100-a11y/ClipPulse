@@ -8,6 +8,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
 import { analyzeAudio, readCachedAudioAnalysis } from '../src/core/audioAnalysis';
+import { analyzeHighlightCues } from '../src/core/highlightAnalysis';
+import { evaluateHighlightDataset } from '../src/core/analysisEvaluation';
+import { gameRuleCacheKey, matchGameEvent } from '../src/core/gameRules';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
 import { runCommand } from '../src/core/ffmpeg';
@@ -378,6 +381,75 @@ test('audio analysis reports accented meter, downbeats, and a high-energy transi
   assert.equal(analysis.meter?.beatsPerBar, 4, `expected accented 4/4, got ${JSON.stringify(analysis.meter)}`);
   assert.ok(analysis.downbeats.length >= 10);
   assert.ok(analysis.drops.some((time) => Math.abs(time - 12) <= 2), `expected an energy rise near 12 seconds, got ${analysis.drops.join(', ')}`);
+});
+
+test('motion and optional OCR detectors report their availability and motion evidence', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-motion-analysis-'));
+  scratch.push(directory);
+  const source = path.join(directory, 'motion.mp4');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=5', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', source]);
+  const analysis = await analyzeHighlightCues({ mediaId: 'motion-sample', mediaPath: source, mediaKind: 'video', durationSeconds: 5, game: 'OpenArena' });
+  const motionDetector = analysis.detectors.find((detector) => detector.detectorId === 'openmontage.frame-difference-motion');
+  assert.equal(motionDetector?.status, 'complete');
+  const motionEvent = analysis.events.find((event) => event.detectors.some((detector) => detector.detectorId === 'openmontage.frame-difference-motion'));
+  assert.ok(motionEvent, 'moving frames produce timestamped motion activity');
+  assert.equal(motionEvent.detectors.find((detector) => detector.detectorId === 'openmontage.frame-difference-motion')?.evidence.method, 'sampled-frame-mean-absolute-luma-difference');
+  const ocrDetector = analysis.detectors.find((detector) => detector.detectorId === 'openmontage.tesseract-hud-ocr');
+  assert.ok(ocrDetector?.status === 'complete' || ocrDetector?.status === 'skipped');
+});
+
+test('game rules reload changed local profiles and emit explicit game event labels', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-game-rules-'));
+  scratch.push(directory);
+  const rulesPath = path.join(directory, 'rules.json');
+  const previousPath = process.env.OPENMONTAGE_GAME_RULES;
+  process.env.OPENMONTAGE_GAME_RULES = rulesPath;
+  try {
+    await writeFile(rulesPath, JSON.stringify({ schemaVersion: 1, profiles: [{ id: 'test-arena', gameAliases: ['Test Arena'], events: [{ id: 'round_win', keywords: ['victorious squad'] }] }] }));
+    const initialKey = await gameRuleCacheKey();
+    assert.deepEqual(await matchGameEvent('Victorious Squad!', 'Test Arena'), { profileId: 'test-arena', eventId: 'round_win', matchedKeyword: 'victorious squad' });
+    await writeFile(rulesPath, JSON.stringify({ schemaVersion: 1, profiles: [{ id: 'test-arena', gameAliases: ['Test Arena'], events: [{ id: 'objective', keywords: ['objective secured'] }] }] }));
+    assert.notEqual(await gameRuleCacheKey(), initialKey, 'custom rule changes invalidate the detector cache key');
+    assert.deepEqual(await matchGameEvent('Objective secured', 'Test Arena'), { profileId: 'test-arena', eventId: 'objective', matchedKeyword: 'objective secured' });
+  } finally {
+    if (previousPath === undefined) delete process.env.OPENMONTAGE_GAME_RULES;
+    else process.env.OPENMONTAGE_GAME_RULES = previousPath;
+  }
+});
+
+test('evaluation reports independent gameplay consensus and real-music beat metrics', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-phase-c-evaluation-'));
+  scratch.push(directory);
+  const video = path.join(directory, 'game.mp4');
+  const music = path.join(directory, 'music.wav');
+  const manifest = path.join(directory, 'dataset.json');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=5', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', video]);
+  await writeClickTrack(music, 120, 8, { accentEvery: 4 });
+  const reviewerIds = ['reviewer-a', 'reviewer-b'];
+  await writeFile(manifest, JSON.stringify({
+    schemaVersion: 1, datasetId: 'synthetic-phase-c-check', game: 'OpenArena',
+    annotators: reviewerIds.map((id) => ({ id, independent: true })),
+    items: [
+      { mediaPath: 'game.mp4', mediaKind: 'video', hasAudio: false, durationSeconds: 5, reviewedBy: reviewerIds, annotations: [
+        { annotationId: 'a-kill', annotatorId: reviewerIds[0], eventType: 'kill', startSeconds: 1, decisiveSeconds: 1.5, endSeconds: 2 },
+        { annotationId: 'b-kill', annotatorId: reviewerIds[1], eventType: 'kill', startSeconds: 1.1, decisiveSeconds: 1.6, endSeconds: 2.1 }
+      ] },
+      { mediaPath: 'music.wav', mediaKind: 'audio', hasAudio: true, durationSeconds: 8, reviewedBy: reviewerIds, annotations: [], musicAnnotations: reviewerIds.map((annotatorId) => ({
+        annotatorId, bpm: 120, beatTimesSeconds: Array.from({ length: 16 }, (_value, index) => index / 2), downbeatTimesSeconds: [0, 2, 4, 6]
+      })) }
+    ]
+  }));
+  const report = await evaluateHighlightDataset(manifest);
+  assert.equal(report.consensusEvents, 1);
+  assert.equal(report.disputedAnnotations, 0);
+  assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.frame-difference-motion')?.evaluatedMediaItems, 1);
+  assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.tesseract-hud-ocr')?.evaluatedMediaItems, 0);
+  assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.audio-activity')?.evaluatedMediaItems, 0, 'audio-only music items are excluded from gameplay detector recall');
+  const sceneMetrics = report.detectorResults.find((result) => result.detectorId === 'openmontage.ffmpeg-scene-change');
+  assert.equal(sceneMetrics?.falseNegatives, 1, 'annotated events missed by a completed detector count toward recall');
+  assert.ok(report.musicSummary.bpmMeanAbsoluteError !== null && report.musicSummary.bpmMeanAbsoluteError <= 2);
+  assert.ok(report.musicSummary.beatF1 !== null && report.musicSummary.beatF1 > 0.7);
+  assert.ok(report.musicSummary.tempoScoreCalibration, 'tempo score calibration diagnostics are reported');
 });
 
 test('timeline preview composites active video tracks in track order and renders black across gaps', async () => {
