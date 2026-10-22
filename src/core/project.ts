@@ -41,6 +41,17 @@ export async function createProject(filePath: string, options: Partial<Pick<Proj
   return project;
 }
 
+export async function updateProjectProfile(filePath: string, patch: Partial<Pick<Project, 'name' | 'frameRate' | 'width' | 'height'>>): Promise<Project> {
+  const project = await loadProject(filePath);
+  if (patch.name !== undefined) project.name = patch.name.trim();
+  if (patch.frameRate !== undefined) project.frameRate = patch.frameRate;
+  if (patch.width !== undefined) project.width = patch.width;
+  if (patch.height !== undefined) project.height = patch.height;
+  validateProject(project);
+  await saveProject(filePath, project);
+  return project;
+}
+
 export async function loadProject(filePath: string): Promise<Project> {
   const target = path.resolve(filePath);
   let parsed: unknown;

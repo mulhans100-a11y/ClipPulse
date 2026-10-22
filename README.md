@@ -8,6 +8,7 @@ This is an early Phase A/B/C build. The editor includes an initial local beat an
 
 - Electron + React + TypeScript desktop shell with isolated renderer context.
 - `.omproj` project files with versioned JSON, rational time values, autosaved edits, a `.bak` previous snapshot, and persistent 50-state undo/redo history.
+- Editable project name, output dimensions, and rational frame rate, plus four-step timeline zoom from 50% to 400%.
 - Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, cached video thumbnails, and audio waveform images. Original media files are referenced and never modified.
 - A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names, and watches selected folders for new local clips.
 - Missing source files are marked in the media bin and can be relinked to a replacement file without breaking existing clip references.
@@ -74,6 +75,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 ## Current limitations
 
 - Timeline editing currently uses rational seconds; the inspector also shows project-frame positions. UI fields are rounded to microsecond precision when they call the editor core.
+- Timeline zoom is an editor view setting and resets to 100% when the app starts. Waveform images currently stretch with clips rather than being regenerated at each zoom level.
 - Timeline composite preview is a still image rendered when the playhead moves; it does not play the edit in real time. Audio clips show a cached waveform image that stretches with the clip source range; zoom-aware waveform rendering, proxies, transitions, effect parity, and render queue are not implemented.
 - Rendering composites visible clips in track order over a black canvas. There is no color/effect pipeline or alpha-mask editor yet.
 - Media references are absolute file paths. Relinking keeps the existing media ID, requires the same media kind, and rejects a replacement that is too short for existing clip ranges. SQLite is a rebuildable cache adjacent to the project.

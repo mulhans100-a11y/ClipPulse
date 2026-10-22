@@ -5,13 +5,13 @@ import path from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { analyzeAudio } from '../core/audioAnalysis';
 import { AppError } from '../core/errors';
-import { addTrack, addClip, createProject, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, splitClip, trimClip, undoProject, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
+import { addTrack, addClip, createProject, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
 import { frameTime } from '../core/time';
 import { watchFolder } from '../core/folderWatcher';
 import { renderTimelineFrame } from '../core/timelinePreview';
-import type { TrackKind } from '../core/types';
+import type { Project, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
 
 const here = __dirname;
@@ -135,6 +135,7 @@ ipcMain.handle('project:open', async () => {
   return { project, path: filePath };
 });
 ipcMain.handle('project:save', (_event, filePath, project) => withProjectLock(filePath, () => saveProject(filePath, project)));
+ipcMain.handle('project:updateProfile', (_event, filePath: string, patch: Partial<Pick<Project, 'name' | 'width' | 'height' | 'frameRate'>>) => withProjectLock(filePath, () => updateProjectProfile(filePath, patch)));
 ipcMain.handle('project:history', (_event, filePath: string) => withProjectLock(filePath, () => getProjectHistory(filePath)));
 ipcMain.handle('project:undo', (_event, filePath: string) => withProjectLock(filePath, () => undoProject(filePath)));
 ipcMain.handle('project:redo', (_event, filePath: string) => withProjectLock(filePath, () => redoProject(filePath)));

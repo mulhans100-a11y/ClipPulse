@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata } from '../src/core/project';
+import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile } from '../src/core/project';
 import { analyzeAudio } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
@@ -51,6 +51,32 @@ test('project undo and redo survive reloads, skip no-op saves, and clear a redo 
   const branched = await getProjectHistory(projectFile);
   assert.equal(branched.canUndo, true);
   assert.equal(branched.canRedo, false, 'a new edit removes the abandoned redo branch');
+});
+
+test('project profile changes validate dimensions and frame rate and participate in undo history', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-profile-'));
+  scratch.push(directory);
+  const projectFile = path.join(directory, 'profile.omproj');
+  const initial = await createProject(projectFile);
+  const updated = await updateProjectProfile(projectFile, { name: 'Cinematic Cut', width: 1280, height: 720, frameRate: rational(30000, 1001) });
+  assert.equal(updated.name, 'Cinematic Cut');
+  assert.equal(updated.width, 1280);
+  assert.equal(updated.height, 720);
+  assert.deepEqual(updated.frameRate, rational(30000, 1001));
+  assert.equal((await getProjectHistory(projectFile)).canUndo, true);
+
+  const undone = await undoProject(projectFile);
+  assert.equal(undone.name, initial.name);
+  assert.equal(undone.width, 1920);
+  assert.equal(undone.height, 1080);
+  assert.deepEqual(undone.frameRate, rational(60));
+  const redone = await redoProject(projectFile);
+  assert.equal(redone.name, 'Cinematic Cut');
+  assert.deepEqual(redone.frameRate, rational(30000, 1001));
+
+  await assert.rejects(updateProjectProfile(projectFile, { width: 1279 }), /even output dimensions/);
+  const stillValid = await loadProject(projectFile);
+  assert.equal(stillValid.width, 1280, 'invalid profile edits leave the saved project unchanged');
 });
 
 test('imports, backs up, trims, splits and exports real media without modifying its source', async () => {

@@ -5,6 +5,7 @@ export interface OpenMontageApi {
   createProject(): Promise<{ project: Project; path: string } | null>;
   openProject(): Promise<{ project: Project; path: string } | null>;
   saveProject(path: string, project: Project): Promise<void>;
+  updateProjectProfile(path: string, patch: Partial<Pick<Project, 'name' | 'width' | 'height' | 'frameRate'>>): Promise<Project>;
   getProjectHistory(path: string): Promise<{ canUndo: boolean; canRedo: boolean; undoCount: number; redoCount: number }>;
   undoProject(path: string): Promise<Project>;
   redoProject(path: string): Promise<Project>;

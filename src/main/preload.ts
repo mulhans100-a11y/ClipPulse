@@ -21,6 +21,7 @@ const api: OpenMontageApi = {
   createProject: () => ipcRenderer.invoke('project:create'),
   openProject: () => ipcRenderer.invoke('project:open'),
   saveProject: (filePath, project) => ipcRenderer.invoke('project:save', filePath, project),
+  updateProjectProfile: (filePath, patch) => ipcRenderer.invoke('project:updateProfile', filePath, patch),
   getProjectHistory: (filePath) => ipcRenderer.invoke('project:history', filePath),
   undoProject: (filePath) => ipcRenderer.invoke('project:undo', filePath),
   redoProject: (filePath) => ipcRenderer.invoke('project:redo', filePath),

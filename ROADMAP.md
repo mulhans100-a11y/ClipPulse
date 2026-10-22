@@ -16,6 +16,8 @@ Status reflects the repository at `0.1.0`.
 - [ ] Real-time timeline playback, zoom-aware waveform rendering, and preview/export effect parity.
 - [x] Undo/redo persists up to 50 project states, survives reopen, and branches correctly after undo.
 - [x] Direct clip-edge drag handles with frame-snapped source and timeline trimming.
+- [x] Project profile dialog for output dimensions and rational frame rate; profile changes are undoable.
+- [x] Adjustable timeline zoom from 50% to 400%.
 - [ ] Windows installer validation on a clean machine and dependency diagnosis UI.
 
 ## Phase B — Media library (in progress)

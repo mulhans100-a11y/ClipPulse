@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
 import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
-import { add as addTime, compare, decimal, rational, seconds, toFrame } from '../../core/time';
-
-const PX_PER_SECOND = 96;
+import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 
 function secondsOf(value: { num: string; den: string }): number { return Number(value.num) / Number(value.den); }
 function formatTime(value: number): string {
@@ -34,6 +32,8 @@ export default function App() {
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [playhead, setPlayhead] = useState(0);
+  const [timelineScale, setTimelineScale] = useState(96);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
   const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
   const [timelinePreviewBusy, setTimelinePreviewBusy] = useState(false);
@@ -206,7 +206,7 @@ export default function App() {
     let latest = { clipId: clip.id, start, sourceIn, duration };
     setTrimDraft(latest);
     const move = (pointer: PointerEvent) => {
-      const deltaFrames = Math.round((pointer.clientX - originX) / PX_PER_SECOND / frameStep);
+      const deltaFrames = Math.round((pointer.clientX - originX) / timelineScale / frameStep);
       const rawDelta = deltaFrames * frameStep;
       if (edge === 'left') {
         const delta = Math.max(Math.max(-start, -sourceIn), Math.min(duration - frameStep, rawDelta));
@@ -245,6 +245,15 @@ export default function App() {
       setNotice(`Relinked ${next.media.find((asset) => asset.id === mediaId)?.name ?? 'media file'}`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
+  async function saveProjectSettings(patch: { name: string; width: number; height: number; frameRate: Project['frameRate'] }) {
+    try {
+      const next = await window.openmontage.updateProjectProfile(projectPath, patch);
+      setProject(next); await refreshHistory(projectPath); setShowProjectSettings(false); setNotice('Project settings saved');
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message); throw cause;
+    }
+  }
 
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
@@ -260,7 +269,7 @@ export default function App() {
 
   function timelineClick(event: React.MouseEvent<HTMLDivElement>, track: TimelineTrack) {
     const rect = event.currentTarget.getBoundingClientRect();
-    const at = Math.max(0, (event.clientX - rect.left) / PX_PER_SECOND);
+    const at = Math.max(0, (event.clientX - rect.left) / timelineScale);
     setPlayhead(at);
     if (selectedMedia) void addMediaToTimeline(selectedMedia, at, track.id);
   }
@@ -312,7 +321,7 @@ export default function App() {
 
       <main className="center-panel">
         <section className="monitor panel">
-          <div className="monitor-toolbar"><div className="monitor-tabs"><button className={previewMode === 'timeline' ? 'active-tab' : ''} onClick={() => setPreviewMode('timeline')}><Layers2 size={14} /> Timeline</button><button className={previewMode === 'source' ? 'active-tab' : ''} onClick={() => setPreviewMode('source')}><Video size={14} /> Source</button></div><div className="monitor-meta"><span>{project.width} × {project.height}</span><span>{Number(project.frameRate.num) / Number(project.frameRate.den)} FPS</span><button className="square-button small-square" title="Project settings"><Settings2 size={14} /></button></div></div>
+          <div className="monitor-toolbar"><div className="monitor-tabs"><button className={previewMode === 'timeline' ? 'active-tab' : ''} onClick={() => setPreviewMode('timeline')}><Layers2 size={14} /> Timeline</button><button className={previewMode === 'source' ? 'active-tab' : ''} onClick={() => setPreviewMode('source')}><Video size={14} /> Source</button></div><div className="monitor-meta"><span>{project.width} × {project.height}</span><span>{Number(project.frameRate.num) / Number(project.frameRate.den)} FPS</span><button className="square-button small-square" onClick={() => setShowProjectSettings(true)} title="Project settings"><Settings2 size={14} /></button></div></div>
           <div className="monitor-stage">
             {previewMode === 'timeline' ? <>{timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{timelinePreviewBusy && <span className="preview-busy">Rendering frame…</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={activeMedia.id} src={window.openmontage.toFileUrl(activeMedia.path)} controls onTimeUpdate={(event) => {
               const videoTime = event.currentTarget.currentTime;
@@ -326,10 +335,10 @@ export default function App() {
         </section>
 
         <section className="timeline-panel panel">
-          <div className="timeline-header"><div className="timeline-title"><span className="eyebrow">EDIT</span><h2>Timeline</h2><span className="timeline-duration"><Clock3 size={13} />{formatTime(duration)}</span></div><div className="timeline-actions"><button className="tool-chip" disabled={!currentClip} onClick={() => void splitSelected()} title="Split at playhead"><Scissors size={14} /> Split</button><button className="tool-chip" disabled={!currentClip} onClick={() => void removeSelected()}><Trash2 size={14} /></button><span className="divider" /><button className="tool-chip" onClick={() => void addTrack('video')}><Plus size={14} /> Video</button><button className="tool-chip" onClick={() => void addTrack('audio')}><Plus size={14} /> Audio</button><button className="tool-chip" title="Zoom timeline"><Gauge size={14} /></button></div></div>
+          <div className="timeline-header"><div className="timeline-title"><span className="eyebrow">EDIT</span><h2>Timeline</h2><span className="timeline-duration"><Clock3 size={13} />{formatTime(duration)}</span></div><div className="timeline-actions"><button className="tool-chip" disabled={!currentClip} onClick={() => void splitSelected()} title="Split at playhead"><Scissors size={14} /> Split</button><button className="tool-chip" disabled={!currentClip} onClick={() => void removeSelected()}><Trash2 size={14} /></button><span className="divider" /><button className="tool-chip" onClick={() => void addTrack('video')}><Plus size={14} /> Video</button><button className="tool-chip" onClick={() => void addTrack('audio')}><Plus size={14} /> Audio</button><button className="tool-chip" onClick={() => setTimelineScale((scale) => scale >= 384 ? 48 : scale * 2)} title={`Timeline zoom · ${timelineScale} pixels per second`}><Gauge size={14} />{Math.round(timelineScale / 96 * 100)}%</button></div></div>
           <div className="timeline-scroll" ref={timelineRef}>
-            <div className="timeline-content" style={{ width: Math.max(920, duration * PX_PER_SECOND + 50) }}>
-              <div className="ruler"><div className="track-gutter ruler-gutter">TIME</div><div className="ruler-track">{Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <div key={i} className="ruler-tick" style={{ left: i * PX_PER_SECOND }}><span>{formatTime(i).slice(3)}</span><i /></div>)}<div className="timeline-cursor" style={{ left: playhead * PX_PER_SECOND }}><div /></div></div></div>
+            <div className="timeline-content" style={{ width: Math.max(920, duration * timelineScale + 50) }}>
+              <div className="ruler"><div className="track-gutter ruler-gutter">TIME</div><div className="ruler-track">{Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <div key={i} className="ruler-tick" style={{ left: i * timelineScale }}><span>{formatTime(i).slice(3)}</span><i /></div>)}<div className="timeline-cursor" style={{ left: playhead * timelineScale }}><div /></div></div></div>
               <div className="track-stack">
                 {project.tracks.slice().reverse().map((track) => <div key={track.id} className="track-row">
                   <div className="track-gutter"><div className={`track-type ${track.kind}`}><span>{track.kind === 'video' ? <Video size={14} /> : <AudioLines size={14} />}</span><div><strong>{track.name}</strong><small>{track.kind === 'video' ? 'VIDEO' : 'AUDIO'}</small></div></div><div className="track-controls"><button title="Mute track" className={track.muted ? 'muted' : ''} onClick={async () => {
@@ -341,26 +350,26 @@ export default function App() {
                   }}><span className={track.locked ? 'lock-active' : ''}>⌑</span></button></div></div>
                   <div className="track-lane" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                     event.preventDefault(); const clipId = event.dataTransfer.getData('text/clip-id'); if (!clipId) return;
-                    const bounds = event.currentTarget.getBoundingClientRect(); const at = Math.max(0, (event.clientX - bounds.left + event.currentTarget.scrollLeft) / PX_PER_SECOND);
+                    const bounds = event.currentTarget.getBoundingClientRect(); const at = Math.max(0, (event.clientX - bounds.left + event.currentTarget.scrollLeft) / timelineScale);
                     void run(() => window.openmontage.moveClip(projectPath, clipId, at, track.id), (next) => next, 'Clip moved');
                   }} onClick={(event) => timelineClick(event, track)}>
-                    {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <span className="gridline" key={i} style={{ left: i * PX_PER_SECOND }} />)}
+                    {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <span className="gridline" key={i} style={{ left: i * timelineScale }} />)}
                     {track.clips.map((clip, index) => {
                       const asset = project.media.find((item) => item.id === clip.mediaId)!;
                       const trimmed = trimDraft?.clipId === clip.id ? trimDraft : null;
-                      const start = trimmed?.start ?? secondsOf(clip.start), clipDuration = trimmed?.duration ?? secondsOf(clip.duration), width = Math.max(22, clipDuration * PX_PER_SECOND);
+                      const start = trimmed?.start ?? secondsOf(clip.start), clipDuration = trimmed?.duration ?? secondsOf(clip.duration), width = Math.max(22, clipDuration * timelineScale);
                       const clipArtworkStyle: React.CSSProperties | undefined = asset.kind === 'audio' && asset.thumbnailPath ? {
                         width: `${secondsOf(asset.duration) / secondsOf(clip.duration) * 100}%`,
                         left: `${-secondsOf(clip.sourceIn) / secondsOf(clip.duration) * 100}%`,
                         objectFit: 'fill', opacity: 0.72
                       } : undefined;
-                      return <div key={clip.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/clip-id', clip.id)} onClick={(event) => { event.stopPropagation(); setSelectedClipId(clip.id); setSelectedMediaId(asset.id); setPlayhead(start); }} className={`timeline-clip ${track.kind} ${selectedClipId === clip.id ? 'active' : ''}`} style={{ left: start * PX_PER_SECOND, width, '--clip-hue': `${(index * 61 + asset.name.length * 13) % 360}` } as React.CSSProperties}>
+                      return <div key={clip.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/clip-id', clip.id)} onClick={(event) => { event.stopPropagation(); setSelectedClipId(clip.id); setSelectedMediaId(asset.id); setPlayhead(start); }} className={`timeline-clip ${track.kind} ${selectedClipId === clip.id ? 'active' : ''}`} style={{ left: start * timelineScale, width, '--clip-hue': `${(index * 61 + asset.name.length * 13) % 360}` } as React.CSSProperties}>
                         {asset.thumbnailPath && <img className="clip-filmstrip" style={clipArtworkStyle} src={window.openmontage.toFileUrl(asset.thumbnailPath)} />}
                         <div className="clip-content"><strong>{asset.name}</strong><span>{formatTime(clipDuration)}</span></div>
                         <span className="clip-edge left" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'left')} title="Drag to trim clip start" /><span className="clip-edge right" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'right')} title="Drag to trim clip end" />
                       </div>;
                     })}
-                    <div className="lane-playhead" style={{ left: playhead * PX_PER_SECOND }} />
+                    <div className="lane-playhead" style={{ left: playhead * timelineScale }} />
                   </div>
                 </div>)}
               </div>
@@ -386,6 +395,8 @@ export default function App() {
         <div className="inspector-footer"><span>PROJECT</span><strong>{project.name}</strong><small>{project.width} × {project.height} · {Number(project.frameRate.num) / Number(project.frameRate.den)} fps</small></div>
       </aside>
     </div>
+
+    {showProjectSettings && <ProjectSettingsModal project={project} onClose={() => setShowProjectSettings(false)} onSave={saveProjectSettings} />}
 
     <footer className="statusbar"><span className={error ? 'status-error' : ''}>{error ? error : notice}</span><span className="status-right"><i className={ffmpeg ? 'online' : ''} />{ffmpeg ? 'Ready' : 'FFmpeg missing'} <span className="status-separator" />{project ? `${project.media.length} media` : ''}</span></footer>
   </div>;
@@ -427,6 +438,35 @@ function MediaInspector({ asset, projectPath, missing, onRelink, onSave }: { ass
     </section>
     <section className="inspector-section muted-section"><div className="section-label"><span>DETECTORS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Activity size={14} /><span>Scene and game events</span><small>Planned</small></div></section>
   </>;
+}
+
+function ProjectSettingsModal({ project, onClose, onSave }: { project: Project; onClose: () => void; onSave: (patch: { name: string; width: number; height: number; frameRate: Project['frameRate'] }) => Promise<void> }) {
+  const [name, setName] = useState(project.name);
+  const [width, setWidth] = useState(String(project.width));
+  const [height, setHeight] = useState(String(project.height));
+  const [fps, setFps] = useState(`${project.frameRate.num}/${project.frameRate.den}`);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  async function submit(event: React.FormEvent) {
+    event.preventDefault(); setError('');
+    try {
+      const frameRate = parseDecimal(fps);
+      if (BigInt(frameRate.num) <= 0n || BigInt(frameRate.den) <= 0n) throw new Error('Frame rate must be greater than zero.');
+      setSaving(true);
+      await onSave({ name: name.trim(), width: Number(width), height: Number(height), frameRate });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSaving(false); }
+  }
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && !saving) onClose(); }}>
+    <form className="project-settings-modal" onSubmit={(event) => void submit(event)}>
+      <span className="eyebrow">PROJECT PROFILE</span><h2>Project settings</h2>
+      <label><span>Project name</span><input value={name} onChange={(event) => setName(event.target.value)} required /></label>
+      <div className="modal-field-pair"><label><span>Width</span><input type="number" min="2" step="2" value={width} onChange={(event) => setWidth(event.target.value)} required /></label><label><span>Height</span><input type="number" min="2" step="2" value={height} onChange={(event) => setHeight(event.target.value)} required /></label></div>
+      <label><span>Frame rate</span><input value={fps} onChange={(event) => setFps(event.target.value)} placeholder="60 or 30000/1001" required /><small>Enter a rate such as 60, 30, or 30000/1001.</small></label>
+      {error && <div className="modal-error">{error}</div>}
+      <div className="modal-actions"><button type="button" onClick={onClose} disabled={saving}>Cancel</button><button type="submit" className="primary" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button></div>
+    </form>
+  </div>;
 }
 
 function formatBytes(value: number): string {
