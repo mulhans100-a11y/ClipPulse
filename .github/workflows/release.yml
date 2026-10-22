@@ -64,7 +64,11 @@ jobs:
         run: choco install ffmpeg --yes --no-progress
       - name: Install FFmpeg on Linux
         if: matrix.ffmpeg == 'linux'
-        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+        run: |
+          # GitHub's Ubuntu image can point at an Azure mirror that stalls in CI.
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install --yes ffmpeg
       - name: Install FFmpeg on macOS
         if: matrix.ffmpeg == 'macos'
         run: |
