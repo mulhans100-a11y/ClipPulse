@@ -19,10 +19,8 @@ export async function analyzeAudio(filePath: string, cacheFilePath?: string): Pr
   const source = path.resolve(filePath);
   const sourceStat = await fs.stat(source);
   if (cacheFilePath) {
-    try {
-      const cached = JSON.parse(await fs.readFile(cacheFilePath, 'utf8')) as { sourceSizeBytes: number; sourceMtimeMs: number; analysis: AudioAnalysis };
-      if (cached.sourceSizeBytes === sourceStat.size && cached.sourceMtimeMs === sourceStat.mtimeMs) return cached.analysis;
-    } catch { /* Missing or invalid cache is rebuilt below. */ }
+    const cached = await readCachedAudioAnalysis(source, cacheFilePath, sourceStat.size, sourceStat.mtimeMs);
+    if (cached) return cached;
   }
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'openmontage-audio-'));
   const pcmPath = path.join(temporaryDirectory, 'analysis.pcm');
@@ -62,6 +60,16 @@ export async function analyzeAudio(filePath: string, cacheFilePath?: string): Pr
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
+}
+
+export async function readCachedAudioAnalysis(filePath: string, cacheFilePath: string, sourceSizeBytes?: number, sourceMtimeMs?: number): Promise<AudioAnalysis | null> {
+  try {
+    const sourceStat = sourceSizeBytes === undefined || sourceMtimeMs === undefined ? await fs.stat(filePath) : undefined;
+    const cached = JSON.parse(await fs.readFile(cacheFilePath, 'utf8')) as { sourceSizeBytes: number; sourceMtimeMs: number; analysis: AudioAnalysis };
+    if (cached.sourceSizeBytes !== (sourceSizeBytes ?? sourceStat!.size) || cached.sourceMtimeMs !== (sourceMtimeMs ?? sourceStat!.mtimeMs)) return null;
+    if (cached.analysis?.method !== 'rms-onset-autocorrelation-v1' || !Array.isArray(cached.analysis.beats) || !Array.isArray(cached.analysis.onsets)) return null;
+    return cached.analysis;
+  } catch { return null; }
 }
 
 function decodePcm(source: string, output: string): Promise<void> {

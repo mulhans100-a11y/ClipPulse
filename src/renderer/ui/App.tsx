@@ -6,6 +6,7 @@ import { audioClipBeatOffsets, snapTimelineTime } from '../../core/timelineSnapp
 import { mediaVirtualWindow } from './mediaVirtualization';
 
 const MEDIA_CARD_HEIGHT = 64;
+type AudioAnalysisStatus = 'running' | 'complete' | 'failed';
 
 function secondsOf(value: { num: string; den: string }): number { return Number(value.num) / Number(value.den); }
 function formatTime(value: number): string {
@@ -39,6 +40,7 @@ export default function App() {
   const [timelineScale, setTimelineScale] = useState(96);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [audioAnalyses, setAudioAnalyses] = useState<Record<string, AudioAnalysis>>({});
+  const [audioAnalysisStatuses, setAudioAnalysisStatuses] = useState<Record<string, AudioAnalysisStatus>>({});
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
   const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
@@ -68,6 +70,7 @@ export default function App() {
   const previewRequest = useRef(0);
   const historyRequest = useRef(0);
   const missingRequest = useRef(0);
+  const analysisStatusRequest = useRef(0);
   const projectPathRef = useRef('');
   const timelineRef = useRef<HTMLDivElement>(null);
   const mediaListRef = useRef<HTMLDivElement>(null);
@@ -163,6 +166,13 @@ export default function App() {
   const load = useCallback((result: { project: Project; path: string }) => {
     setProject(result.project); setProjectPath(result.path); projectPathRef.current = result.path; setSelectedClipId(null);
     setAudioAnalyses({});
+    setAudioAnalysisStatuses({});
+    const statusRequest = ++analysisStatusRequest.current;
+    void window.openmontage?.getAudioAnalysisStatuses(result.path).then((mediaIds) => {
+      if (statusRequest === analysisStatusRequest.current && projectPathRef.current === result.path) {
+        setAudioAnalysisStatuses((current) => ({ ...Object.fromEntries(mediaIds.map((mediaId) => [mediaId, 'complete'])), ...current }));
+      }
+    }).catch(() => undefined);
     void window.openmontage?.getImportRoots(result.path).then(setImportRoots).catch(() => setImportRoots([]));
     void refreshHistory(result.path);
     void refreshMissingMedia(result.path);
@@ -182,6 +192,10 @@ export default function App() {
   }
   function cacheAudioAnalysis(mediaId: string, analysis: AudioAnalysis) {
     setAudioAnalyses((current) => ({ ...current, [mediaId]: analysis }));
+    setAudioAnalysisStatuses((current) => ({ ...current, [mediaId]: 'complete' }));
+  }
+  function setAudioAnalysisStatus(mediaId: string, status: AudioAnalysisStatus) {
+    setAudioAnalysisStatuses((current) => ({ ...current, [mediaId]: status }));
   }
 
   async function createProject() {
@@ -438,7 +452,7 @@ export default function App() {
           {mediaWindow.topPadding > 0 && <div className="media-virtual-spacer" style={{ height: mediaWindow.topPadding }} aria-hidden="true" />}
           {visibleMedia.slice(mediaWindow.start, mediaWindow.end).map((asset) => <button key={asset.id} className={`media-card ${selectedMediaId === asset.id ? 'selected' : ''} ${missingMediaIds.includes(asset.id) ? 'missing' : ''}`} onClick={() => { setSelectedMediaId(asset.id); setSelectedClipId(null); }} onDoubleClick={() => void addMediaToTimeline(asset)}>
             <div className="media-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <div className="audio-art"><Music2 size={20} /></div>}<span className="duration-pill">{formatTime(secondsOf(asset.duration))}</span></div>
-            <div className="media-info"><strong title={asset.name}>{asset.name}</strong><span>{asset.kind === 'video' ? `${asset.width ?? '?'} × ${asset.height ?? '?'} · ${asset.frameRate ? `${Number(asset.frameRate.num) / Number(asset.frameRate.den)} fps` : 'Video'}` : 'Audio'}</span>{(asset.tags?.length || asset.game) && <small>{[asset.game, ...(asset.tags ?? [])].filter(Boolean).join(' · ')}</small>}</div>
+            <div className="media-info"><strong title={asset.name}>{asset.name}</strong><span>{asset.kind === 'video' ? `${asset.width ?? '?'} × ${asset.height ?? '?'} · ${asset.frameRate ? `${Number(asset.frameRate.num) / Number(asset.frameRate.den)} fps` : 'Video'}` : 'Audio'}</span>{(asset.tags?.length || asset.game) && <small>{[asset.game, ...(asset.tags ?? [])].filter(Boolean).join(' · ')}</small>}{asset.hasAudio && <small className={`analysis-status ${audioAnalysisStatuses[asset.id] ?? 'not-started'}`}>{audioAnalysisStatuses[asset.id] === 'running' ? 'ANALYZING' : audioAnalysisStatuses[asset.id] === 'complete' ? 'ANALYZED' : audioAnalysisStatuses[asset.id] === 'failed' ? 'ANALYSIS FAILED' : 'NOT ANALYZED'}</small>}</div>
             {asset.kind === 'video' ? <Film className="type-icon" size={14} /> : <AudioLines className="type-icon" size={14} />}
             {missingMediaIds.includes(asset.id) && <span className="missing-badge">MISSING</span>}
             <span className="favorite-control" onClick={(event) => { event.stopPropagation(); void run(() => window.openmontage.updateMediaMetadata(projectPath, asset.id, { favorite: !asset.favorite }), (next) => next, asset.favorite ? 'Removed from favorites' : 'Added to favorites'); }} title={asset.favorite ? 'Remove favorite' : 'Add to favorites'}><Star size={13} fill={asset.favorite ? 'currentColor' : 'none'} /></span>
@@ -529,7 +543,7 @@ export default function App() {
             <NumberField label="Fade out" unit="s" value={secondsOf(currentClip.clip.fadeOut ?? rational(0))} max={secondsOf(currentClip.clip.duration)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(fadeOut) => void patchClipAudio({ fadeOut })} />
           </section>
           <section className="inspector-section muted-section"><div className="section-label"><span>MORE CONTROLS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Sparkles size={14} /><span>Effects and keyframes</span><small>Planned</small></div><div className="disabled-row"><Activity size={14} /><span>Masking and tracking</span><small>Planned</small></div></section>
-        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} onAnalysis={cacheAudioAnalysis} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
+        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} analysisStatus={audioAnalysisStatuses[selectedMedia.id]} onAnalysisStatus={setAudioAnalysisStatus} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} onAnalysis={cacheAudioAnalysis} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
         <div className="inspector-footer"><span>PROJECT</span><strong>{project.name}</strong><small>{project.width} × {project.height} · {Number(project.frameRate.num) / Number(project.frameRate.den)} fps</small></div>
       </aside>
     </div>
@@ -540,21 +554,22 @@ export default function App() {
   </div>;
 }
 
-function MediaInspector({ asset, projectPath, missing, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null; rating: number }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
+function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysisStatus, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; analysisStatus?: AudioAnalysisStatus; onAnalysisStatus: (mediaId: string, status: AudioAnalysisStatus) => void; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null; rating: number }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
   const [tags, setTags] = useState((asset.tags ?? []).join(', '));
   const [game, setGame] = useState(asset.game ?? '');
   const [rating, setRating] = useState(asset.rating ?? 0);
   const [analysisResult, setAnalysisResult] = useState<{ assetId: string; data: AudioAnalysis } | null>(null);
   const analysis = analysisResult?.assetId === asset.id ? analysisResult.data : null;
-  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzingAssetId, setAnalyzingAssetId] = useState<string | null>(null);
+  const analyzing = analyzingAssetId === asset.id;
   const [analysisFailure, setAnalysisFailure] = useState<{ assetId: string; message: string } | null>(null);
   const analysisError = analysisFailure?.assetId === asset.id ? analysisFailure.message : null;
   useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setRating(asset.rating ?? 0); setAnalysisResult(null); setAnalysisFailure(null); }, [asset.id, asset.tags, asset.game, asset.rating]);
   async function runAnalysis() {
-    setAnalyzing(true); setAnalysisFailure(null);
+    setAnalyzingAssetId(asset.id); setAnalysisFailure(null); onAnalysisStatus(asset.id, 'running');
     try { const data = await window.openmontage.analyzeAudio(projectPath, asset.id); setAnalysisResult({ assetId: asset.id, data }); onAnalysis(asset.id, data); }
-    catch (error) { setAnalysisFailure({ assetId: asset.id, message: error instanceof Error ? error.message : String(error) }); }
-    finally { setAnalyzing(false); }
+    catch (error) { setAnalysisFailure({ assetId: asset.id, message: error instanceof Error ? error.message : String(error) }); onAnalysisStatus(asset.id, 'failed'); }
+    finally { setAnalyzingAssetId((current) => current === asset.id ? null : current); }
   }
   return <>
     <div className="inspector-asset"><div className="inspector-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <Music2 size={19} />}</div><div><strong>{asset.name}</strong><small>{asset.kind.toUpperCase()} · {formatTime(secondsOf(asset.duration))}</small></div></div>
@@ -567,7 +582,7 @@ function MediaInspector({ asset, projectPath, missing, onRelink, onSave, onAnaly
       <div className="asset-facts"><span>RESOLUTION</span><strong>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : 'Audio only'}</strong><span>FILE SIZE</span><strong>{formatBytes(asset.sizeBytes)}</strong></div>
     </section>
     <section className="inspector-section"><div className="section-label"><span>ANALYSIS</span><button><ChevronDown size={14} /></button></div>
-      <button className="analyze-audio" disabled={!asset.hasAudio || analyzing} onClick={() => void runAnalysis()}><AudioLines size={14} />{analyzing ? 'Analyzing audio…' : analysis ? 'Analyze again' : 'Analyze music beats'}{!asset.hasAudio && <small>No audio</small>}</button>
+      <button className="analyze-audio" disabled={!asset.hasAudio || analyzing} onClick={() => void runAnalysis()}><AudioLines size={14} />{analyzing ? 'Analyzing audio…' : analysis ? 'Analyze again' : analysisStatus === 'complete' ? 'Load cached analysis' : analysisStatus === 'failed' ? 'Retry audio analysis' : 'Analyze music beats'}{!asset.hasAudio && <small>No audio</small>}</button>
       {analysisError && <div className="analysis-error">{analysisError}</div>}
       {analysis && <div className="analysis-card"><div className="analysis-bpm"><span>ESTIMATED TEMPO</span><strong>{analysis.estimatedBpm ? `${analysis.estimatedBpm} BPM` : 'No stable tempo'}</strong></div>
         {analysis.bpmHypotheses.length > 1 && <div className="analysis-hypotheses"><span>Other tempo matches</span><strong>{analysis.bpmHypotheses.slice(1).map((item) => `${item.bpm} BPM · ${item.score.toFixed(2)}`).join('  /  ')}</strong></div>}

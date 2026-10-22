@@ -28,7 +28,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Debounced recursive local folder watcher with UI pause/resume controls.
 - [x] Missing-file detection and relinking that preserves clip IDs and rejects incompatible or too-short replacements.
 - [x] Manual 0–5 highlight ratings, persisted in project and SQLite, editable in the inspector and CLI, with a top-rated sort.
-- [ ] Per-asset analysis progress for very large libraries.
+- [x] Per-asset audio-analysis state (not analyzed, running, ready, failed) in virtualized media cards, with ready state validated against the source file's size and modification time.
 - [x] Sort by modified date, name, or duration, and virtualize media cards while scrolling.
 - [ ] Waveform rendering that adapts to timeline zoom.
 - [ ] Proxy jobs, resumable queue, resource limits, and thumbnail cache invalidation.

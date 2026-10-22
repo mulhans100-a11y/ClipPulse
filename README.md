@@ -21,7 +21,7 @@ The Phase A editing core is complete. The project also contains partial media-li
 - Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback. The timeline can render a revision-cached MP4 using the same FFmpeg pipeline as export; that preview supports playback, audio, seeking, and frame stepping.
 - FFmpeg MP4/H.264 + AAC rendering with video layer compositing, source audio mixing, output validation, and a CPU H.264 default. Hardware encoders can be selected by CLI.
 - A JSON-output CLI for project creation, media import/search/metadata, timeline operations, validation, frame extraction, and export.
-- Local audio beat analysis with BPM hypotheses, beat positions, and transient timestamps, exposed in the media inspector and CLI.
+- Local audio beat analysis with BPM hypotheses, beat positions, and transient timestamps, exposed in the media inspector and CLI. The virtualized media list shows per-asset analysis state and restores completed status from valid caches.
 - Beat ticks on analyzed audio clips and optional timeline snapping to detected beats and clip edges.
 
 ## Quick start on Windows

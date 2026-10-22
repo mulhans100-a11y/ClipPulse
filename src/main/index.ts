@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { FSWatcher } from 'node:fs';
-import { analyzeAudio } from '../core/audioAnalysis';
+import { analyzeAudio, readCachedAudioAnalysis } from '../core/audioAnalysis';
 import { AppError } from '../core/errors';
 import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
@@ -196,6 +196,21 @@ ipcMain.handle('media:analyzeAudio', async (_event, filePath: string, mediaId: s
   if (!asset.hasAudio) throw new AppError('NO_AUDIO_STREAM', `Media asset has no audio stream: ${asset.name}`);
   const cachePath = path.join(projectCachePath(filePath, project.id), 'analysis', `${asset.id}.json`);
   return analyzeAudio(asset.path, cachePath);
+});
+ipcMain.handle('media:getAudioAnalysisStatuses', async (_event, filePath: string) => {
+  const project = await loadProject(filePath);
+  const cacheDirectory = path.join(projectCachePath(filePath, project.id), 'analysis');
+  const cacheFiles = new Set(await fs.readdir(cacheDirectory).catch(() => [] as string[]));
+  const candidates = project.media.filter((asset) => asset.hasAudio && cacheFiles.has(`${asset.id}.json`));
+  const ready: string[] = [];
+  for (let offset = 0; offset < candidates.length; offset += 24) {
+    const batch = await Promise.all(candidates.slice(offset, offset + 24).map(async (asset) => {
+      const cachePath = path.join(cacheDirectory, `${asset.id}.json`);
+      return await readCachedAudioAnalysis(asset.path, cachePath) ? asset.id : null;
+    }));
+    ready.push(...batch.filter((id): id is string => id !== null));
+  }
+  return ready;
 });
 ipcMain.handle('media:setRootWatching', async (_event, filePath: string, rootPath: string, watching: boolean) => {
   const roots = await withProjectLock(filePath, () => setImportRootWatching(filePath, rootPath, watching));

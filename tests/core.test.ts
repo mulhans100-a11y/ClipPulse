@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
-import { analyzeAudio } from '../src/core/audioAnalysis';
+import { analyzeAudio, readCachedAudioAnalysis } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
 import { runCommand } from '../src/core/ffmpeg';
@@ -331,6 +331,7 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
   const source = path.join(directory, 'clicks.wav');
   const cache = path.join(directory, 'analysis', 'clicks.json');
   await writeClickTrack(source, 120, 16);
+  assert.equal(await readCachedAudioAnalysis(source, cache), null);
   const result = await analyzeAudio(source, cache);
   assert.ok(result.estimatedBpm, 'a tempo hypothesis was found');
   assert.ok(Math.abs(result.estimatedBpm - 120) <= 4, `expected about 120 BPM, got ${result.estimatedBpm}`);
@@ -338,7 +339,10 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
   assert.ok(result.onsets.length >= 25, `expected detected onsets, got ${result.onsets.length}`);
   assert.ok(result.beatPhaseSeconds !== undefined && result.beatPhaseSeconds < 0.1);
   assert.ok((await stat(cache)).size > 100);
+  assert.deepEqual(await readCachedAudioAnalysis(source, cache), result, 'the library can identify a fresh completed analysis cache');
   assert.deepEqual(await analyzeAudio(source, cache), result, 'a matching source size and mtime reuse the saved result');
+  await writeFile(source, Buffer.concat([await readFile(source), Buffer.from([0])]));
+  assert.equal(await readCachedAudioAnalysis(source, cache), null, 'a source change invalidates the visible analysis status');
   for (const bpm of [90, 150]) {
     const variant = path.join(directory, `clicks-${bpm}.wav`);
     await writeClickTrack(variant, bpm, 16);

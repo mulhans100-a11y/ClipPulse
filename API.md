@@ -35,6 +35,8 @@ doctor
 
 `--rating` accepts an integer from 0 to 5. A value of `0` clears the rating; values 1–5 rank the asset as a highlight. The rating is saved in the project and the SQLite media index.
 
+The desktop media list restores completed audio-analysis status only when its cache matches the source file size and modification time. Running and failed states are tracked per asset while the editor is open.
+
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]` writes library metadata; rating zero clears a manual highlight score, while 1–5 ranks a clip. The score is stored in the project and SQLite index. `analyze-audio --project FILE --media ID` decodes a media asset's audio locally and returns estimated BPM hypotheses, beat positions, and transient timestamps. Results are cached beside the project using file size and modification time. Autocorrelation scores are comparative matches, not calibrated probabilities.
 
 `media-relink --project FILE --media ID --path FILE` replaces a missing source path while retaining its ID. The replacement must have the same audio/video kind and cover every existing clip source range.

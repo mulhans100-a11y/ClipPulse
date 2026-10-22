@@ -34,6 +34,7 @@ const api: OpenMontageApi = {
   getImportRoots: (filePath) => ipcRenderer.invoke('media:getImportRoots', filePath),
   setImportRootWatching: (filePath, rootPath, watching) => ipcRenderer.invoke('media:setRootWatching', filePath, rootPath, watching),
   analyzeAudio: (filePath, mediaId) => ipcRenderer.invoke('media:analyzeAudio', filePath, mediaId) as Promise<AudioAnalysis>,
+  getAudioAnalysisStatuses: (filePath) => ipcRenderer.invoke('media:getAudioAnalysisStatuses', filePath) as Promise<string[]>,
   addTrack: (filePath, kind) => ipcRenderer.invoke('timeline:addTrack', filePath, kind),
   updateTrack: (filePath, trackId, patch) => ipcRenderer.invoke('timeline:updateTrack', filePath, trackId, patch),
   addClip: (filePath, mediaId, trackId, start) => ipcRenderer.invoke('timeline:addClip', filePath, mediaId, trackId, start),

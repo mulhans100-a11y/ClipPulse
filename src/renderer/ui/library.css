@@ -7,3 +7,4 @@
 .track-controls button.track-solo{font:700 8px var(--mono);padding:3px 4px}.track-controls button.track-solo.solo-active{color:#1b2115;background:#a6e85f;border-radius:3px}
 .tool-chip.snap-toggle.active{border-color:#536a39;background:#242b1d;color:#b6e77d}.timeline-beat-markers{position:absolute;inset:0;z-index:2;pointer-events:none}.timeline-beat-markers i{position:absolute;top:0;bottom:0;width:1px;background:#ffe49bbd;box-shadow:0 0 2px #fff4}
 .media-card{height:64px;min-height:64px}.media-sort{max-width:91px;height:21px;padding:0 4px;border:1px solid #303137;border-radius:4px;background:#111215;color:#aeb0b7;font-size:8px;outline:0}.media-virtual-spacer{width:100%;pointer-events:none;flex:none}
+.media-info .analysis-status{font:7px var(--mono);letter-spacing:.25px}.analysis-status.not-started{color:#656770}.analysis-status.running{color:#e1bf70}.analysis-status.complete{color:#a6e85f}.analysis-status.failed{color:#e58f87}

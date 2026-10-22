@@ -18,6 +18,7 @@ export interface OpenMontageApi {
   getImportRoots(path: string): Promise<ImportRoot[]>;
   setImportRootWatching(path: string, rootPath: string, watching: boolean): Promise<ImportRoot[]>;
   analyzeAudio(path: string, mediaId: string): Promise<AudioAnalysis>;
+  getAudioAnalysisStatuses(path: string): Promise<string[]>;
   addTrack(path: string, kind: TrackKind): Promise<Project>;
   updateTrack(path: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean }): Promise<Project>;
   addClip(path: string, mediaId: string, trackId: string, start: number): Promise<Project>;
