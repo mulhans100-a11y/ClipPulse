@@ -6,10 +6,11 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
+import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setImportRootWatching, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
 import { analyzeAudio, readCachedAudioAnalysis } from '../src/core/audioAnalysis';
 import { analyzeHighlightCues } from '../src/core/highlightAnalysis';
 import { evaluateHighlightDataset } from '../src/core/analysisEvaluation';
+import { buildAutomaticMontagePlans, materializeAutomaticMontageProject } from '../src/core/autoMontage';
 import { gameRuleCacheKey, matchGameEvent } from '../src/core/gameRules';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
@@ -21,7 +22,7 @@ import { waveformWidthForDuration } from '../src/core/waveform';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
 import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
-import type { MediaAsset, Project, TimelineClip } from '../src/core/types';
+import type { AudioAnalysis, HighlightAnalysis, MediaAsset, Project, TimelineClip } from '../src/core/types';
 
 const scratch: string[] = [];
 test.after(async () => { for (const directory of scratch) await rm(directory, { recursive: true, force: true }); });
@@ -93,6 +94,107 @@ test('timeline snap points include clip edges and analyzed beats within an audio
   assert.deepEqual(collectTimelineSnapPoints(project, { music: analysis }), [2, 2.5, 3, 3.5, 4]);
   assert.equal(snapTimelineTime(project, 3.53, 96, { music: analysis }), 3.5);
   assert.equal(snapTimelineTime(project, 3.8, 96, { music: analysis }), 3.8, 'snap only catches positions near a beat or clip edge');
+});
+
+test('automatic montage planner aligns reviewed highlights to music, diversifies variants, and preserves the source timeline', () => {
+  const videos: MediaAsset[] = Array.from({ length: 7 }, (_item, index) => ({
+    id: `montage-video-${index}`, path: `C:\\media\\clip-${index}.mp4`, name: `Clip ${index + 1}.mp4`, kind: 'video',
+    duration: rational(20), width: 1280, height: 720, frameRate: rational(60), hasAudio: true,
+    sizeBytes: 1000, modifiedAt: '', contentHash: `montage-video-hash-${index}`, importedAt: '',
+    game: index % 2 ? 'Valorant' : 'Counter-Strike', rating: index === 1 ? 5 : 0,
+    ...(index === 0 ? { analysisEventReviews: [{ eventId: `event-${index}`, detectorIds: ['test'], status: 'rejected' as const, startSeconds: 7.8, decisiveSeconds: 8, endSeconds: 8.3, updatedAt: '' }] } : {}),
+    ...(index === 1 ? { analysisEventReviews: [{ eventId: `event-${index}`, detectorIds: ['test'], status: 'accepted' as const, startSeconds: 8.05, decisiveSeconds: 8.25, endSeconds: 8.55, updatedAt: '' }] } : {})
+  }));
+  const music: MediaAsset = { id: 'montage-music', path: 'C:\\media\\music.wav', name: 'music.wav', kind: 'audio', duration: rational(20), hasAudio: true, sizeBytes: 1000, modifiedAt: '', contentHash: 'montage-music-hash', importedAt: '' };
+  const project: Project = {
+    schemaVersion: 1, id: 'montage-source', name: 'Montage source', createdAt: '', updatedAt: '', frameRate: rational(30), width: 640, height: 360,
+    media: [...videos, music], tracks: [
+      { id: 'source-v1', name: 'V1', kind: 'video', muted: false, locked: false, clips: [{ id: 'source-edit', mediaId: videos[0].id, start: rational(0), sourceIn: rational(0), duration: rational(2), audioEnabled: true, volume: 1 }] },
+      { id: 'source-a1', name: 'A1', kind: 'audio', muted: false, locked: false, clips: [] }
+    ]
+  };
+  const sourceBefore = JSON.stringify(project);
+  const musicAnalysis: AudioAnalysis = {
+    method: 'rms-onset-autocorrelation-v2', sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 20, estimatedBpm: 120,
+    bpmHypotheses: [{ bpm: 120, score: 0.9 }], beatPhaseSeconds: 0, beats: Array.from({ length: 40 }, (_value, index) => index * 0.5),
+    meter: { beatsPerBar: 4, denominator: 4, downbeatPhase: 0, confidence: 0.7 }, downbeats: Array.from({ length: 10 }, (_value, index) => index * 2),
+    energyHopSeconds: 1, energyCurve: Array(20).fill(0.75), energySections: [], drops: [6, 12], onsets: []
+  };
+  const highlightAnalyses: Array<{ mediaId: string; analysis: HighlightAnalysis }> = videos.map((asset, index) => {
+    const decisiveSeconds = 8 + index * 0.35;
+    const event = {
+      id: `event-${index}`, mediaId: asset.id, kind: 'gameplay_event' as const,
+      startSeconds: decisiveSeconds - 0.2, decisiveSeconds, endSeconds: decisiveSeconds + 0.25,
+      confidence: 0.86, interestingness: 0.84, rankScore: 82 + index % 3, rank: index + 1,
+      detectors: [{ detectorId: 'test-hud', version: '1', modality: 'text' as const, confidence: 0.86, evidence: { gameEvent: 'headshot' } }]
+    };
+    return { mediaId: asset.id, analysis: { method: 'heuristic-detector-pipeline-v1', durationSeconds: 20, scoreWeights: { confidence: 0.4, interestingness: 0.4, corroboration: 0.2 }, detectors: [], warnings: [], events: [event] } };
+  });
+  const plans = buildAutomaticMontagePlans({
+    project, musicAnalysis, highlightAnalyses,
+    options: { musicMediaId: music.id, videoMediaIds: videos.map((asset) => asset.id), style: 'clean', durationSeconds: 15, variants: 3, intensity: 0.5, format: 'portrait-1080p' }
+  });
+  assert.equal(plans.length, 3);
+  assert.ok(plans.every((plan) => plan.durationSeconds === 15 && plan.scoreBreakdown.duration === 100));
+  assert.ok(plans.every((plan) => plan.segments.length >= 3));
+  assert.ok(plans.every((plan) => plan.segments.every((segment) => segment.alignmentErrorFrames === 0)));
+  assert.ok(plans[0].segments.every((segment) => segment.mediaId !== videos[0].id), 'rejected events are excluded from planning');
+  assert.ok(plans[0].segments.some((segment) => segment.reviewStatus === 'accepted'), 'accepted review state contributes to event provenance');
+  assert.notDeepEqual(plans[0].segments.map((segment) => segment.eventId), plans[1].segments.map((segment) => segment.eventId), 'later variants prefer different events from the same source pool');
+  for (const segment of plans[0].segments) {
+    assert.ok(Math.abs((segment.sourceDecisiveSeconds - segment.sourceInSeconds) - (segment.targetAnchorSeconds - segment.timelineStartSeconds)) < 1e-8, 'the selected event time maps exactly to its music anchor');
+  }
+  const generated = materializeAutomaticMontageProject(project, plans[0]);
+  assert.equal(generated.width, 1080);
+  assert.equal(generated.height, 1920);
+  assert.notEqual(generated.id, project.id);
+  assert.equal(decimal(timelineDuration(generated)), '15');
+  assert.equal(JSON.stringify(project), sourceBefore, 'building a variant does not mutate the source project');
+  assert.deepEqual(project.tracks[0].clips.map((clip) => clip.id), ['source-edit']);
+  const customRules = { targetShotSeconds: 3, minShotSeconds: 2, maxShotSeconds: 5, leadSeconds: 1, tailSeconds: 1, cutRatio: 0.6, videoAudioVolume: 0.1, musicVolume: 0.65, anchorPreference: { drop: 1, downbeat: 0.8, beat: 0.4, onset: 0.2 } };
+  const customPlan = buildAutomaticMontagePlans({ project, musicAnalysis, highlightAnalyses, options: { musicMediaId: music.id, style: 'custom', durationSeconds: 6, variants: 1, intensity: 0.5, format: 'project', customRules } })[0];
+  const customProject = materializeAutomaticMontageProject(project, customPlan);
+  assert.equal(customProject.tracks.find((track) => track.kind === 'audio')!.clips[0].volume, 0.65, 'custom rules change the rendered music level');
+  assert.equal(customProject.tracks.find((track) => track.kind === 'video')!.clips[0].volume, 0.1, 'custom rules change the game-audio mix');
+});
+
+test('automatic montage variants assemble into a continuous editable timeline that exports a playable MP4', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-auto-montage-'));
+  scratch.push(directory);
+  const videoPath = path.join(directory, 'gameplay.mp4');
+  const musicPath = path.join(directory, 'music.wav');
+  const outputPath = path.join(directory, 'auto-montage.mp4');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=12', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', videoPath]);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=10', '-c:a', 'pcm_s16le', musicPath]);
+  const video: MediaAsset = { id: 'export-video', path: videoPath, name: 'gameplay.mp4', kind: 'video', duration: rational(12), width: 320, height: 180, frameRate: rational(30), hasAudio: false, sizeBytes: (await stat(videoPath)).size, modifiedAt: '', contentHash: 'export-video-hash', importedAt: '' };
+  const music: MediaAsset = { id: 'export-music', path: musicPath, name: 'music.wav', kind: 'audio', duration: rational(10), hasAudio: true, sizeBytes: (await stat(musicPath)).size, modifiedAt: '', contentHash: 'export-music-hash', importedAt: '' };
+  const project: Project = { schemaVersion: 1, id: 'export-source', name: 'Export source', createdAt: '', updatedAt: '', frameRate: rational(30), width: 320, height: 180, media: [video, music], tracks: [] };
+  const musicAnalysis: AudioAnalysis = {
+    method: 'rms-onset-autocorrelation-v2', sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 10, estimatedBpm: 120,
+    bpmHypotheses: [{ bpm: 120, score: 0.9 }], beatPhaseSeconds: 0, beats: Array.from({ length: 20 }, (_value, index) => index * 0.5),
+    downbeats: [0, 2, 4, 6, 8], energyHopSeconds: 1, energyCurve: Array(10).fill(0.8), energySections: [], drops: [6], onsets: []
+  };
+  const events = [
+    { id: 'early', mediaId: video.id, kind: 'gameplay_event' as const, startSeconds: 2.8, decisiveSeconds: 3, endSeconds: 3.2, confidence: 0.9, interestingness: 0.9, rankScore: 96, rank: 1, detectors: [{ detectorId: 'test', version: '1', modality: 'text' as const, confidence: 0.9, evidence: { gameEvent: 'headshot' } }] },
+    { id: 'late', mediaId: video.id, kind: 'gameplay_event' as const, startSeconds: 7.8, decisiveSeconds: 8, endSeconds: 8.2, confidence: 0.85, interestingness: 0.85, rankScore: 85, rank: 2, detectors: [{ detectorId: 'test', version: '1', modality: 'text' as const, confidence: 0.85, evidence: { gameEvent: 'elimination' } }] }
+  ];
+  const plans = buildAutomaticMontagePlans({
+    project, musicAnalysis,
+    highlightAnalyses: [{ mediaId: video.id, analysis: { method: 'heuristic-detector-pipeline-v1', durationSeconds: 12, scoreWeights: { confidence: 0.4, interestingness: 0.4, corroboration: 0.2 }, detectors: [], warnings: [], events } }],
+    options: { musicMediaId: music.id, videoMediaIds: [video.id], style: 'clean', durationSeconds: 10, variants: 1, intensity: 0.5, format: 'project' }
+  });
+  assert.equal(plans[0].segments.length, 2);
+  const generated = materializeAutomaticMontageProject(project, plans[0]);
+  const rendered = await exportVideo(generated, { outputPath });
+  assert.equal(decimal(rendered.duration), '10');
+  const { stdout } = await runCommand('ffprobe', ['-v', 'error', '-count_frames', '-show_entries', 'format=duration:stream=codec_type,width,height,nb_read_frames', '-of', 'json', outputPath]);
+  const info = JSON.parse(stdout);
+  const outputVideo = info.streams.find((stream: any) => stream.codec_type === 'video');
+  assert.equal(outputVideo.width, 320);
+  assert.equal(outputVideo.height, 180);
+  assert.equal(outputVideo.nb_read_frames, '300');
+  assert.ok(info.streams.some((stream: any) => stream.codec_type === 'audio'));
+  assert.ok((await stat(outputPath)).size > 10_000);
 });
 
 test('media library virtual window bounds rendered rows and preserves total scroll height', () => {

@@ -6,6 +6,7 @@ import type { FSWatcher } from 'node:fs';
 import { analyzeAudio, readCachedAudioAnalysis } from '../core/audioAnalysis';
 import { analyzeHighlightCues } from '../core/highlightAnalysis';
 import { getPublicAnalysisRuntimeStatuses } from '../core/analysisRuntimes';
+import { generateAutomaticMontages } from '../core/autoMontage';
 import { AppError } from '../core/errors';
 import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
@@ -15,7 +16,7 @@ import { watchFolder } from '../core/folderWatcher';
 import { medalCaptureFolderPreset } from '../core/medal';
 import { renderTimelineFrame } from '../core/timelinePreview';
 import { PersistentMediaJobQueue, mediaJobQueuePath, type MediaJobSource } from '../core/mediaJobs';
-import type { MediaAsset, Project, TrackKind } from '../core/types';
+import type { AutoMontageOptions, MediaAsset, Project, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
 
 const here = __dirname;
@@ -178,6 +179,12 @@ ipcMain.handle('project:open', async () => {
   await activateFolderWatchers(filePath);
   return { project, path: filePath };
 });
+ipcMain.handle('project:openFile', async (_event, filePath: string) => {
+  const target = path.resolve(filePath);
+  const project = await loadProject(target);
+  await activateFolderWatchers(target);
+  return { project, path: target };
+});
 ipcMain.handle('project:save', (_event, filePath, project) => withProjectLock(filePath, () => saveProject(filePath, project)));
 ipcMain.handle('project:updateProfile', (_event, filePath: string, patch: Partial<Pick<Project, 'name' | 'width' | 'height' | 'frameRate'>>) => withProjectLock(filePath, () => updateProjectProfile(filePath, patch)));
 ipcMain.handle('project:history', (_event, filePath: string) => withProjectLock(filePath, () => getProjectHistory(filePath)));
@@ -274,6 +281,15 @@ ipcMain.handle('media:analyzeHighlightCues', async (_event, filePath: string, me
     mediaId: asset.id, mediaPath: asset.path, mediaKind: asset.kind,
     durationSeconds: Number(asset.duration.num) / Number(asset.duration.den), game: asset.game, audioAnalysis, audioAnalysisError
   }, cachePath);
+});
+ipcMain.handle('montage:generate', async (_event, filePath: string, options: AutoMontageOptions) => {
+  const response = await dialog.showOpenDialog(mainWindow!, {
+    title: 'Choose where to save editable montage variants',
+    defaultPath: path.dirname(path.resolve(filePath)),
+    properties: ['openDirectory']
+  });
+  if (response.canceled || !response.filePaths[0]) return null;
+  return generateAutomaticMontages(filePath, response.filePaths[0], options);
 });
 ipcMain.handle('media:getAnalysisRuntimes', () => getPublicAnalysisRuntimeStatuses());
 ipcMain.handle('media:getAudioAnalysisStatuses', async (_event, filePath: string) => {

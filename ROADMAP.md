@@ -53,11 +53,13 @@ Status reflects the repository at `0.1.0`.
 
 ## Phase D — Automatic editing
 
-- [ ] Edit-plan data model and explainable scoring.
-- [ ] Select diverse highlights and anchor event frames to suitable music impacts.
-- [ ] Clean, aggressive, cinematic, and velocity strategies that alter actual edit parameters.
-- [ ] Create comparable variants without replacing the user's source timeline.
-- [ ] Preview generated timeline, validate durations, and export.
+- [x] Versioned edit-plan data model with per-event explanations and highlight, music-alignment, diversity, pacing, framing, and duration scores.
+- [x] Select accepted/corrected, non-rejected analyzed events with source-window checks; diversify assets, games, and event types; anchor each decisive frame to a drop, downbeat, beat, or explicitly reported pacing fallback.
+- [x] Clean Competitive, Aggressive Gaming, Cinematic, Velocity Pacing, and configurable Custom rules change shot intervals, anchor weights, cut placement, and audio mix.
+- [x] Generate one to five score-comparable variants as separate editable `.omproj` files and `.edit-plan.json` reports; source projects and timelines remain untouched.
+- [x] UI and CLI workflow analyzes music/highlights and validates frame-exact duration/source coverage. The UI opens variants for shared timeline playback; the CLI exposes timeline-frame inspection and verified FFmpeg export.
+
+Phase D scores use detector and music heuristics; they are not calibrated gameplay-quality predictions. Velocity changes edit pacing, while playback speed/ramping, transitions, and visual effects remain in the later effect pipeline. A real gameplay benchmark remains an open Phase C evaluation task.
 
 ## Phase E — Effects and audio controls
 

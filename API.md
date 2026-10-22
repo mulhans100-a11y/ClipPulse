@@ -1,6 +1,6 @@
-# CLI and project API (Phase A/B/C)
+# CLI and project API (Phase A/B/C/D)
 
-The desktop app and CLI use the same `src/core` operations. The CLI supports project, media library, audio analysis, timeline, and export operations; there is no REST or MCP server yet.
+The desktop app and CLI use the same `src/core` operations. The CLI supports project, media library, audio and highlight analysis, automatic montage generation, timeline, and export operations; there is no REST or MCP server yet.
 
 Run `npm run build` once, then invoke `npm run cli -- <command> ...`.
 
@@ -14,6 +14,7 @@ media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [-
 media-relink --project FILE --media ID --path FILE
 analyze-audio --project FILE --media ID
 analyze-highlights --project FILE --media ID
+generate-montage --project FILE --music ID --duration SEC [--style clean|aggressive|cinematic|velocity|custom] [--custom-rules FILE.json] [--video ID ...] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]
 evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]
 analysis-runtimes
 history --project FILE
@@ -39,6 +40,12 @@ doctor
 `--rating` accepts an integer from 0 to 5. A value of `0` clears the rating; values 1–5 rank the asset as a highlight. The rating is saved in the project and the SQLite media index.
 
 The desktop media list restores completed audio-analysis status only when its cache matches the source file size and modification time. Running and failed states are tracked per asset while the editor is open.
+
+`generate-montage` runs cached local music analysis and highlight detectors for the chosen audio and selected video assets. If `--video` is omitted, all project videos are analyzed; repeat `--video ID` or pass comma-separated IDs to restrict the source set. Duration must fit the music and the generated source windows. The command produces one to five separate editable `.omproj` variants, plus a corresponding `.edit-plan.json` report for each, in a unique child folder under `--output-dir` (default: `auto-montages` beside the source project). It does not save or rewrite the source project. Each report records source IDs/hashes, selected event times, timeline anchors, frame alignment, heuristic component scores, explanations, and limitations.
+
+Styles change real cut cadence, anchor preferences, cut placement, and source/music audio levels. `clean`, `aggressive`, `cinematic`, and `velocity` use built-in presets. `custom` requires `--custom-rules FILE.json`; use [`config/auto-montage-rules.example.json`](config/auto-montage-rules.example.json), validated against [`config/auto-montage-rules.schema.json`](config/auto-montage-rules.schema.json). `--intensity` is a 0–100 cut-pacing control. Output format can preserve the source project profile or create 16:9, 9:16, or square 1080p projects.
+
+In the desktop app, select **Auto edit**, choose audio, video sources, style, length, output format, intensity, and variant count, then choose an output folder. Generated projects appear in the same modal. Open one to edit or render timeline playback, then use the regular Export command. The source timeline remains a separate project. Unsupported playback-speed ramps, transitions, and visual effects are reported in each plan rather than implied as applied.
 
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]` writes library metadata; rating zero clears a manual highlight score, while 1–5 ranks a clip. The score is stored in the project and SQLite index. `analyze-audio --project FILE --media ID` decodes audio locally and returns BPM hypotheses, beat and downbeat positions, a cautious meter estimate, relative one-second energy, coarse energy sections, energy-rise markers, and transient timestamps. Results are cached beside the project using file size and modification time. Rhythm and meter values are heuristic; scores are not calibrated probabilities.
 

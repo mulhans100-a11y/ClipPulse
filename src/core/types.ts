@@ -222,3 +222,93 @@ export interface ExportOptions {
   encoder?: 'libx264' | 'h264_amf' | 'h264_nvenc' | 'h264_qsv';
   onProgress?: (fraction: number) => void;
 }
+
+export type AutoMontageStyle = 'clean' | 'aggressive' | 'cinematic' | 'velocity' | 'custom';
+export type AutoMontageFormat = 'project' | 'landscape-1080p' | 'portrait-1080p' | 'square-1080p';
+export interface AutoMontageCustomRules {
+  targetShotSeconds: number;
+  minShotSeconds: number;
+  maxShotSeconds: number;
+  leadSeconds: number;
+  tailSeconds: number;
+  cutRatio: number;
+  videoAudioVolume: number;
+  musicVolume: number;
+  anchorPreference: { drop: number; downbeat: number; beat: number; onset: number };
+}
+
+export interface AutoMontageOptions {
+  musicMediaId: string;
+  videoMediaIds?: string[];
+  style: AutoMontageStyle;
+  durationSeconds: number;
+  variants: number;
+  /** 0 is a relaxed pace, 1 is the fastest pace for the selected preset. */
+  intensity: number;
+  format: AutoMontageFormat;
+  customRules?: AutoMontageCustomRules;
+}
+
+export interface AutoMontageSegment {
+  index: number;
+  mediaId: string;
+  mediaName: string;
+  sourceContentHash: string;
+  game?: string;
+  eventId: string;
+  eventKind: AnalysisEvent['kind'];
+  eventLabel: string;
+  reviewStatus?: 'accepted' | 'corrected';
+  sourceEventStartSeconds: number;
+  sourceDecisiveSeconds: number;
+  sourceEventEndSeconds: number;
+  sourceInSeconds: number;
+  timelineStartSeconds: number;
+  timelineStartFrame: number;
+  durationSeconds: number;
+  durationFrames: number;
+  targetAnchorSeconds: number;
+  anchorKind: 'drop' | 'downbeat' | 'beat' | 'onset' | 'paced';
+  anchorStrength: number;
+  alignmentErrorFrames: number;
+  score: { highlight: number; musicFit: number; framing: number; pacing: number };
+  detectors: DetectorProvenance[];
+  explanation: string;
+}
+
+export interface AutoMontagePlan {
+  schemaVersion: 1;
+  method: 'ranked-highlight-beat-planner-v1';
+  createdAt: string;
+  sourceProjectId: string;
+  variant: number;
+  style: AutoMontageStyle;
+  durationSeconds: number;
+  durationFrames: number;
+  format: AutoMontageFormat;
+  intensity: number;
+  customRules?: AutoMontageCustomRules;
+  music: { mediaId: string; name: string; contentHash: string; estimatedBpm?: number; analysisMethod: AudioAnalysis['method'] };
+  score: number;
+  scoreBreakdown: { highlightQuality: number; musicAlignment: number; sceneDiversity: number; pacing: number; framing: number; duration: number };
+  segments: AutoMontageSegment[];
+  warnings: string[];
+}
+
+export interface GeneratedAutoMontageVariant {
+  projectPath: string;
+  planPath: string;
+  plan: AutoMontagePlan;
+}
+
+export interface GeneratedAutoMontages {
+  outputDirectory: string;
+  variants: GeneratedAutoMontageVariant[];
+}
+
+export interface AutoMontageAnalysisInput {
+  project: Project;
+  musicAnalysis: AudioAnalysis;
+  highlightAnalyses: Array<{ mediaId: string; analysis: HighlightAnalysis }>;
+  options: AutoMontageOptions;
+}

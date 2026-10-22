@@ -24,4 +24,6 @@
 - Added clip audio enable, volume, fade-in, and fade-out controls to the editor, CLI, project model, and export graph.
 - Added a structured JSON CLI and first-pass local beat/transient analysis with BPM hypotheses.
 - Added generated-media integration tests, Windows CI, and Medal API/licensing research.
-- Gameplay highlight classification and review, detector evaluation, deeper music analysis, effects, compositing masks, REST, and MCP remain future work.
+- Phase C adds local music/highlight analysis, persistent cue review/correction, optional OCR, and independent-annotation evaluation. Trained gameplay models, calibrated ranking, and populated real-media benchmarks remain unavailable.
+- Phase D adds automatic montage planning, scoring, style strategies, separate editable variants, timeline preview, duration/source validation, and normal FFmpeg export.
+- Visual effects, playback speed/ramping, transitions, compositing masks, REST, and MCP remain future work.

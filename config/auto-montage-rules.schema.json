@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenMontage custom automatic-montage rules",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "targetShotSeconds",
+    "minShotSeconds",
+    "maxShotSeconds",
+    "leadSeconds",
+    "tailSeconds",
+    "cutRatio",
+    "videoAudioVolume",
+    "musicVolume",
+    "anchorPreference"
+  ],
+  "properties": {
+    "targetShotSeconds": { "type": "number", "minimum": 0.5, "maximum": 30 },
+    "minShotSeconds": { "type": "number", "minimum": 0.5, "maximum": 30 },
+    "maxShotSeconds": { "type": "number", "minimum": 0.5, "maximum": 30 },
+    "leadSeconds": { "type": "number", "minimum": 0, "maximum": 15 },
+    "tailSeconds": { "type": "number", "minimum": 0, "maximum": 15 },
+    "cutRatio": { "type": "number", "minimum": 0.25, "maximum": 0.75 },
+    "videoAudioVolume": { "type": "number", "minimum": 0, "maximum": 1 },
+    "musicVolume": { "type": "number", "minimum": 0, "maximum": 2 },
+    "anchorPreference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["drop", "downbeat", "beat", "onset"],
+      "properties": {
+        "drop": { "type": "number", "minimum": 0, "maximum": 1 },
+        "downbeat": { "type": "number", "minimum": 0, "maximum": 1 },
+        "beat": { "type": "number", "minimum": 0, "maximum": 1 },
+        "onset": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

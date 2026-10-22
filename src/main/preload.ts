@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { OpenMontageApi } from '../shared/electron';
-import type { AnalysisRuntimeStatus, AudioAnalysis, HighlightAnalysis, MediaJob, MediaJobQueueSnapshot } from '../core/types';
+import type { AnalysisRuntimeStatus, AudioAnalysis, GeneratedAutoMontages, HighlightAnalysis, MediaJob, MediaJobQueueSnapshot } from '../core/types';
 
 function toFileUrl(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/');
@@ -20,6 +20,7 @@ const api: OpenMontageApi = {
   version: () => ipcRenderer.invoke('app:version'),
   createProject: () => ipcRenderer.invoke('project:create'),
   openProject: () => ipcRenderer.invoke('project:open'),
+  openProjectFile: (filePath) => ipcRenderer.invoke('project:openFile', filePath),
   saveProject: (filePath, project) => ipcRenderer.invoke('project:save', filePath, project),
   updateProjectProfile: (filePath, patch) => ipcRenderer.invoke('project:updateProfile', filePath, patch),
   getProjectHistory: (filePath) => ipcRenderer.invoke('project:history', filePath),
@@ -47,6 +48,7 @@ const api: OpenMontageApi = {
   setImportRootWatching: (filePath, rootPath, watching) => ipcRenderer.invoke('media:setRootWatching', filePath, rootPath, watching),
   analyzeAudio: (filePath, mediaId) => ipcRenderer.invoke('media:analyzeAudio', filePath, mediaId) as Promise<AudioAnalysis>,
   analyzeHighlightCues: (filePath, mediaId) => ipcRenderer.invoke('media:analyzeHighlightCues', filePath, mediaId) as Promise<HighlightAnalysis>,
+  generateAutomaticMontages: (filePath, options) => ipcRenderer.invoke('montage:generate', filePath, options) as Promise<GeneratedAutoMontages | null>,
   getAnalysisRuntimes: () => ipcRenderer.invoke('media:getAnalysisRuntimes') as Promise<AnalysisRuntimeStatus[]>,
   getAudioAnalysisStatuses: (filePath) => ipcRenderer.invoke('media:getAudioAnalysisStatuses', filePath) as Promise<string[]>,
   addTrack: (filePath, kind) => ipcRenderer.invoke('timeline:addTrack', filePath, kind),

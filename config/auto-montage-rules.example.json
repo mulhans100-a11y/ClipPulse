@@ -1,0 +1,16 @@
+{
+  "targetShotSeconds": 3.5,
+  "minShotSeconds": 1.2,
+  "maxShotSeconds": 7,
+  "leadSeconds": 1,
+  "tailSeconds": 1,
+  "cutRatio": 0.5,
+  "videoAudioVolume": 0.25,
+  "musicVolume": 0.95,
+  "anchorPreference": {
+    "drop": 1,
+    "downbeat": 0.9,
+    "beat": 0.68,
+    "onset": 0.4
+  }
+}

@@ -2,7 +2,7 @@
 
 OpenMontage AI is a local-first, open-source desktop video editor focused on gaming montages and music-synchronized edits. The current `0.1.0` development build implements the first usable editing slice: import local media, preview it, assemble clips on multiple tracks, trim and split clips, save a non-destructive project, and render an MP4 with FFmpeg.
 
-Phases A and B are complete. Phase C now includes local music analysis, audio/scene/motion/HUD-text activity detectors, explicit game-event phrase rules, persisted review/correction, optional runtime reporting, and an independent-annotation evaluation workflow. No game benchmark footage or labels are bundled; a real game-specific benchmark still needs licensed source media and two independent reviewers. Trained gameplay models and calibrated highlight-quality ranking are not available. Automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are future work.
+Phases A–D are implemented. Phase C provides local music analysis, audio/scene/motion/HUD-text cues, explicit game-event phrase rules, persisted event review/correction, and an independent-annotation evaluation workflow. Phase D builds scored, beat-anchored montage plans from those cues and creates separate editable project variants. Detector and edit scores remain heuristics: no trained gameplay model, calibrated highlight ranking, or real game benchmark is bundled. Effects, speed ramps, transitions, object masking, Medal cloud access, and MCP tools remain future work.
 
 ## Current capabilities
 
@@ -30,6 +30,9 @@ Phases A and B are complete. Phase C now includes local music analysis, audio/sc
 - OCR phrase rules turn explicit HUD notices into game-event cues for Valorant, Counter-Strike, Fortnite, Apex Legends, Overwatch, Call of Duty, OpenArena, and Anarch. Custom profiles can be supplied through `OPENMONTAGE_GAME_RULES`; rules are heuristic and require Tesseract.
 - Detector and music evaluation with strict-majority consensus from independent annotations. Reports per-detector precision/recall/F1, false positives/negatives, confidence calibration diagnostics, BPM error, and beat/downbeat precision/recall. See [evaluation/README.md](evaluation/README.md) and the manifest template.
 - Runtime inventory in the inspector and CLI reports FFmpeg, optional Tesseract, and the honest no-gameplay-model state. Optional model paths can be detected, but no inference adapter is bundled.
+- Automatic montage generation analyzes the chosen music and video sources, excludes rejected cues, uses corrected/accepted event reviews and manual clip ratings, and anchors each selected decisive event to a music drop, downbeat, beat, or disclosed pacing fallback.
+- Clean Competitive, Aggressive Gaming, Cinematic, Velocity Pacing, and Custom styles change shot cadence, cut placement, music-anchor preferences, and audio mix. Custom rules are editable in the desktop UI or supplied as validated JSON.
+- Generates one to five separately saved `.omproj` variants and matching `.edit-plan.json` reports. The source project and its timeline are untouched; each variant can be opened, edited, previewed through the timeline playback renderer, and exported normally.
 
 ## Quick start on Windows
 
@@ -44,6 +47,8 @@ npm run dev
 
 Native Windows installer packaging is a later milestone. FFmpeg must currently be installed separately; Linux and macOS packaging are future work.
 
+Tesseract OCR is optional. See [INSTALLATION.md](INSTALLATION.md) for Windows setup and PATH checks.
+
 ## CLI example
 
 ```powershell
@@ -51,6 +56,9 @@ npm run build
 npm run cli -- create --project .\montage.omproj --fps 60/1
 npm run cli -- import --project .\montage.omproj D:\Captures\Valorant
 npm run cli -- inspect --project .\montage.omproj
+npm run cli -- analyze-highlights --project .\montage.omproj --media <VIDEO_ID>
+npm run cli -- analyze-audio --project .\montage.omproj --media <MUSIC_ID>
+npm run cli -- generate-montage --project .\montage.omproj --music <MUSIC_ID> --duration 30 --style aggressive --variants 3 --format portrait-1080p
 ```
 
 The `import` command returns asset IDs. Use those IDs to build a timeline and render:
@@ -61,6 +69,8 @@ npm run cli -- export --project .\montage.omproj --output .\montage.mp4
 ```
 
 `inspect` reports the project, track IDs, asset IDs, and clip IDs. All successful CLI commands write structured JSON to stdout; errors use stable `code` and `message` fields and exit with code 1. See [API.md](API.md).
+
+`generate-montage` analyzes selected video assets and the chosen music when valid cached results are unavailable, then creates variants in a new output folder. Open a returned variant project to review and edit it; run `export --project <VARIANT.omproj> --output <OUTPUT.mp4>` to render it. The `.edit-plan.json` file records the selected events, source and timeline ranges, anchor types, per-cue rationale, score breakdown, and warnings. Use `--video <ID>` more than once to restrict the source set; omit it to use every project video. Cut intensity ranges from 0–100. Custom style requires `--custom-rules config/auto-montage-rules.example.json` or another file matching that shape.
 
 Search indexed assets and add library metadata:
 
@@ -94,4 +104,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 - The Medal integration currently means authorized local-folder import only. No cloud API integration is claimed.
 - Beat and meter estimates use local RMS/onset heuristics, not a trained music model. Meter confidence and tempo correlation scores remain raw heuristics; the evaluation runner reports their calibration diagnostics from independent annotations. A varied real-music benchmark still needs to be populated locally.
 - Beat snapping uses those estimated beat positions; it does not yet distinguish strong impacts or drops from regular beats.
+- The Phase D planner can only select detected event windows and includes a bounded amount of surrounding context. It reports insufficient highlight coverage instead of filling a long request with unscored footage. The Velocity preset changes cut pacing; playback-speed changes and speed ramps are not yet implemented.
+- Phase D creates cuts without transitions or visual effects. The plan records this limitation; those capabilities belong to the later effect pipeline.
 - No GitHub remote is configured in this local checkout, so no public repository or release has been published.
