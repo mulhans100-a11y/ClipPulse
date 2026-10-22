@@ -230,7 +230,24 @@ export function validateProject(project: Project): void {
 }
 
 export function newTrack(name: string, kind: TrackKind): TimelineTrack {
-  return { id: newId(), name, kind, muted: false, locked: false, clips: [] };
+  return { id: newId(), name, kind, muted: false, solo: false, locked: false, clips: [] };
+}
+
+export function isTrackEnabled(project: Project, track: TimelineTrack): boolean {
+  if (track.muted) return false;
+  const kindTracks = project.tracks.filter((candidate) => candidate.kind === track.kind && !candidate.muted);
+  return !kindTracks.some((candidate) => candidate.solo) || track.solo === true;
+}
+
+export async function updateTrackSettings(filePath: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean }): Promise<Project> {
+  const project = await loadProject(filePath);
+  const track = project.tracks.find((item) => item.id === trackId);
+  if (!track) throw new AppError('TRACK_NOT_FOUND', `Track not found: ${trackId}`);
+  if (patch.muted !== undefined) track.muted = patch.muted;
+  if (patch.solo !== undefined) track.solo = patch.solo;
+  if (patch.locked !== undefined) track.locked = patch.locked;
+  await saveProject(filePath, project);
+  return project;
 }
 
 export async function addTrack(filePath: string, kind: TrackKind, name?: string): Promise<Project> {
@@ -459,6 +476,18 @@ export async function addClip(filePath: string, mediaId: string, trackId: string
   if (compare(add(sourceIn, resolvedDuration), asset.duration) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', `The selected source range exceeds ${asset.name}'s duration (${decimal(asset.duration)} s).`);
   const clip: TimelineClip = { id: newId(), mediaId, start, sourceIn, duration: resolvedDuration, audioEnabled: true, volume: 1 };
   track.clips.push(clip);
+  track.clips.sort((a, b) => compare(a.start, b.start));
+  await saveProject(filePath, project);
+  return project;
+}
+
+export async function duplicateClip(filePath: string, clipId: string, start?: Rational): Promise<Project> {
+  const project = await loadProject(filePath);
+  const { clip, track } = findClip(project, clipId);
+  if (track.locked) throw new AppError('TRACK_LOCKED', `Track ${track.name} is locked.`);
+  const duplicate: TimelineClip = { ...clip, id: newId(), start: start ?? add(clip.start, clip.duration) };
+  clampNonNegative(duplicate.start, 'Clip start');
+  track.clips.push(duplicate);
   track.clips.sort((a, b) => compare(a.start, b.start));
   await saveProject(filePath, project);
   return project;

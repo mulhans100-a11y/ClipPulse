@@ -12,7 +12,7 @@ This is an early Phase A/B/C build. The editor includes an initial local beat an
 - Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, cached video thumbnails, and audio waveform images. Original media files are referenced and never modified.
 - A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names, and watches selected folders for new local clips.
 - Missing source files are marked in the media bin and can be relinked to a replacement file without breaking existing clip references.
-- Video and audio tracks; additional tracks can be added. Clips can be inserted, moved between tracks, trimmed, split, and removed.
+- Video and audio tracks; additional tracks can be added, muted, soloed, or locked. Clips can be inserted, duplicated, moved between tracks, trimmed, split, and removed.
 - Drag clip edges for frame-snapped source trimming while preserving the opposite edit point.
 - Preview of imported source video, timeline playhead, persistent undo/redo, and keyboard shortcuts for save/undo/redo/delete/playback.
 - Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback.

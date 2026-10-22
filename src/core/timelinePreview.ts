@@ -3,7 +3,7 @@ import path from 'node:path';
 import { AppError } from './errors';
 import { runCommand, tail } from './ffmpeg';
 import { add, compare, decimal, rational, sub } from './time';
-import { validateProject } from './project';
+import { isTrackEnabled, validateProject } from './project';
 import type { Project, Rational } from './types';
 
 /** Render one frame of the visible video-track composite at a timeline time. */
@@ -21,7 +21,7 @@ export async function renderTimelineFrame(project: Project, timelineTime: Ration
   await fs.mkdir(path.dirname(output), { recursive: true });
 
   const active = project.tracks.flatMap((track) => {
-    if (track.muted || track.kind !== 'video') return [];
+    if (!isTrackEnabled(project, track) || track.kind !== 'video') return [];
     return track.clips.flatMap((clip) => {
       const end = add(clip.start, clip.duration);
       if (compare(timelineTime, clip.start) < 0 || compare(timelineTime, end) >= 0) return [];

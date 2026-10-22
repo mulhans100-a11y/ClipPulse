@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile } from '../src/core/project';
+import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
 import { analyzeAudio } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
@@ -283,6 +283,18 @@ test('timeline preview composites active video tracks in track order and renders
   assert.ok(redPixel[0] > redPixel[2] * 4, `expected red frame, got ${redPixel.join(',')}`);
   assert.ok(bluePixel[2] > bluePixel[0] * 4, `expected upper blue track to overlay red, got ${bluePixel.join(',')}`);
   assert.ok(blackPixel.every((value) => value < 8), `expected black gap, got ${blackPixel.join(',')}`);
+
+  const soloedProject = await updateTrackSettings(projectFile, videoTracks[0].id, { solo: true });
+  const soloFrame = path.join(directory, 'solo-frame.png');
+  await renderTimelineFrame(soloedProject, rational(3, 4), soloFrame);
+  const soloPixel = await firstRgb(soloFrame, directory, 'solo.rgb');
+  assert.ok(soloPixel[0] > soloPixel[2] * 4, `soloing the lower video track should hide the upper blue track, got ${soloPixel.join(',')}`);
+  const soloExport = path.join(directory, 'solo-export.mp4');
+  const soloExportFrame = path.join(directory, 'solo-export-frame.png');
+  await exportVideo(soloedProject, { outputPath: soloExport });
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', '0.75', '-i', soloExport, '-frames:v', '1', soloExportFrame]);
+  const soloExportPixel = await firstRgb(soloExportFrame, directory, 'solo-export.rgb');
+  assert.ok(soloExportPixel[0] > soloExportPixel[2] * 4, `solo export should match its preview, got ${soloExportPixel.join(',')}`);
 });
 
 test('headless CLI creates a project, imports media, assembles a timeline and exports MP4', async () => {
@@ -320,6 +332,17 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   const videoTrack = inspected.data.project.tracks.find((track: any) => track.kind === 'video');
   const inserted = await invoke('clip-add', '--project', projectPath, '--media', imported.data.added[0].id, '--track', videoTrack.id, '--start', '0', '--source-in', '1/2', '--duration', '1');
   assert.equal(inserted.data.mediaId, imported.data.added[0].id);
+  const duplicate = await invoke('clip-duplicate', '--project', projectPath, '--clip', inserted.data.id);
+  assert.notEqual(duplicate.data.id, inserted.data.id);
+  assert.deepEqual(duplicate.data.sourceIn, inserted.data.sourceIn);
+  assert.deepEqual(duplicate.data.duration, inserted.data.duration);
+  assert.deepEqual(duplicate.data.start, { num: '1', den: '1' });
+  await invoke('clip-remove', '--project', projectPath, '--clip', duplicate.data.id);
+  const soloed = await invoke('track-set', '--project', projectPath, '--track', videoTrack.id, '--solo', 'true');
+  assert.equal(soloed.data.solo, true);
+  await invoke('track-set', '--project', projectPath, '--track', videoTrack.id, '--solo', 'false');
+  await invoke('clip-remove', '--project', projectPath, '--clip', inserted.data.id);
+  await invoke('clip-add', '--project', projectPath, '--media', imported.data.added[0].id, '--track', videoTrack.id, '--start', '0', '--source-in', '1/2', '--duration', '1');
   const validation = await invoke('validate', '--project', projectPath);
   assert.equal(validation.data.valid, true);
   const exported = await invoke('export', '--project', projectPath, '--output', output);

@@ -186,6 +186,15 @@ export default function App() {
     if (!project || !currentClip) return;
     await run(() => window.openmontage.splitClip(projectPath, currentClip.clip.id, playhead), (next) => next, `Split at ${formatTime(playhead)}`);
   }
+  async function duplicateSelected() {
+    if (!project || !currentClip) return;
+    const previousIds = new Set(project.tracks.flatMap((track) => track.clips.map((clip) => clip.id)));
+    await run(() => window.openmontage.duplicateClip(projectPath, currentClip.clip.id), (next) => {
+      const duplicate = next.tracks.flatMap((track) => track.clips).find((clip) => !previousIds.has(clip.id));
+      if (duplicate) { setSelectedClipId(duplicate.id); setPlayhead(secondsOf(duplicate.start)); }
+      return next;
+    }, 'Clip duplicated');
+  }
   async function removeSelected() {
     if (!project || !currentClip) return;
     const id = currentClip.clip.id;
@@ -335,19 +344,20 @@ export default function App() {
         </section>
 
         <section className="timeline-panel panel">
-          <div className="timeline-header"><div className="timeline-title"><span className="eyebrow">EDIT</span><h2>Timeline</h2><span className="timeline-duration"><Clock3 size={13} />{formatTime(duration)}</span></div><div className="timeline-actions"><button className="tool-chip" disabled={!currentClip} onClick={() => void splitSelected()} title="Split at playhead"><Scissors size={14} /> Split</button><button className="tool-chip" disabled={!currentClip} onClick={() => void removeSelected()}><Trash2 size={14} /></button><span className="divider" /><button className="tool-chip" onClick={() => void addTrack('video')}><Plus size={14} /> Video</button><button className="tool-chip" onClick={() => void addTrack('audio')}><Plus size={14} /> Audio</button><button className="tool-chip" onClick={() => setTimelineScale((scale) => scale >= 384 ? 48 : scale * 2)} title={`Timeline zoom · ${timelineScale} pixels per second`}><Gauge size={14} />{Math.round(timelineScale / 96 * 100)}%</button></div></div>
+          <div className="timeline-header"><div className="timeline-title"><span className="eyebrow">EDIT</span><h2>Timeline</h2><span className="timeline-duration"><Clock3 size={13} />{formatTime(duration)}</span></div><div className="timeline-actions"><button className="tool-chip" disabled={!currentClip} onClick={() => void splitSelected()} title="Split at playhead"><Scissors size={14} /> Split</button><button className="tool-chip" disabled={!currentClip} onClick={() => void duplicateSelected()} title="Duplicate selected clip"><Copy size={14} /> Duplicate</button><button className="tool-chip" disabled={!currentClip} onClick={() => void removeSelected()}><Trash2 size={14} /></button><span className="divider" /><button className="tool-chip" onClick={() => void addTrack('video')}><Plus size={14} /> Video</button><button className="tool-chip" onClick={() => void addTrack('audio')}><Plus size={14} /> Audio</button><button className="tool-chip" onClick={() => setTimelineScale((scale) => scale >= 384 ? 48 : scale * 2)} title={`Timeline zoom · ${timelineScale} pixels per second`}><Gauge size={14} />{Math.round(timelineScale / 96 * 100)}%</button></div></div>
           <div className="timeline-scroll" ref={timelineRef}>
             <div className="timeline-content" style={{ width: Math.max(920, duration * timelineScale + 50) }}>
               <div className="ruler"><div className="track-gutter ruler-gutter">TIME</div><div className="ruler-track">{Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <div key={i} className="ruler-tick" style={{ left: i * timelineScale }}><span>{formatTime(i).slice(3)}</span><i /></div>)}<div className="timeline-cursor" style={{ left: playhead * timelineScale }}><div /></div></div></div>
               <div className="track-stack">
                 {project.tracks.slice().reverse().map((track) => <div key={track.id} className="track-row">
-                  <div className="track-gutter"><div className={`track-type ${track.kind}`}><span>{track.kind === 'video' ? <Video size={14} /> : <AudioLines size={14} />}</span><div><strong>{track.name}</strong><small>{track.kind === 'video' ? 'VIDEO' : 'AUDIO'}</small></div></div><div className="track-controls"><button title="Mute track" className={track.muted ? 'muted' : ''} onClick={async () => {
-                    const next = structuredClone(project); const target = next.tracks.find((item) => item.id === track.id)!; target.muted = !target.muted;
-                    try { await window.openmontage.saveProject(projectPath, next); setProject(next); await refreshHistory(projectPath); setNotice(target.muted ? 'Track muted' : 'Track unmuted'); } catch (cause) { setError(String(cause)); }
-                  }}>{track.kind === 'video' ? <EyeIcon muted={track.muted} /> : <Volume2 size={12} />}</button><button title="Lock track" onClick={async () => {
-                    const next = structuredClone(project); const target = next.tracks.find((item) => item.id === track.id)!; target.locked = !target.locked;
-                    try { await window.openmontage.saveProject(projectPath, next); setProject(next); await refreshHistory(projectPath); setNotice(target.locked ? 'Track locked' : 'Track unlocked'); } catch (cause) { setError(String(cause)); }
-                  }}><span className={track.locked ? 'lock-active' : ''}>⌑</span></button></div></div>
+                  <div className="track-gutter">
+                    <div className={`track-type ${track.kind}`}><span>{track.kind === 'video' ? <Video size={14} /> : <AudioLines size={14} />}</span><div><strong>{track.name}</strong><small>{track.kind === 'video' ? 'VIDEO' : 'AUDIO'}</small></div></div>
+                    <div className="track-controls">
+                      <button title={track.muted ? 'Unmute track' : 'Mute track'} className={track.muted ? 'muted' : ''} onClick={() => void run(() => window.openmontage.updateTrack(projectPath, track.id, { muted: !track.muted }), (next) => next, track.muted ? 'Track unmuted' : 'Track muted')}>{track.kind === 'video' ? <EyeIcon muted={track.muted} /> : <Volume2 size={12} />}</button>
+                      <button className={`track-solo ${track.solo ? 'solo-active' : ''}`} title={track.solo ? 'Disable track solo' : 'Solo track'} onClick={() => void run(() => window.openmontage.updateTrack(projectPath, track.id, { solo: !track.solo }), (next) => next, track.solo ? 'Track solo disabled' : 'Track solo enabled')}><span>S</span></button>
+                      <button title={track.locked ? 'Unlock track' : 'Lock track'} onClick={() => void run(() => window.openmontage.updateTrack(projectPath, track.id, { locked: !track.locked }), (next) => next, track.locked ? 'Track unlocked' : 'Track locked')}><span className={track.locked ? 'lock-active' : ''}>⌑</span></button>
+                    </div>
+                  </div>
                   <div className="track-lane" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                     event.preventDefault(); const clipId = event.dataTransfer.getData('text/clip-id'); if (!clipId) return;
                     const bounds = event.currentTarget.getBoundingClientRect(); const at = Math.max(0, (event.clientX - bounds.left + event.currentTarget.scrollLeft) / timelineScale);

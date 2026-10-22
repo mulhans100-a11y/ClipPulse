@@ -8,6 +8,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Create, open, validate, and save versioned projects.
 - [x] Import files and recursively scan local media folders; probe metadata; create thumbnails; identify exact duplicate content.
 - [x] Video/audio tracks, adding tracks, inserting/moving/removing clips, source trim, split, save, basic undo/redo.
+- [x] Duplicate clips, per-kind track mute and solo that affect both preview and export, and track locks that prevent edits.
 - [x] Source preview and basic FFmpeg MP4 export with video compositing and audio mix.
 - [x] JSON CLI for project/media/timeline/export operations.
 - [x] Synthetic-media integration tests and Windows CI workflow.

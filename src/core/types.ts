@@ -53,6 +53,7 @@ export interface TimelineTrack {
   name: string;
   kind: TrackKind;
   muted: boolean;
+  solo?: boolean;
   locked: boolean;
   clips: TimelineClip[];
 }

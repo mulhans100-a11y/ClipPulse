@@ -3,7 +3,7 @@ import path from 'node:path';
 import { AppError } from './errors';
 import { runCommand, tail } from './ffmpeg';
 import { add, compare, decimal, rational } from './time';
-import { timelineDuration, validateProject } from './project';
+import { isTrackEnabled, timelineDuration, validateProject } from './project';
 import type { ExportOptions, MediaAsset, Project, Rational, TimelineClip, TimelineTrack } from './types';
 
 interface RenderClip { track: TimelineTrack; clip: TimelineClip; media: MediaAsset; input: number; }
@@ -21,7 +21,7 @@ export async function exportVideo(project: Project, options: ExportOptions): Pro
   await fs.mkdir(path.dirname(output), { recursive: true });
   const temp = path.join(path.dirname(output), `.${path.basename(output, path.extname(output))}.${Date.now()}.rendering.mp4`);
 
-  const active = project.tracks.flatMap((track) => track.clips.filter(() => !track.muted).map((clip) => ({ track, clip, media: project.media.find((item) => item.id === clip.mediaId)! })));
+  const active = project.tracks.flatMap((track) => isTrackEnabled(project, track) ? track.clips.map((clip) => ({ track, clip, media: project.media.find((item) => item.id === clip.mediaId)! })) : []);
   const inputs: RenderClip[] = [];
   const args: string[] = ['-hide_banner', '-y'];
   for (const item of active) {

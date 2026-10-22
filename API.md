@@ -19,7 +19,9 @@ redo --project FILE
 inspect --project FILE
 validate --project FILE
 track-add --project FILE --kind video|audio [--name NAME]
+track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]
 clip-add --project FILE --media ID --track ID [--start TIME] [--source-in TIME] [--duration TIME]
+clip-duplicate --project FILE --clip ID [--start TIME]
 clip-trim --project FILE --clip ID [--start TIME] [--source-in TIME] [--duration TIME]
 clip-move --project FILE --clip ID --start TIME [--track ID]
 clip-split --project FILE --clip ID --at TIME
@@ -33,6 +35,8 @@ doctor
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]` writes library metadata. `analyze-audio --project FILE --media ID` decodes a media asset's audio locally and returns estimated BPM hypotheses, beat positions, and transient timestamps. Results are cached beside the project using file size and modification time. Autocorrelation scores are comparative matches, not calibrated probabilities.
 
 `media-relink --project FILE --media ID --path FILE` replaces a missing source path while retaining its ID. The replacement must have the same audio/video kind and cover every existing clip source range.
+
+`track-set` updates track mute, solo, and lock state. Solo is applied independently to video and audio track groups in both the timeline preview and final export. `clip-duplicate` copies a clip's source range and audio settings to the same track immediately after it; `--start` overrides that timeline position.
 
 `timeline-frame --project FILE --time TIME` renders one frame-snapped composite from the active, unmuted video tracks. The desktop Timeline monitor uses this command's shared core operation for its still preview; source video playback remains available in the Source monitor.
 
