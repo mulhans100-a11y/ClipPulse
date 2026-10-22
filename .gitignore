@@ -1,6 +1,7 @@
 node_modules/
 dist/
 release/
+work/
 *.log
 *.tmp
 *.rendering.mp4

@@ -32,8 +32,8 @@ The CLI exposes the same operation as `segment-mask`; pass `--model-cache DIR` t
 ## Run from source
 
 ```powershell
-git clone <repository-url>
-cd OpenMontage-AI
+git clone https://github.com/mulhans100-a11y/ClipPulse.git
+cd ClipPulse
 npm ci
 npm run dev
 ```
@@ -45,7 +45,21 @@ npm run build
 npm test
 ```
 
-Native Windows installer generation is a later milestone. FFmpeg is a separately installed dependency.
+## Build an installer
+
+The desktop application packages can be built on their matching operating systems:
+
+```powershell
+npm run package:win
+```
+
+On macOS use `npm run package:mac`; on Linux use `npm run package:linux`. Outputs are written to `release/`. The GitHub Actions release workflow builds Windows x64, macOS arm64 and Intel, and Linux x64 packages from a version tag. Each platform build runs on a fresh hosted runner; the Windows job silently installs its NSIS installer and launches the installed app as a smoke check.
+
+FFmpeg and FFprobe remain separate requirements. Install a compatible FFmpeg build and ensure both commands are on `PATH`; the welcome screen reports their availability. The installers include the Electron runtime, so users do not need Node.js or npm to launch the packaged editor.
+
+The workflow creates a draft GitHub release with installers, a CycloneDX SBOM, and SHA-256 checksums. It only publishes a draft so the release can be reviewed first. Windows signing uses the optional `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` repository secrets. macOS signing and notarization use `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`. No certificate or signing secret belongs in the repository. Without configured signing credentials, the package is unsigned and macOS may block it by default.
+
+See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) before publishing a draft release.
 
 ## Diagnose the CLI runtime
 
@@ -58,4 +72,4 @@ The command returns platform, Node version, and whether both FFmpeg tools are ca
 
 ## Known setup limits
 
-The project has not yet been validated on a clean Windows machine or signed. Installation requires a development machine with Node/npm and an FFmpeg installation. A packaged app dependency-check screen, bundled FFmpeg distribution, Linux/macOS installers, and auto-updates are future work.
+The clean Windows install smoke test is defined in the release workflow and still needs a successful hosted run. Release signing requires maintainer-provided GitHub Actions secrets. Linux/macOS packages need installation checks on target machines after their first workflow build. Auto-updates are not implemented.

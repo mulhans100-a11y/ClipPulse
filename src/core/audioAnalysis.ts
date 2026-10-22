@@ -10,6 +10,9 @@ import type { AudioAnalysis, BpmHypothesis, EnergySection, MeterEstimate } from 
 const SAMPLE_RATE = 11_025;
 const FFT_SIZE = 2_048;
 const HOP_SAMPLES = 256; // about 23 ms
+// A centered Hann window sees an attack before its labeled frame center.
+// Shift detected transients by half the analysis window to compensate.
+const ONSET_TIME_CORRECTION_SECONDS = FFT_SIZE / (2 * SAMPLE_RATE);
 const FFT_WINDOW = Float64Array.from({ length: FFT_SIZE }, (_value, index) => 0.5 - 0.5 * Math.cos(2 * Math.PI * index / (FFT_SIZE - 1)));
 const FFT_BIT_REVERSE = makeBitReverseTable(FFT_SIZE);
 const FFT_STAGES = makeFftStages(FFT_SIZE);
@@ -37,11 +40,15 @@ export async function analyzeAudio(filePath: string, cacheFilePath?: string): Pr
     const pulseHypotheses = findBpmHypotheses(onsetEnvelope, hopSeconds);
     const best = pulseHypotheses[0];
     const beats = best ? trackBeats(onsetEnvelope, 60 / best.bpm / hopSeconds, hopSeconds) : [];
-    const phase = beats[0] === undefined ? undefined : beats[0] / hopSeconds;
-    const meter = estimateMeter(onsetData.rms, onsetData.bassEnergy, onsetEnvelope, beats, hopSeconds);
+    const periodSeconds = best ? 60 / best.bpm : undefined;
+    const phase = beats[0] === undefined || periodSeconds === undefined
+      ? undefined
+      : beats[0] % periodSeconds;
+    const firstBeatIndex = beats[0] === undefined || periodSeconds === undefined ? 0 : Math.floor(beats[0] / periodSeconds);
+    const meter = estimateMeter(onsetData.rms, onsetData.bassEnergy, beats, hopSeconds, periodSeconds);
     const tempoScale = meter?.denominator === 8 ? 0.5 : 1;
     const bpmHypotheses = pulseHypotheses.map((hypothesis) => ({ ...hypothesis, bpm: roundBpm(hypothesis.bpm * tempoScale) }));
-    const downbeats = meter ? beats.filter((_beat, index) => index % meter.beatsPerBar === meter.downbeatPhase) : [];
+    const downbeats = meter ? beats.filter((_beat, index) => (index + firstBeatIndex) % meter.beatsPerBar === meter.downbeatPhase) : [];
     const energyCurve = normalizeEnergy(onsetData.energyBySecond);
     const energySections = findEnergySections(energyCurve);
     const drops = findEnergyDrops(energyCurve);
@@ -243,7 +250,7 @@ function normalizeNovelty(raw: number[], hopSeconds: number): Float64Array {
   return Float64Array.from(residual, (value) => Math.min(2, value / scale));
 }
 
-function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, onset: Float64Array, beats: number[], hopSeconds: number): MeterEstimate | undefined {
+function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, beats: number[], hopSeconds: number, periodSeconds?: number): MeterEstimate | undefined {
   if (beats.length < 12) return undefined;
   const localPeaks = (values: Float64Array) => beats.map((beat) => {
     const center = Math.round(beat / hopSeconds);
@@ -252,15 +259,18 @@ function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, onset: Float
     return strongest;
   });
   const robustZ = (values: number[]) => {
-    const logged = values.map((value) => Math.log1p(Math.max(0, value)));
+    const baseline = values.reduce((sum, value) => sum + Math.max(0, value), 0) / Math.max(1, values.length);
+    const logged = values.map((value) => Math.log1p(Math.max(0, value) / Math.max(baseline, 1e-8)));
     const mean = logged.reduce((sum, value) => sum + value, 0) / logged.length;
     const deviation = Math.sqrt(logged.reduce((sum, value) => sum + (value - mean) ** 2, 0) / logged.length);
-    return deviation < 1e-5 ? logged.map(() => 0) : logged.map((value) => Math.max(-2.5, Math.min(2.5, (value - mean) / deviation)));
+    // Do not amplify small window-alignment differences into apparent bar accents.
+    return deviation < 0.04 ? logged.map(() => 0) : logged.map((value) => Math.max(-2.5, Math.min(2.5, (value - mean) / deviation)));
   };
   const rmsAccent = robustZ(localPeaks(rms));
   const bassAccent = robustZ(localPeaks(bassEnergy));
-  const onsetAccent = robustZ(localPeaks(onset));
-  const strengths = beats.map((_beat, index) => 0.5 * bassAccent[index] + 0.3 * rmsAccent[index] + 0.2 * onsetAccent[index]);
+  // Onset novelty can drift between neighboring frames as beat periods fall
+  // between FFT hops, so bar accents rely on measured energy instead.
+  const strengths = beats.map((_beat, index) => 0.6 * bassAccent[index] + 0.4 * rmsAccent[index]);
   const candidates: Array<{ beatsPerBar: number; phase: number; score: number }> = [];
   for (let beatsPerBar = 2; beatsPerBar <= 12; beatsPerBar++) {
     const bars = strengths.length / beatsPerBar;
@@ -273,10 +283,13 @@ function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, onset: Float
     const variance = profile.reduce((sum, value) => sum + (value - mean) ** 2, 0) / profile.length;
     const deviation = Math.sqrt(variance);
     if (deviation < 0.15) continue;
-    const phase = profile.indexOf(Math.max(...profile));
-    const otherMean = (profile.reduce((sum, value) => sum + value, 0) - profile[phase]) / (profile.length - 1);
-    const contrast = (profile[phase] - otherMean) / Math.max(0.2, deviation);
-    candidates.push({ beatsPerBar, phase, score: contrast * Math.min(1, Math.sqrt(bars / 6)) - (beatsPerBar === 2 ? 0.05 : 0) });
+    const relativePhase = profile.indexOf(Math.max(...profile));
+    const firstBeatIndex = periodSeconds && beats[0] !== undefined ? Math.floor(beats[0] / periodSeconds) : 0;
+    const phase = (relativePhase + firstBeatIndex) % beatsPerBar;
+    const otherMean = (profile.reduce((sum, value) => sum + value, 0) - profile[relativePhase]) / (profile.length - 1);
+    const contrast = (profile[relativePhase] - otherMean) / Math.max(0.2, deviation);
+    // Two-beat cycles are often a subcycle of stronger 4/4 accents.
+    candidates.push({ beatsPerBar, phase, score: contrast * Math.min(1, Math.sqrt(bars / 6)) - (beatsPerBar === 2 ? 0.3 : 0) });
   }
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0], runnerUp = candidates[1];
@@ -419,7 +432,7 @@ function trackBeats(envelope: Float64Array, period: number, hopSeconds: number):
     for (let index = Math.max(0, predicted - radius); index <= Math.min(envelope.length - 1, predicted + radius); index++) {
       if (envelope[index] > envelope[strongest]) strongest = index;
     }
-    const seconds = Number((strongest * hopSeconds).toFixed(4));
+    const seconds = Number((strongest * hopSeconds + ONSET_TIME_CORRECTION_SECONDS).toFixed(4));
     if (!beats.length || seconds - beats[beats.length - 1] > hopSeconds * 2) beats.push(seconds);
   }
   return beats;
@@ -433,7 +446,7 @@ function pickOnsets(envelope: Float64Array, hopSeconds: number): number[] {
   const onsets: number[] = [];
   for (let i = 1; i < envelope.length - 1; i++) {
     if (envelope[i] >= threshold && envelope[i] >= envelope[i - 1] && envelope[i] > envelope[i + 1]) {
-      const seconds = Number((i * hopSeconds).toFixed(4));
+      const seconds = Number((i * hopSeconds + ONSET_TIME_CORRECTION_SECONDS).toFixed(4));
       if (!onsets.length || seconds - onsets[onsets.length - 1] >= 0.08) onsets.push(seconds);
     }
   }

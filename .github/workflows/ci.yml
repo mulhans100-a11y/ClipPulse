@@ -1,4 +1,4 @@
-name: Windows build and tests
+name: Build and test
 
 on:
   push:
@@ -7,17 +7,47 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
-    runs-on: windows-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2025
+            ffmpeg: windows
+          - name: Linux x64
+            os: ubuntu-24.04
+            ffmpeg: linux
+          - name: macOS arm64
+            os: macos-26
+            ffmpeg: macos
+          - name: macOS Intel
+            os: macos-26-intel
+            ffmpeg: macos
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.16.0
           cache: npm
-      - name: Install FFmpeg
+      - name: Pin npm
+        run: npm install --global npm@11.13.0
+      - name: Install FFmpeg on Windows
+        if: matrix.ffmpeg == 'windows'
         run: choco install ffmpeg --yes --no-progress
+      - name: Install FFmpeg on Linux
+        if: matrix.ffmpeg == 'linux'
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - name: Install FFmpeg on macOS
+        if: matrix.ffmpeg == 'macos'
+        run: brew install ffmpeg
       - run: npm ci
       - run: npm run build
       - run: npm test

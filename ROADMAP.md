@@ -90,7 +90,13 @@ Phase G tools use the shared core; filesystem grants are explicitly passed at se
 
 ## Phase H — Release
 
-- [ ] Dependency, model, and FFmpeg distribution/license review for chosen packaging.
-- [ ] Windows installer and clean-machine install/diagnostics validation.
-- [ ] Linux/macOS builds, reproducible releases, SBOM and release signing.
-- [ ] Public GitHub repository and first tagged release after the project has a configured remote and a release-ready build.
+- [x] Record the package choices: FFmpeg stays user-installed; model weights are fetched on first use; production npm dependency metadata, audit results, and model/codec licensing notes are documented.
+- [x] Generate and package platform-specific production dependency notices and available license texts, including native `sharp`/libvips, ONNX Runtime, and `guid-typescript` notices; Windows x64 package contents verified locally.
+- [ ] Review generated notices after Linux x64, macOS arm64, and macOS Intel release builds.
+- [x] Configure an NSIS Windows installer and an automated fresh-runner silent-install/start smoke check.
+- [ ] Confirm a successful clean Windows installation/diagnostics run in GitHub Actions.
+- [x] Configure native Linux x64, macOS arm64, macOS Intel, and Windows x64 release builds with pinned Node/npm and the lockfile; attach a CycloneDX SBOM and SHA-256 checksums to a draft release.
+- [ ] Confirm successful Linux/macOS package builds and install checks on target machines.
+- [ ] Configure Windows/macOS signing secrets and verify signed/notarized artifacts.
+- [x] Publish the source repository at https://github.com/mulhans100-a11y/ClipPulse.
+- [ ] Create and review the first tagged application release; the workflow deliberately creates a draft only.

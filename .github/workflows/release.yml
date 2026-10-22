@@ -1,0 +1,130 @@
+name: Package draft release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            name: Windows x64 NSIS installer
+            os: windows-2025
+            ffmpeg: windows
+            builderArgs: --win nsis --x64
+            artifacts: release/*.exe
+          - id: linux-x64
+            name: Linux x64 AppImage and deb
+            os: ubuntu-24.04
+            ffmpeg: linux
+            builderArgs: --linux AppImage deb --x64
+            artifacts: |
+              release/*.AppImage
+              release/*.deb
+              release/*-sbom.cdx.json
+          - id: mac-arm64
+            name: macOS arm64 DMG and ZIP
+            os: macos-26
+            ffmpeg: macos
+            builderArgs: --mac dmg zip
+            artifacts: |
+              release/*.dmg
+              release/*.zip
+          - id: mac-x64
+            name: macOS Intel DMG and ZIP
+            os: macos-26-intel
+            ffmpeg: macos
+            builderArgs: --mac dmg zip
+            artifacts: |
+              release/*.dmg
+              release/*.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: npm
+      - name: Pin npm
+        run: npm install --global npm@11.13.0
+      - name: Verify tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node -e "if (process.env.RELEASE_TAG !== 'v' + require('./package.json').version) { console.error('Tag must match package.json version.'); process.exit(1) }"
+      - name: Install FFmpeg on Windows
+        if: matrix.ffmpeg == 'windows'
+        run: choco install ffmpeg --yes --no-progress
+      - name: Install FFmpeg on Linux
+        if: matrix.ffmpeg == 'linux'
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - name: Install FFmpeg on macOS
+        if: matrix.ffmpeg == 'macos'
+        run: brew install ffmpeg
+      - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+      - run: npm run build
+      - run: npm test
+      - name: Build native package
+        run: npx electron-builder ${{ matrix.builderArgs }} --publish never
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Smoke-test clean Windows install
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath release -Filter '*.exe' -File | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer was not produced.' }
+          ./scripts/smoke-test-windows-installer.ps1 -InstallerPath $installer.FullName
+      - name: Generate CycloneDX SBOM
+        if: matrix.id == 'linux-x64'
+        run: npm sbom --sbom-format=cyclonedx --sbom-type=application > "release/ClipPulse-${GITHUB_REF_NAME}-sbom.cdx.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClipPulse-${{ matrix.id }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    name: Assemble draft release
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ClipPulse-*
+          path: release
+          merge-multiple: true
+      - name: Add release status and checksums
+        run: |
+          cat > release/RELEASE-STATUS.md <<'EOF'
+          This is an automatically assembled draft. Review platform startup and signing before publishing it.
+
+          Windows and macOS signing are enabled only when the matching repository Actions secrets are configured. FFmpeg is a separate user-installed dependency. The CycloneDX SBOM lists the locked npm dependency tree; it does not include FFmpeg or the model downloaded on first use.
+          EOF
+          cd release
+          sha256sum * > SHA256SUMS.txt
+      - name: Create GitHub draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --generate-notes --draft --verify-tag

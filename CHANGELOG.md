@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.0 — Phase A–F development build
+## Unreleased — Phase H preparation
+
+- Added electron-builder targets and native GitHub Actions release builds for Windows x64, Linux x64, macOS arm64, and macOS Intel.
+- Added a Windows fresh-runner installer/start smoke test, production dependency audit, CycloneDX SBOM, SHA-256 checksums, and draft-only GitHub release assembly.
+- Added signing-secret setup and manual artifact review instructions; no application release has been published.
+- Added per-platform production dependency license manifests and license text files to packaged application resources, including native `sharp`/libvips, version-matched ONNX Runtime, and `guid-typescript` notices.
+- Corrected FFT-window onset timestamp bias and meter estimation so the local music-analysis regression tests pass.
+
+## 0.1.0 — Phase A–G development build
 
 - Added Electron/React desktop shell with media bin, source preview, multitrack timeline, and clip inspector.
 - Added rational-time project model, media probing/import, thumbnail caching, duplicate detection, and project backups.
@@ -29,4 +37,4 @@
 - Phase E adds shared preview/export filter semantics, keyframes, speed ramps, dissolve/wipe transitions, title overlays, transforms, color/LUT controls, track/clip audio automation, normalization, ducking, gain envelopes, and FFmpeg parity tests.
 - Phase F adds normalized polygon/Bézier masks, feather and expansion controls, chroma keying, alpha-aware layer blending, manually corrected mask tracking, and shared preview/export composition.
 - Phase F adds optional local ONNX instance segmentation by COCO object class, overlap-based instance following, temporally stabilized contours, editable generated mask keyframes, and editor, CLI, and MCP entry points.
-- Automatic model-backed segmentation/tracking, REST, MCP, and real-game evaluation datasets remain future work.
+- Phase G adds versioned agent tools through the JSON CLI, loopback REST API, and MCP stdio server. Gameplay event models and game-specific reference data remain future work.

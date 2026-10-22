@@ -91,6 +91,7 @@ export default function App() {
   const [notice, setNotice] = useState('Ready');
   const [error, setError] = useState('');
   const [ffmpeg, setFfmpeg] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -151,7 +152,7 @@ export default function App() {
 
   useEffect(() => {
     if (!window.openmontage) { setError('Desktop bridge unavailable. Start the editor with npm run dev or npm start.'); return; }
-    void window.openmontage.version().then((info) => setFfmpeg(info.ffmpeg && info.ffprobe)).catch((cause) => setError(String(cause)));
+    void window.openmontage.version().then((info) => { setAppVersion(info.appVersion); setFfmpeg(info.ffmpeg && info.ffprobe); }).catch((cause) => setError(String(cause)));
   }, []);
   useEffect(() => {
     const element = mediaListRef.current;
@@ -563,7 +564,7 @@ export default function App() {
       <h1>OpenMontage <span>AI</span></h1>
       <p>Create, cut, and export music-driven video edits. Your source files stay where they are.</p>
       <div className="welcome-actions"><button className="primary" onClick={() => void createProject()}><Plus size={16} /> New project</button><button onClick={() => void openProject()}><FolderOpen size={16} /> Open project</button></div>
-      <div className="runtime"><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg not detected'} · Editor development build</div>
+      <div className="runtime"><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg not detected'} · OpenMontage AI{appVersion ? ` v${appVersion}` : ''}</div>
       {error && <div className="error-box">{error}</div>}
     </div>
   </div>;

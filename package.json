@@ -2,7 +2,17 @@
   "name": "openmontage-ai",
   "version": "0.1.0",
   "description": "A local-first, open-source video editor for music-synchronized gaming montages.",
+  "author": "OpenMontage AI contributors",
   "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mulhans100-a11y/ClipPulse.git"
+  },
+  "homepage": "https://github.com/mulhans100-a11y/ClipPulse#readme",
+  "bugs": {
+    "url": "https://github.com/mulhans100-a11y/ClipPulse/issues"
+  },
+  "packageManager": "npm@11.13.0",
   "engines": {
     "node": ">=24.0.0",
     "npm": ">=10.0.0"
@@ -14,6 +24,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build:renderer": "vite build",
     "build": "npm run typecheck && npm run build:main && npm run build:renderer",
+    "package:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "package:mac": "npm run build && electron-builder --mac dmg zip --publish never",
+    "package:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
     "start": "electron .",
     "cli": "node dist/src/main/cli.js",
     "test": "npm run build:main && node --test dist/tests/*.test.js"
@@ -36,5 +49,44 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "wait-on": "^9.5.1"
+  },
+  "build": {
+    "appId": "com.github.mulhans100a11y.clippulse",
+    "productName": "OpenMontage AI",
+    "afterPack": "scripts/copy-third-party-notices.cjs",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/tests/**",
+      "LICENSE",
+      "README.md",
+      "DEPENDENCIES.md",
+      "INSTALLATION.md",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.video"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "AudioVideo;Video;",
+      "synopsis": "Local-first gaming montage editor"
+    }
   }
 }

@@ -42,13 +42,13 @@ Phases A–G are implemented. Phase C provides local music analysis, audio/scene
 Requirements: Windows 10/11, Node.js 24 or newer, npm, Git, and FFmpeg 6 or newer (`ffmpeg` and `ffprobe` available on `PATH`). The desktop build is currently developed with Node.js 24 and FFmpeg 9.
 
 ```powershell
-git clone <repository-url>
-cd OpenMontage-AI
+git clone https://github.com/mulhans100-a11y/ClipPulse.git
+cd ClipPulse
 npm ci
 npm run dev
 ```
 
-Native Windows installer packaging is a later milestone. FFmpeg must currently be installed separately; Linux and macOS packaging are future work.
+Windows, Linux, and macOS packages are built by the tagged-release workflow. FFmpeg remains a separate install because this project does not redistribute an FFmpeg binary. The welcome screen reports whether `ffmpeg` and `ffprobe` are available. Model weights are downloaded locally when the segmentation feature is first used.
 
 Tesseract OCR is optional. See [INSTALLATION.md](INSTALLATION.md) for Windows setup and PATH checks.
 
@@ -90,7 +90,7 @@ npm run build
 npm test
 ```
 
-The tests generate their own short synthetic video and audio with FFmpeg. No personal or copyrighted media is included. CI installs FFmpeg on its Windows runner and runs the same build and tests.
+The tests generate their own short synthetic video and audio with FFmpeg. No personal or copyrighted media is included. CI installs FFmpeg and runs the build and tests on Windows x64, Linux x64, macOS arm64, and macOS Intel runners.
 
 ## Architecture and status
 
@@ -108,4 +108,4 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 - Beat and meter estimates use local spectral-flux/RMS heuristics, not a trained music model. On ARTBeaT, analyzer v4 reduced BPM MAE on eight fixed-tempo references from 26.48 to 11.70 and raised aggregate beat F1 across 24 tracks from 0.537 to 0.678; downbeat tracking still had zero true positives and meter estimates remained inaccurate. Meter and tempo scores are not calibrated probabilities.
 - Beat snapping uses those estimated beat positions; it does not yet distinguish strong impacts or drops from regular beats.
 - The Phase D planner can only select detected event windows and includes a bounded amount of surrounding context. It reports insufficient highlight coverage instead of filling a long request with unscored footage. The Velocity preset changes cut pacing; actual playback speed and ramps are available through Phase E clip controls.
-- No GitHub remote is configured in this local checkout, so no public repository or release has been published.
+- The public source repository is [mulhans100-a11y/ClipPulse](https://github.com/mulhans100-a11y/ClipPulse). No tagged application release is published yet.
