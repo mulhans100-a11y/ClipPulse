@@ -12,6 +12,9 @@ import --project FILE PATH... [--no-recursive]
 media-search --project FILE [--query TEXT] [--favorites]
 media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]
 analyze-audio --project FILE --media ID
+history --project FILE
+undo --project FILE
+redo --project FILE
 inspect --project FILE
 validate --project FILE
 track-add --project FILE --kind video|audio [--name NAME]
@@ -29,6 +32,8 @@ doctor
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]` writes library metadata. `analyze-audio --project FILE --media ID` decodes a media asset's audio locally and returns estimated BPM hypotheses, beat positions, and transient timestamps. Results are cached beside the project using file size and modification time. Autocorrelation scores are comparative matches, not calibrated probabilities.
 
 `timeline-frame --project FILE --time TIME` renders one frame-snapped composite from the active, unmuted video tracks. The desktop Timeline monitor uses this command's shared core operation for its still preview; source video playback remains available in the Source monitor.
+
+`history` reports persistent undo/redo availability. `undo` and `redo` restore a project snapshot from the adjacent `.openmontage-history-<id>` folder. The journal holds up to 50 states and starts a new branch after an edit made while redo states exist.
 
 `TIME` is a nonnegative rational number of seconds, entered either as a decimal (`2.5`) or a fraction (`5/2`). An omitted clip duration extends from `source-in` to the end of the source. Video-only media cannot be placed on an audio track's video output; audio-only media cannot be placed on a video track.
 

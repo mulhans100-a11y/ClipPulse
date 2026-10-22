@@ -5,6 +5,9 @@ export interface OpenMontageApi {
   createProject(): Promise<{ project: Project; path: string } | null>;
   openProject(): Promise<{ project: Project; path: string } | null>;
   saveProject(path: string, project: Project): Promise<void>;
+  getProjectHistory(path: string): Promise<{ canUndo: boolean; canRedo: boolean; undoCount: number; redoCount: number }>;
+  undoProject(path: string): Promise<Project>;
+  redoProject(path: string): Promise<Project>;
   importMedia(path: string): Promise<{ project: Project; result: ImportResult }>;
   updateMediaMetadata(path: string, mediaId: string, patch: { favorite?: boolean; tags?: string[]; game?: string | null }): Promise<Project>;
   searchMedia(path: string, query: string, favoriteOnly: boolean): Promise<MediaAsset[]>;

@@ -9,6 +9,7 @@
 - Added a frame-snapped composite timeline preview with track-order overlays and a separate source playback monitor.
 - Added cached FFmpeg waveform images for imported audio files and timeline clips.
 - Added direct frame-snapped dragging on clip edges to trim source ranges.
+- Added persistent undo/redo with branch handling, no-op save detection, and a 50-state history limit.
 - Added a structured JSON CLI and first-pass local beat/transient analysis with BPM hypotheses.
 - Added generated-media integration tests, Windows CI, and Medal API/licensing research.
 - Automatic highlight detection, deeper music analysis, effects, compositing masks, REST, and MCP remain future work.

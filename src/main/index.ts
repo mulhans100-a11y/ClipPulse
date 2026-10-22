@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { analyzeAudio } from '../core/audioAnalysis';
 import { AppError } from '../core/errors';
-import { addTrack, addClip, createProject, fileExists, importMedia, loadProject, moveClip, projectCachePath, removeClip, saveProject, splitClip, trimClip, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
+import { addTrack, addClip, createProject, fileExists, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, removeClip, saveProject, splitClip, trimClip, undoProject, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
 import { frameTime } from '../core/time';
@@ -135,6 +135,9 @@ ipcMain.handle('project:open', async () => {
   return { project, path: filePath };
 });
 ipcMain.handle('project:save', (_event, filePath, project) => withProjectLock(filePath, () => saveProject(filePath, project)));
+ipcMain.handle('project:history', (_event, filePath: string) => withProjectLock(filePath, () => getProjectHistory(filePath)));
+ipcMain.handle('project:undo', (_event, filePath: string) => withProjectLock(filePath, () => undoProject(filePath)));
+ipcMain.handle('project:redo', (_event, filePath: string) => withProjectLock(filePath, () => redoProject(filePath)));
 ipcMain.handle('media:import', async (_event, filePath: string) => {
   const response = await dialog.showOpenDialog(mainWindow!, { title: 'Import media', properties: ['openFile', 'openDirectory', 'multiSelections'] });
   if (response.canceled || !response.filePaths.length) return { project: await loadProject(filePath), result: { added: [], duplicates: [], errors: [], watchedRoots: [] } };

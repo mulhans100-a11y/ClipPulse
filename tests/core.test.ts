@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, getImportRoots, importMedia, loadProject, removeClip, searchMedia, setImportRootWatching, splitClip, trimClip, updateMediaMetadata } from '../src/core/project';
+import { addClip, addTrack, createProject, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata } from '../src/core/project';
 import { analyzeAudio } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
@@ -25,6 +25,32 @@ test('rational time arithmetic stays exact across non-integer frame rates', () =
   assert.deepEqual(parseDecimal('5/2'), { num: '5', den: '2' });
   assert.equal(decimal(parseDecimal('12.500000')), '12.5');
   assert.equal(compare(rational(1, 3), rational(2, 5)), -1);
+});
+
+test('project undo and redo survive reloads, skip no-op saves, and clear a redo branch after edits', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-history-'));
+  scratch.push(directory);
+  const projectFile = path.join(directory, 'history.omproj');
+  const created = await createProject(projectFile);
+  await saveProject(projectFile, structuredClone(created));
+  assert.deepEqual(await getProjectHistory(projectFile), { canUndo: false, canRedo: false, undoCount: 0, redoCount: 0 });
+
+  await addTrack(projectFile, 'video', 'V2');
+  assert.equal((await getProjectHistory(projectFile)).canUndo, true);
+  const undone = await undoProject(projectFile);
+  assert.equal(undone.tracks.filter((track) => track.kind === 'video').length, 1);
+  assert.deepEqual(await getProjectHistory(projectFile), { canUndo: false, canRedo: true, undoCount: 0, redoCount: 1 });
+
+  await loadProject(projectFile); // A fresh read stands in for reopening the editor.
+  const redone = await redoProject(projectFile);
+  assert.equal(redone.tracks.filter((track) => track.kind === 'video').length, 2);
+  assert.equal((await getProjectHistory(projectFile)).canRedo, false);
+
+  await undoProject(projectFile);
+  await addTrack(projectFile, 'audio', 'A2');
+  const branched = await getProjectHistory(projectFile);
+  assert.equal(branched.canUndo, true);
+  assert.equal(branched.canRedo, false, 'a new edit removes the abandoned redo branch');
 });
 
 test('imports, backs up, trims, splits and exports real media without modifying its source', async () => {
@@ -118,6 +144,11 @@ test('SQLite library caches folder imports and persists game, tags, favorites, a
   assert.equal(results.length, 1);
   assert.equal(results[0].game, 'Valorant');
   assert.deepEqual(results[0].tags, ['headshot', 'round win']);
+
+  await undoProject(projectFile);
+  assert.equal((await searchMedia(projectFile, 'headshot', true)).length, 0, 'undo restores SQLite tags and favorite state along with project JSON');
+  await redoProject(projectFile);
+  assert.equal((await searchMedia(projectFile, 'headshot', true))[0].game, 'Valorant');
 
   const second = await importMedia(projectFile, [captures]);
   assert.equal(second.added.length, 0, 'unchanged files are reused from the SQLite path/stat cache');
@@ -239,6 +270,11 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   const preview = await invoke('timeline-frame', '--project', projectPath, '--time', '1');
   assert.equal(preview.data.frame, 24);
   assert.ok((await stat(preview.data.outputPath)).size > 100);
+  assert.equal((await invoke('history', '--project', projectPath)).data.canUndo, true);
+  await invoke('undo', '--project', projectPath);
+  assert.equal((await invoke('inspect', '--project', projectPath)).data.clipCount, 0);
+  await invoke('redo', '--project', projectPath);
+  assert.equal((await invoke('inspect', '--project', projectPath)).data.clipCount, 1);
 });
 
 async function writeClickTrack(filePath: string, bpm: number, durationSeconds: number): Promise<void> {

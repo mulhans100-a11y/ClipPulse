@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
@@ -13,6 +13,10 @@ const AUDIO_EXT = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.op
 
 export function projectCachePath(projectFile: string, projectId: string): string {
   return path.join(path.dirname(projectFile), `.openmontage-cache-${projectId}`);
+}
+
+export function projectHistoryPath(projectFile: string, projectId: string): string {
+  return path.join(path.dirname(path.resolve(projectFile)), `.openmontage-history-${projectId}`);
 }
 
 export async function createProject(filePath: string, options: Partial<Pick<Project, 'name' | 'frameRate' | 'width' | 'height'>> = {}): Promise<Project> {
@@ -46,10 +50,15 @@ export async function loadProject(filePath: string): Promise<Project> {
   return parsed as Project;
 }
 
-export async function saveProject(filePath: string, project: Project): Promise<void> {
+export async function saveProject(filePath: string, project: Project, options: { recordHistory?: boolean } = {}): Promise<void> {
   validateProject(project);
   const target = path.resolve(filePath);
   await fs.mkdir(path.dirname(target), { recursive: true });
+  const previous = await fileExists(target) ? await loadProject(target) : undefined;
+  if (previous && projectSignature(previous) === projectSignature(project)) {
+    project.updatedAt = previous.updatedAt;
+    return;
+  }
   project.updatedAt = new Date().toISOString();
   const temp = `${target}.${newId()}.tmp`;
   try {
@@ -60,6 +69,128 @@ export async function saveProject(filePath: string, project: Project): Promise<v
     await fs.rm(temp, { force: true }).catch(() => undefined);
     throw new AppError('PROJECT_SAVE_FAILED', `Could not save project ${target}: ${error instanceof Error ? error.message : error}`);
   }
+  if (options.recordHistory !== false) {
+    try { await recordProjectHistory(projectHistoryPath(target, project.id), previous, project); }
+    catch (error) {
+      try {
+        if (previous) await fs.copyFile(`${target}.bak`, target);
+        else await fs.rm(target, { force: true });
+      } catch (rollbackError) {
+        throw new AppError('PROJECT_HISTORY_ROLLBACK_FAILED', `History could not be written and the project file could not be restored: ${rollbackError instanceof Error ? rollbackError.message : rollbackError}`, { cause: error });
+      }
+      throw new AppError('PROJECT_HISTORY_FAILED', `Project history could not be written; the project save was rolled back: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+}
+
+export interface ProjectHistoryState { canUndo: boolean; canRedo: boolean; undoCount: number; redoCount: number; }
+interface HistoryEntry { file: string; signature: string; savedAt: string; }
+interface HistoryDocument { schemaVersion: 1; cursor: number; entries: HistoryEntry[]; }
+const MAX_HISTORY = 50;
+
+export async function getProjectHistory(filePath: string): Promise<ProjectHistoryState> {
+  const project = await loadProject(filePath);
+  const directory = projectHistoryPath(filePath, project.id);
+  const history = await readHistoryDocument(directory);
+  if (!history || !history.entries[history.cursor] || history.entries[history.cursor].signature !== projectSignature(project)) return { canUndo: false, canRedo: false, undoCount: 0, redoCount: 0 };
+  return { canUndo: history.cursor > 0, canRedo: history.cursor < history.entries.length - 1, undoCount: history.cursor, redoCount: history.entries.length - history.cursor - 1 };
+}
+
+export async function undoProject(filePath: string): Promise<Project> { return moveHistory(filePath, -1); }
+export async function redoProject(filePath: string): Promise<Project> { return moveHistory(filePath, 1); }
+
+async function moveHistory(filePath: string, direction: -1 | 1): Promise<Project> {
+  const project = await loadProject(filePath);
+  const directory = projectHistoryPath(filePath, project.id);
+  const history = await readHistoryDocument(directory);
+  if (!history || !history.entries[history.cursor] || history.entries[history.cursor].signature !== projectSignature(project)) {
+    throw new AppError('HISTORY_UNAVAILABLE', 'Project history is missing or does not match the current project state.');
+  }
+  const nextCursor = history.cursor + direction;
+  const entry = history.entries[nextCursor];
+  if (!entry) throw new AppError(direction < 0 ? 'NOTHING_TO_UNDO' : 'NOTHING_TO_REDO', direction < 0 ? 'There is no earlier project state to restore.' : 'There is no later project state to restore.');
+  let restored: Project;
+  try { restored = JSON.parse(await fs.readFile(path.join(directory, entry.file), 'utf8')) as Project; }
+  catch (error) { throw new AppError('HISTORY_READ_FAILED', `Could not read project history snapshot: ${error instanceof Error ? error.message : error}`); }
+  validateProject(restored);
+  const previousCursor = history.cursor;
+  history.cursor = nextCursor;
+  await writeHistoryDocument(directory, history);
+  let saved = false;
+  try {
+    await saveProject(filePath, restored, { recordHistory: false });
+    saved = true;
+    await synchronizeProjectLibrary(filePath, restored);
+  }
+  catch (error) {
+    history.cursor = previousCursor;
+    await writeHistoryDocument(directory, history).catch(() => undefined);
+    if (saved) {
+      try { await fs.copyFile(`${path.resolve(filePath)}.bak`, path.resolve(filePath)); }
+      catch (rollbackError) { throw new AppError('PROJECT_HISTORY_ROLLBACK_FAILED', `History restore failed and the project file could not be recovered: ${rollbackError instanceof Error ? rollbackError.message : rollbackError}`, { cause: error }); }
+    }
+    throw error;
+  }
+  return restored;
+}
+
+async function synchronizeProjectLibrary(filePath: string, project: Project): Promise<void> {
+  const library = new MediaLibrary(libraryDatabasePath(filePath, project.id));
+  try { library.synchronizeAssets(project.media); }
+  finally { library.close(); }
+}
+
+async function recordProjectHistory(directory: string, previous: Project | undefined, next: Project): Promise<void> {
+  await fs.mkdir(directory, { recursive: true });
+  let history = await readHistoryDocument(directory) ?? { schemaVersion: 1 as const, cursor: -1, entries: [] as HistoryEntry[] };
+  if (!previous) history = { schemaVersion: 1, cursor: -1, entries: [] };
+  if (previous && (history.cursor < 0 || history.entries[history.cursor]?.signature !== projectSignature(previous))) {
+    history = { schemaVersion: 1, cursor: -1, entries: [] };
+    history.entries.push(await writeHistorySnapshot(directory, previous));
+    history.cursor = 0;
+  }
+  history.entries = history.entries.slice(0, history.cursor + 1);
+  history.entries.push(await writeHistorySnapshot(directory, next));
+  history.cursor = history.entries.length - 1;
+  if (history.entries.length > MAX_HISTORY) {
+    const removed = history.entries.length - MAX_HISTORY;
+    history.entries = history.entries.slice(removed);
+    history.cursor -= removed;
+  }
+  await writeHistoryDocument(directory, history);
+  const retained = new Set(history.entries.map((entry) => entry.file));
+  const snapshots = await fs.readdir(directory).catch(() => [] as string[]);
+  await Promise.all(snapshots.filter((file) => file.startsWith('snapshot-') && !retained.has(file)).map((file) => fs.rm(path.join(directory, file), { force: true }).catch(() => undefined)));
+}
+
+async function writeHistorySnapshot(directory: string, project: Project): Promise<HistoryEntry> {
+  const file = `snapshot-${Date.now()}-${randomUUID()}.json`;
+  const temp = path.join(directory, `${file}.tmp`);
+  await fs.writeFile(temp, `${JSON.stringify(project, null, 2)}\n`, 'utf8');
+  await fs.rename(temp, path.join(directory, file));
+  return { file, signature: projectSignature(project), savedAt: project.updatedAt };
+}
+
+async function writeHistoryDocument(directory: string, history: HistoryDocument): Promise<void> {
+  const file = path.join(directory, 'history.json');
+  const temp = `${file}.${randomUUID()}.tmp`;
+  await fs.writeFile(temp, `${JSON.stringify(history, null, 2)}\n`, 'utf8');
+  await fs.rename(temp, file);
+}
+
+async function readHistoryDocument(directory: string): Promise<HistoryDocument | null> {
+  try {
+    const history = JSON.parse(await fs.readFile(path.join(directory, 'history.json'), 'utf8')) as HistoryDocument;
+    if (history.schemaVersion !== 1 || !Array.isArray(history.entries) || !Number.isSafeInteger(history.cursor) || history.cursor < 0 || history.cursor >= history.entries.length) return null;
+    if (!history.entries.every((entry) => typeof entry.file === 'string' && /^snapshot-\d+-[0-9a-f-]{36}\.json$/.test(entry.file) && typeof entry.signature === 'string' && typeof entry.savedAt === 'string')) return null;
+    return history;
+  } catch { return null; }
+}
+
+function projectSignature(project: Project): string {
+  const state = structuredClone(project);
+  state.updatedAt = '';
+  return createHash('sha256').update(JSON.stringify(state)).digest('hex');
 }
 
 export function validateProject(project: Project): void {

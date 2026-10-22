@@ -49,8 +49,8 @@ export default function App() {
   const [importRoots, setImportRoots] = useState<ImportRoot[]>([]);
   const mediaRef = useRef<HTMLVideoElement>(null);
   const previewRequest = useRef(0);
+  const historyRequest = useRef(0);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const past = useRef<Project[]>([]), future = useRef<Project[]>([]);
   const currentClip = getClip(project, selectedClipId);
   const selectedMedia = project?.media.find((asset) => asset.id === selectedMediaId) ?? null;
   const activeMedia = currentClip ? project?.media.find((asset) => asset.id === currentClip.clip.mediaId) ?? null : selectedMedia;
@@ -59,6 +59,14 @@ export default function App() {
     const matches = `${asset.name} ${asset.game ?? ''} ${(asset.tags ?? []).join(' ')}`.toLowerCase().includes(filter.toLowerCase());
     return matches && (!favoriteOnly || asset.favorite);
   }) ?? [], [project, filter, favoriteOnly]);
+
+  async function refreshHistory(filePath: string) {
+    const request = ++historyRequest.current;
+    try {
+      const history = await window.openmontage.getProjectHistory(filePath);
+      if (request === historyRequest.current) { setCanUndo(history.canUndo); setCanRedo(history.canRedo); }
+    } catch { if (request === historyRequest.current) { setCanUndo(false); setCanRedo(false); } }
+  }
 
   useEffect(() => {
     if (!window.openmontage) { setError('Desktop bridge unavailable. Start the editor with npm run dev or npm start.'); return; }
@@ -90,8 +98,8 @@ export default function App() {
   const load = useCallback((result: { project: Project; path: string }) => {
     setProject(result.project); setProjectPath(result.path); setSelectedClipId(null);
     void window.openmontage?.getImportRoots(result.path).then(setImportRoots).catch(() => setImportRoots([]));
+    void refreshHistory(result.path);
     setSelectedMediaId(result.project.media[0]?.id ?? null); setPlayhead(0);
-    past.current = []; future.current = []; setCanUndo(false); setCanRedo(false);
     setError(''); setNotice(`Opened ${result.project.name}`);
   }, []);
 
@@ -99,10 +107,9 @@ export default function App() {
     if (!project || !projectPath) return;
     try {
       setError('');
-      const before = structuredClone(project);
       const result = await operation();
       const next = update(result);
-      if (next) { past.current.push(before); future.current = []; setCanUndo(true); setCanRedo(false); setProject(next); }
+      if (next) { setProject(next); await refreshHistory(projectPath); }
       setNotice(label);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
@@ -119,7 +126,7 @@ export default function App() {
     if (!project) return;
     try {
       const { project: next, result } = await window.openmontage.importMedia(projectPath);
-      if (result.added.length) { past.current.push(structuredClone(project)); future.current = []; setCanUndo(true); setCanRedo(false); setProject(next); setSelectedMediaId(result.added[0].id); }
+      if (result.added.length) { setProject(next); setSelectedMediaId(result.added[0].id); await refreshHistory(projectPath); }
       setNotice(toastMessage(result));
       setImportRoots(await window.openmontage.getImportRoots(projectPath));
       if (result.errors.length) setError(result.errors.map((item) => `${item.path}: ${item.message}`).join('\n'));
@@ -141,19 +148,17 @@ export default function App() {
     await run(() => window.openmontage.addTrack(projectPath, kind), (next) => next, `Added ${kind} track`);
   }
   async function undo() {
-    if (!project || !projectPath || !past.current.length) return;
+    if (!project || !projectPath || !canUndo) return;
     try {
-      const previous = past.current.pop()!; future.current.push(structuredClone(project));
-      await window.openmontage.saveProject(projectPath, previous); setProject(previous);
-      setCanUndo(past.current.length > 0); setCanRedo(true); setNotice('Undo complete');
+      const previous = await window.openmontage.undoProject(projectPath); setProject(previous);
+      await refreshHistory(projectPath); setNotice('Undo complete');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
   async function redo() {
-    if (!project || !projectPath || !future.current.length) return;
+    if (!project || !projectPath || !canRedo) return;
     try {
-      const next = future.current.pop()!; past.current.push(structuredClone(project));
-      await window.openmontage.saveProject(projectPath, next); setProject(next);
-      setCanUndo(true); setCanRedo(future.current.length > 0); setNotice('Redo complete');
+      const next = await window.openmontage.redoProject(projectPath); setProject(next);
+      await refreshHistory(projectPath); setNotice('Redo complete');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
   async function exportVideo() {
@@ -217,7 +222,7 @@ export default function App() {
   }
   async function save() {
     if (!project) return;
-    try { await window.openmontage.saveProject(projectPath, project); setNotice('Project saved'); }
+    try { await window.openmontage.saveProject(projectPath, project); await refreshHistory(projectPath); setNotice('Project saved'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
 
@@ -308,10 +313,10 @@ export default function App() {
                 {project.tracks.slice().reverse().map((track) => <div key={track.id} className="track-row">
                   <div className="track-gutter"><div className={`track-type ${track.kind}`}><span>{track.kind === 'video' ? <Video size={14} /> : <AudioLines size={14} />}</span><div><strong>{track.name}</strong><small>{track.kind === 'video' ? 'VIDEO' : 'AUDIO'}</small></div></div><div className="track-controls"><button title="Mute track" className={track.muted ? 'muted' : ''} onClick={async () => {
                     const next = structuredClone(project); const target = next.tracks.find((item) => item.id === track.id)!; target.muted = !target.muted;
-                    try { past.current.push(structuredClone(project)); await window.openmontage.saveProject(projectPath, next); setProject(next); setCanUndo(true); setNotice(target.muted ? 'Track muted' : 'Track unmuted'); } catch (cause) { setError(String(cause)); }
+                    try { await window.openmontage.saveProject(projectPath, next); setProject(next); await refreshHistory(projectPath); setNotice(target.muted ? 'Track muted' : 'Track unmuted'); } catch (cause) { setError(String(cause)); }
                   }}>{track.kind === 'video' ? <EyeIcon muted={track.muted} /> : <Volume2 size={12} />}</button><button title="Lock track" onClick={async () => {
                     const next = structuredClone(project); const target = next.tracks.find((item) => item.id === track.id)!; target.locked = !target.locked;
-                    try { past.current.push(structuredClone(project)); await window.openmontage.saveProject(projectPath, next); setProject(next); setCanUndo(true); setNotice(target.locked ? 'Track locked' : 'Track unlocked'); } catch (cause) { setError(String(cause)); }
+                    try { await window.openmontage.saveProject(projectPath, next); setProject(next); await refreshHistory(projectPath); setNotice(target.locked ? 'Track locked' : 'Track unlocked'); } catch (cause) { setError(String(cause)); }
                   }}><span className={track.locked ? 'lock-active' : ''}>⌑</span></button></div></div>
                   <div className="track-lane" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                     event.preventDefault(); const clipId = event.dataTransfer.getData('text/clip-id'); if (!clipId) return;
@@ -353,7 +358,7 @@ export default function App() {
             const next = structuredClone(project); const track = getTrack(next, currentClip.clip.id)!; track.clips.find((item) => item.id === currentClip.clip.id)!.audioEnabled = !currentClip.clip.audioEnabled; await window.openmontage.saveProject(projectPath, next); return next;
           }, (next) => next as Project, currentClip.clip.audioEnabled ? 'Clip audio disabled' : 'Clip audio enabled')}><i /></button></div><NumberField label="Volume" unit="×" value={currentClip.clip.volume} min={0} max={8} step={0.05} onCommit={async (volume) => {
             const next = structuredClone(project); const track = getTrack(next, currentClip.clip.id)!; track.clips.find((item) => item.id === currentClip.clip.id)!.volume = volume;
-            try { past.current.push(structuredClone(project)); await window.openmontage.saveProject(projectPath, next); setProject(next); setCanUndo(true); setNotice('Clip volume updated'); } catch (cause) { setError(String(cause)); }
+            try { await window.openmontage.saveProject(projectPath, next); setProject(next); await refreshHistory(projectPath); setNotice('Clip volume updated'); } catch (cause) { setError(String(cause)); }
           }} /></section>
           <section className="inspector-section muted-section"><div className="section-label"><span>MORE CONTROLS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Sparkles size={14} /><span>Effects and keyframes</span><small>Planned</small></div><div className="disabled-row"><Activity size={14} /><span>Masking and tracking</span><small>Planned</small></div></section>
         </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}

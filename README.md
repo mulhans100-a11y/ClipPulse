@@ -7,12 +7,12 @@ This is an early Phase A/B/C build. The editor includes an initial local beat an
 ## Current capabilities
 
 - Electron + React + TypeScript desktop shell with isolated renderer context.
-- `.omproj` project files with versioned JSON, rational time values, autosaved edits, and a `.bak` previous project snapshot.
+- `.omproj` project files with versioned JSON, rational time values, autosaved edits, a `.bak` previous snapshot, and persistent 50-state undo/redo history.
 - Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, cached video thumbnails, and audio waveform images. Original media files are referenced and never modified.
 - A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names, and watches selected folders for new local clips.
 - Video and audio tracks; additional tracks can be added. Clips can be inserted, moved between tracks, trimmed, split, and removed.
 - Drag clip edges for frame-snapped source trimming while preserving the opposite edit point.
-- Preview of imported source video, timeline playhead, undo/redo for UI edits, and keyboard shortcuts for save/undo/redo/delete/playback.
+- Preview of imported source video, timeline playhead, persistent undo/redo, and keyboard shortcuts for save/undo/redo/delete/playback.
 - Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback.
 - FFmpeg MP4/H.264 + AAC rendering with video layer compositing, source audio mixing, output validation, and a CPU H.264 default. Hardware encoders can be selected by CLI.
 - A JSON-output CLI for project creation, media import/search/metadata, timeline operations, validation, frame extraction, and export.
@@ -76,7 +76,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 - Timeline composite preview is a still image rendered when the playhead moves; it does not play the edit in real time. Audio clips show a cached waveform image that stretches with the clip source range; zoom-aware waveform rendering, proxies, transitions, effect parity, and render queue are not implemented.
 - Rendering composites visible clips in track order over a black canvas. There is no color/effect pipeline or alpha-mask editor yet.
 - Media references are absolute file paths. Moving media requires re-importing or editing project JSON; relinking UI is not implemented. SQLite is a rebuildable cache adjacent to the project.
-- The auto-backup is a single `.bak` file and each timeline operation writes the project immediately.
+- The `.bak` auto-backup is a single snapshot. Undo/redo snapshots are stored in a project-adjacent `.openmontage-history-<id>` folder, capped at 50 states; each timeline operation writes the project immediately.
 - The Medal integration currently means authorized local-folder import only. No cloud API integration is claimed.
 - Beat analysis detects amplitude rises with onset autocorrelation; it does not identify downbeats, meter, harmonic content, or musical sections.
 - No GitHub remote is configured in this local checkout, so no public repository or release has been published.

@@ -18,7 +18,7 @@ Imported assets retain their absolute source path, basic FFprobe metadata, a SHA
 
 That cache also contains a SQLite index for import roots, media metadata, tags, favorites, and game names. When a file's path, size, and modification timestamp match an indexed record, re-import reuses its metadata without probing or hashing the file again. Changed files are hashed and exact duplicates are detected across paths. Folders explicitly selected for import are watched with a debounced local filesystem watcher; the media panel can pause or resume each root. The `.omproj` remains the project state and the SQLite index can be rebuilt.
 
-Edits are non-destructive: clips refer to media and record a timeline start, source in point, duration, and audio settings. Saving writes a temporary JSON file and renames it into place. Before replacement the previous project becomes `<project>.bak`.
+Edits are non-destructive: clips refer to media and record a timeline start, source in point, duration, and audio settings. Saving writes a temporary JSON file and renames it into place. Before replacement the previous project becomes `<project>.bak`; a project-adjacent history journal stores up to 50 complete states with a cursor for persistent undo/redo. Restoring a snapshot also synchronizes project media metadata in SQLite so tags and favorites follow undo/redo.
 
 ## Export path
 

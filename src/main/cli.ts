@@ -7,7 +7,7 @@ import { analyzeAudio } from '../core/audioAnalysis';
 import { renderTimelineFrame } from '../core/timelinePreview';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable, runCommand } from '../core/ffmpeg';
-import { addClip, addTrack, createProject, importMedia, loadProject, moveClip, projectCachePath, removeClip, searchMedia, splitClip, timelineDuration, trimClip, updateMediaMetadata, validateProject } from '../core/project';
+import { addClip, addTrack, createProject, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, removeClip, searchMedia, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, validateProject } from '../core/project';
 import { decimal, frameTime, parseDecimal, rational, toFrame } from '../core/time';
 
 interface ParsedArgs { command: string; flags: Map<string, string[]>; positional: string[]; }
@@ -40,6 +40,7 @@ function secondsFlag(args: ParsedArgs, key: string, fallback?: string) {
 function json(data: unknown): void { process.stdout.write(`${JSON.stringify({ ok: true, data }, null, 2)}\n`); }
 function help(): void {
   process.stdout.write(`OpenMontage AI CLI (Phase A/B/C)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]\n  analyze-audio --project FILE --media ID\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nAll successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
+  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]\n  analyze-audio --project FILE --media ID\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nAll successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
 }
 
 async function main(): Promise<void> {
@@ -56,6 +57,9 @@ async function main(): Promise<void> {
     json(project); return;
   }
   const file = one(args, 'project', true)!;
+  if (args.command === 'history') { json(await getProjectHistory(file)); return; }
+  if (args.command === 'undo') { json(await undoProject(file)); return; }
+  if (args.command === 'redo') { json(await redoProject(file)); return; }
   if (args.command === 'import') {
     if (!args.positional.length) throw new AppError('INVALID_ARGUMENTS', 'Provide one or more files or folders to import.');
     json(await importMedia(file, args.positional, !args.flags.has('no-recursive'))); return;

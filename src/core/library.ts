@@ -20,7 +20,7 @@ export class MediaLibrary {
     mkdirSync(path.dirname(databasePath), { recursive: true });
     try { this.db = new DatabaseSync(databasePath); }
     catch (error) { throw new AppError('LIBRARY_OPEN_FAILED', `Could not open media library database: ${error instanceof Error ? error.message : error}`); }
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;');
+    this.db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS media (
         id TEXT PRIMARY KEY,
@@ -78,24 +78,28 @@ export class MediaLibrary {
   }
 
   upsert(asset: MediaAsset): void {
-    const enriched = asset as LibraryAsset;
     this.db.exec('BEGIN');
     try {
-      this.db.prepare(`INSERT INTO media (id,path,path_key,name,kind,duration_num,duration_den,width,height,fps_num,fps_den,has_audio,size_bytes,modified_at,content_hash,thumbnail_path,imported_at,favorite,game)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET path=excluded.path,path_key=excluded.path_key,name=excluded.name,kind=excluded.kind,duration_num=excluded.duration_num,duration_den=excluded.duration_den,width=excluded.width,height=excluded.height,fps_num=excluded.fps_num,fps_den=excluded.fps_den,has_audio=excluded.has_audio,size_bytes=excluded.size_bytes,modified_at=excluded.modified_at,content_hash=excluded.content_hash,thumbnail_path=excluded.thumbnail_path,favorite=excluded.favorite,game=excluded.game`).run(
-        asset.id, asset.path, pathKey(asset.path), asset.name, asset.kind, asset.duration.num, asset.duration.den,
-        asset.width ?? null, asset.height ?? null, asset.frameRate?.num ?? null, asset.frameRate?.den ?? null,
-        asset.hasAudio ? 1 : 0, asset.sizeBytes, asset.modifiedAt, asset.contentHash, asset.thumbnailPath ?? null,
-        asset.importedAt, enriched.favorite ? 1 : 0, enriched.game ?? null
-      );
-      this.db.prepare('DELETE FROM media_tags WHERE media_id=?').run(asset.id);
-      const insertTag = this.db.prepare('INSERT OR IGNORE INTO media_tags(media_id,tag) VALUES (?,?)');
-      for (const tag of enriched.tags ?? []) insertTag.run(asset.id, tag);
+      this.writeAsset(asset);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw new AppError('LIBRARY_WRITE_FAILED', `Could not update media library: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  synchronizeAssets(assets: MediaAsset[]): void {
+    this.db.exec('BEGIN');
+    try {
+      const keep = new Set(assets.map((asset) => asset.id));
+      const existing = this.db.prepare('SELECT id FROM media').all() as Array<{ id: string }>;
+      const remove = this.db.prepare('DELETE FROM media WHERE id=?');
+      for (const row of existing) if (!keep.has(row.id)) remove.run(row.id);
+      for (const asset of assets) this.writeAsset(asset);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw new AppError('LIBRARY_SYNC_FAILED', `Could not synchronize the media library with project history: ${error instanceof Error ? error.message : error}`);
     }
   }
 
@@ -162,6 +166,21 @@ export class MediaLibrary {
   }
 
   close(): void { this.db.close(); }
+
+  private writeAsset(asset: MediaAsset): void {
+    const enriched = asset as LibraryAsset;
+    this.db.prepare(`INSERT INTO media (id,path,path_key,name,kind,duration_num,duration_den,width,height,fps_num,fps_den,has_audio,size_bytes,modified_at,content_hash,thumbnail_path,imported_at,favorite,game)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET path=excluded.path,path_key=excluded.path_key,name=excluded.name,kind=excluded.kind,duration_num=excluded.duration_num,duration_den=excluded.duration_den,width=excluded.width,height=excluded.height,fps_num=excluded.fps_num,fps_den=excluded.fps_den,has_audio=excluded.has_audio,size_bytes=excluded.size_bytes,modified_at=excluded.modified_at,content_hash=excluded.content_hash,thumbnail_path=excluded.thumbnail_path,favorite=excluded.favorite,game=excluded.game`).run(
+      asset.id, asset.path, pathKey(asset.path), asset.name, asset.kind, asset.duration.num, asset.duration.den,
+      asset.width ?? null, asset.height ?? null, asset.frameRate?.num ?? null, asset.frameRate?.den ?? null,
+      asset.hasAudio ? 1 : 0, asset.sizeBytes, asset.modifiedAt, asset.contentHash, asset.thumbnailPath ?? null,
+      asset.importedAt, enriched.favorite ? 1 : 0, enriched.game ?? null
+    );
+    this.db.prepare('DELETE FROM media_tags WHERE media_id=?').run(asset.id);
+    const insertTag = this.db.prepare('INSERT OR IGNORE INTO media_tags(media_id,tag) VALUES (?,?)');
+    for (const tag of enriched.tags ?? []) insertTag.run(asset.id, tag);
+  }
 }
 
 function pathKey(filePath: string): string { return path.resolve(filePath).replace(/\\/g, '/').toLocaleLowerCase(); }

@@ -14,7 +14,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Frame-snapped still composite preview at the timeline playhead, with video tracks layered in export order.
 - [x] Audio waveform images are created locally on import and shown on audio timeline clips.
 - [ ] Real-time timeline playback, zoom-aware waveform rendering, and preview/export effect parity.
-- [ ] Robust undo history persisted in project transactions; current UI history is session-only.
+- [x] Undo/redo persists up to 50 project states, survives reopen, and branches correctly after undo.
 - [x] Direct clip-edge drag handles with frame-snapped source and timeline trimming.
 - [ ] Windows installer validation on a clean machine and dependency diagnosis UI.
 
