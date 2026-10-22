@@ -3,6 +3,9 @@ import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, F
 import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, snapTimelineTime } from '../../core/timelineSnapping';
+import { mediaVirtualWindow } from './mediaVirtualization';
+
+const MEDIA_CARD_HEIGHT = 64;
 
 function secondsOf(value: { num: string; den: string }): number { return Number(value.num) / Number(value.den); }
 function formatTime(value: number): string {
@@ -49,6 +52,9 @@ export default function App() {
   const [canRedo, setCanRedo] = useState(false);
   const [filter, setFilter] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [mediaSort, setMediaSort] = useState<'recent' | 'name' | 'duration'>('recent');
+  const [mediaScrollTop, setMediaScrollTop] = useState(0);
+  const [mediaViewportHeight, setMediaViewportHeight] = useState(0);
   const [importRoots, setImportRoots] = useState<ImportRoot[]>([]);
   const [missingMediaIds, setMissingMediaIds] = useState<string[]>([]);
   const mediaRef = useRef<HTMLVideoElement>(null);
@@ -57,14 +63,23 @@ export default function App() {
   const missingRequest = useRef(0);
   const projectPathRef = useRef('');
   const timelineRef = useRef<HTMLDivElement>(null);
+  const mediaListRef = useRef<HTMLDivElement>(null);
   const currentClip = getClip(project, selectedClipId);
   const selectedMedia = project?.media.find((asset) => asset.id === selectedMediaId) ?? null;
   const activeMedia = currentClip ? project?.media.find((asset) => asset.id === currentClip.clip.mediaId) ?? null : selectedMedia;
   const duration = project ? Math.max(20, ...project.tracks.flatMap((track) => track.clips.map(clipEnd))) : 20;
-  const visibleMedia = useMemo(() => project?.media.filter((asset) => {
-    const matches = `${asset.name} ${asset.game ?? ''} ${(asset.tags ?? []).join(' ')}`.toLowerCase().includes(filter.toLowerCase());
-    return matches && (!favoriteOnly || asset.favorite);
-  }) ?? [], [project, filter, favoriteOnly]);
+  const visibleMedia = useMemo(() => {
+    const items = project?.media.filter((asset) => {
+      const matches = `${asset.name} ${asset.game ?? ''} ${(asset.tags ?? []).join(' ')}`.toLowerCase().includes(filter.toLowerCase());
+      return matches && (!favoriteOnly || asset.favorite);
+    }) ?? [];
+    return items.sort((a, b) => mediaSort === 'name'
+      ? a.name.localeCompare(b.name)
+      : mediaSort === 'duration'
+        ? secondsOf(b.duration) - secondsOf(a.duration)
+        : Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
+  }, [project, filter, favoriteOnly, mediaSort]);
+  const mediaWindow = mediaVirtualWindow(visibleMedia.length, mediaScrollTop, mediaViewportHeight, MEDIA_CARD_HEIGHT);
 
   async function refreshHistory(filePath: string) {
     const request = ++historyRequest.current;
@@ -83,6 +98,18 @@ export default function App() {
     if (!window.openmontage) { setError('Desktop bridge unavailable. Start the editor with npm run dev or npm start.'); return; }
     void window.openmontage.version().then((info) => setFfmpeg(info.ffmpeg && info.ffprobe)).catch((cause) => setError(String(cause)));
   }, []);
+  useEffect(() => {
+    const element = mediaListRef.current;
+    if (!element) return;
+    const measure = () => setMediaViewportHeight(element.clientHeight);
+    const observer = new ResizeObserver(measure);
+    observer.observe(element); measure();
+    return () => observer.disconnect();
+  }, [project?.id]);
+  useEffect(() => {
+    if (mediaListRef.current) mediaListRef.current.scrollTop = 0;
+    setMediaScrollTop(0);
+  }, [filter, favoriteOnly, mediaSort, project?.id]);
   useEffect(() => {
     if (!project || !projectPath || previewMode !== 'timeline') return;
     const requestId = ++previewRequest.current;
@@ -322,17 +349,19 @@ export default function App() {
       <aside className="media-panel panel">
         <div className="panel-heading"><div><span className="eyebrow">PROJECT</span><h2>Media</h2></div><button className="square-button" title="Import media" onClick={() => void importMedia()}><Import size={16} /></button></div>
         <div className="search-wrap"><span>⌕</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search media" /><kbd>⌘ K</kbd></div>
-        <div className="media-count"><span>{visibleMedia.length} / {project.media.length} ASSETS</span><div><button className={`favorite-filter ${favoriteOnly ? 'enabled' : ''}`} title="Show favorites only" onClick={() => setFavoriteOnly((value) => !value)}><Star size={12} fill={favoriteOnly ? 'currentColor' : 'none'} /></button><button className="text-action" onClick={() => void importMedia()}>+ Import</button></div></div>
+        <div className="media-count"><span>{visibleMedia.length} / {project.media.length} ASSETS</span><div><select className="media-sort" value={mediaSort} onChange={(event) => setMediaSort(event.target.value as typeof mediaSort)} aria-label="Sort media"><option value="recent">Recent</option><option value="name">Name</option><option value="duration">Longest</option></select><button className={`favorite-filter ${favoriteOnly ? "enabled" : ""}`} title="Show favorites only" onClick={() => setFavoriteOnly((value) => !value)}><Star size={12} fill={favoriteOnly ? "currentColor" : "none"} /></button></div></div>
         {importRoots.length > 0 && <details className="watch-folders"><summary><FolderSync size={12} /> {importRoots.filter((root) => root.watching).length} folder{importRoots.filter((root) => root.watching).length === 1 ? '' : 's'} watched <ChevronDown size={11} /></summary><div className="watch-root-list">{importRoots.map((root) => <div className="watch-root" key={root.path}><span title={root.path}>{root.path}</span><button className={`switch mini-switch ${root.watching ? 'on' : ''}`} title={root.watching ? 'Stop watching folder' : 'Watch folder for new clips'} onClick={async () => { try { setImportRoots(await window.openmontage.setImportRootWatching(projectPath, root.path, !root.watching)); setNotice(root.watching ? 'Folder watch paused' : 'Folder watch enabled'); } catch (cause) { setError(String(cause)); } }}><i /></button></div>)}</div></details>}
-        <div className="media-list">
+        <div ref={mediaListRef} className="media-list" onScroll={(event) => setMediaScrollTop(event.currentTarget.scrollTop)}>
           {visibleMedia.length === 0 && <div className="empty-small"><HardDrive size={22} /><span>No media imported</span><button onClick={() => void importMedia()}>Browse files</button></div>}
-          {visibleMedia.map((asset) => <button key={asset.id} className={`media-card ${selectedMediaId === asset.id ? 'selected' : ''} ${missingMediaIds.includes(asset.id) ? 'missing' : ''}`} onClick={() => { setSelectedMediaId(asset.id); setSelectedClipId(null); }} onDoubleClick={() => void addMediaToTimeline(asset)}>
+          {mediaWindow.topPadding > 0 && <div className="media-virtual-spacer" style={{ height: mediaWindow.topPadding }} aria-hidden="true" />}
+          {visibleMedia.slice(mediaWindow.start, mediaWindow.end).map((asset) => <button key={asset.id} className={`media-card ${selectedMediaId === asset.id ? 'selected' : ''} ${missingMediaIds.includes(asset.id) ? 'missing' : ''}`} onClick={() => { setSelectedMediaId(asset.id); setSelectedClipId(null); }} onDoubleClick={() => void addMediaToTimeline(asset)}>
             <div className="media-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <div className="audio-art"><Music2 size={20} /></div>}<span className="duration-pill">{formatTime(secondsOf(asset.duration))}</span></div>
             <div className="media-info"><strong title={asset.name}>{asset.name}</strong><span>{asset.kind === 'video' ? `${asset.width ?? '?'} × ${asset.height ?? '?'} · ${asset.frameRate ? `${Number(asset.frameRate.num) / Number(asset.frameRate.den)} fps` : 'Video'}` : 'Audio'}</span>{(asset.tags?.length || asset.game) && <small>{[asset.game, ...(asset.tags ?? [])].filter(Boolean).join(' · ')}</small>}</div>
             {asset.kind === 'video' ? <Film className="type-icon" size={14} /> : <AudioLines className="type-icon" size={14} />}
             {missingMediaIds.includes(asset.id) && <span className="missing-badge">MISSING</span>}
             <span className="favorite-control" onClick={(event) => { event.stopPropagation(); void run(() => window.openmontage.updateMediaMetadata(projectPath, asset.id, { favorite: !asset.favorite }), (next) => next, asset.favorite ? 'Removed from favorites' : 'Added to favorites'); }} title={asset.favorite ? 'Remove favorite' : 'Add to favorites'}><Star size={13} fill={asset.favorite ? 'currentColor' : 'none'} /></span>
           </button>)}
+          {mediaWindow.bottomPadding > 0 && <div className="media-virtual-spacer" style={{ height: mediaWindow.bottomPadding }} aria-hidden="true" />}
         </div>
         <div className="panel-footer"><span className={ffmpeg ? 'status-light good' : 'status-light'} />{ffmpeg ? 'FFmpeg connected' : 'FFmpeg unavailable'}<span className="footer-version">v0.1.0</span></div>
       </aside>

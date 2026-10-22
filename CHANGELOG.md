@@ -14,6 +14,7 @@
 - Added undoable project profile settings for resolution and frame rate, plus adjustable timeline zoom.
 - Added clip duplication and working mute, solo, and lock track controls in the editor and CLI.
 - Added beat ticks to analyzed audio clips and optional magnetic snapping to beats and clip edges.
+- Added media library sorting and virtualized card rendering for large collections.
 - Added a structured JSON CLI and first-pass local beat/transient analysis with BPM hypotheses.
 - Added generated-media integration tests, Windows CI, and Medal API/licensing research.
 - Automatic highlight detection, deeper music analysis, effects, compositing masks, REST, and MCP remain future work.

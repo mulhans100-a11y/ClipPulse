@@ -14,6 +14,7 @@ import { libraryDatabasePath } from '../src/core/library';
 import { watchFolder } from '../src/core/folderWatcher';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
 import { audioClipBeatOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
+import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
 import type { Project, TimelineClip } from '../src/core/types';
 
 const scratch: string[] = [];
@@ -41,6 +42,12 @@ test('timeline snap points include clip edges and analyzed beats within an audio
   assert.deepEqual(collectTimelineSnapPoints(project, { music: analysis }), [2, 2.5, 3, 3.5, 4]);
   assert.equal(snapTimelineTime(project, 3.53, 96, { music: analysis }), 3.5);
   assert.equal(snapTimelineTime(project, 3.8, 96, { music: analysis }), 3.8, 'snap only catches positions near a beat or clip edge');
+});
+
+test('media library virtual window bounds rendered rows and preserves total scroll height', () => {
+  assert.deepEqual(mediaVirtualWindow(1000, 6400, 640), { start: 95, end: 115, topPadding: 6080, bottomPadding: 56640 });
+  assert.deepEqual(mediaVirtualWindow(10, 100000, 640), { start: 0, end: 10, topPadding: 0, bottomPadding: 0 });
+  assert.deepEqual(mediaVirtualWindow(0, 0, 640), { start: 0, end: 0, topPadding: 0, bottomPadding: 0 });
 });
 
 test('project undo and redo survive reloads, skip no-op saves, and clear a redo branch after edits', async () => {
