@@ -27,6 +27,8 @@ export interface OpenMontageApi {
   splitClip(path: string, clipId: string, at: number): Promise<Project>;
   removeClip(path: string, clipId: string): Promise<Project>;
   renderTimelineFrame(path: string, time: number): Promise<{ frame: number; time: Rational; path: string }>;
+  renderTimelinePlayback(path: string): Promise<{ path: string; revision: string }>;
+  onTimelinePlaybackProgress(callback: (progress: number) => void): () => void;
   exportVideo(path: string): Promise<{ outputPath: string } | null>;
   onExportProgress(callback: (progress: number) => void): () => void;
   onMediaUpdated(callback: (result: { project: Project; result: ImportResult }) => void): () => void;

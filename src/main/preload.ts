@@ -43,6 +43,12 @@ const api: OpenMontageApi = {
   splitClip: (filePath, clipId, at) => ipcRenderer.invoke('timeline:splitClip', filePath, clipId, at),
   removeClip: (filePath, clipId) => ipcRenderer.invoke('timeline:removeClip', filePath, clipId),
   renderTimelineFrame: (filePath, time) => ipcRenderer.invoke('timeline:previewFrame', filePath, time),
+  renderTimelinePlayback: (filePath) => ipcRenderer.invoke('timeline:playbackPreview', filePath),
+  onTimelinePlaybackProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: number) => callback(progress);
+    ipcRenderer.on('timeline:playbackProgress', listener);
+    return () => ipcRenderer.removeListener('timeline:playbackProgress', listener);
+  },
   exportVideo: (filePath) => ipcRenderer.invoke('video:export', filePath),
   onExportProgress: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: number) => callback(progress);

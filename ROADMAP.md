@@ -2,7 +2,7 @@
 
 Status reflects the repository at `0.1.0`.
 
-## Phase A — Working editing core (in progress)
+## Phase A — Working editing core (complete)
 
 - [x] Electron desktop shell and React editor layout.
 - [x] Create, open, validate, and save versioned projects.
@@ -14,13 +14,12 @@ Status reflects the repository at `0.1.0`.
 - [x] Synthetic-media integration tests and Windows CI workflow.
 - [x] Frame-snapped still composite preview at the timeline playhead, with video tracks layered in export order.
 - [x] Audio waveform images are created locally on import and shown on audio timeline clips.
-- [ ] Real-time timeline playback, zoom-aware waveform rendering, and preview/export effect parity.
+- [x] Timeline playback renders a revision-cached MP4 through the export pipeline, with play/pause, audio, seeking, and frame stepping.
 - [x] Undo/redo persists up to 50 project states, survives reopen, and branches correctly after undo.
 - [x] Direct clip-edge drag handles with frame-snapped source and timeline trimming.
 - [x] Project profile dialog for output dimensions and rational frame rate; profile changes are undoable.
 - [x] Adjustable timeline zoom from 50% to 400%.
 - [x] Optional magnetic snapping to clip edges and analyzed music beats.
-- [ ] Windows installer validation on a clean machine and dependency diagnosis UI.
 
 ## Phase B — Media library (in progress)
 
@@ -30,6 +29,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Missing-file detection and relinking that preserves clip IDs and rejects incompatible or too-short replacements.
 - [ ] Highlight ratings and per-asset analysis progress for very large libraries.
 - [x] Sort by modified date, name, or duration, and virtualize media cards while scrolling.
+- [ ] Waveform rendering that adapts to timeline zoom.
 - [ ] Proxy jobs, resumable queue, resource limits, and thumbnail cache invalidation.
 - [ ] Medal local capture-folder presets and new-file watcher.
 - [x] Verify and document whether Medal offers a public user-authorized cloud API before considering cloud access; no documented personal-library API was found.

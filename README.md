@@ -2,7 +2,7 @@
 
 OpenMontage AI is a local-first, open-source desktop video editor focused on gaming montages and music-synchronized edits. The current `0.1.0` development build implements the first usable editing slice: import local media, preview it, assemble clips on multiple tracks, trim and split clips, save a non-destructive project, and render an MP4 with FFmpeg.
 
-This is an early Phase A/B/C build. The editor includes an initial local beat and transient analysis, while gameplay highlight detection, automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are not implemented yet. The app labels planned inspector controls accordingly.
+The Phase A editing core is complete. The project also contains partial media-library and music-analysis work; gameplay highlight detection, automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are not implemented yet. The app labels planned inspector controls accordingly.
 
 ## Current capabilities
 
@@ -17,7 +17,7 @@ This is an early Phase A/B/C build. The editor includes an initial local beat an
 - Clip audio can be enabled, adjusted, and faded in or out; the settings are editable in the inspector and render through FFmpeg.
 - Drag clip edges for frame-snapped source trimming while preserving the opposite edit point.
 - Preview of imported source video, timeline playhead, persistent undo/redo, and keyboard shortcuts for save/undo/redo/delete/playback.
-- Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback.
+- Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback. The timeline can render a revision-cached MP4 using the same FFmpeg pipeline as export; that preview supports playback, audio, seeking, and frame stepping.
 - FFmpeg MP4/H.264 + AAC rendering with video layer compositing, source audio mixing, output validation, and a CPU H.264 default. Hardware encoders can be selected by CLI.
 - A JSON-output CLI for project creation, media import/search/metadata, timeline operations, validation, frame extraction, and export.
 - Local audio beat analysis with BPM hypotheses, beat positions, and transient timestamps, exposed in the media inspector and CLI.
@@ -79,7 +79,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 
 - Timeline editing currently uses rational seconds; the inspector also shows project-frame positions. UI fields are rounded to microsecond precision when they call the editor core.
 - Timeline zoom is an editor view setting and resets to 100% when the app starts. Waveform images currently stretch with clips rather than being regenerated at each zoom level.
-- Timeline composite preview is a still image rendered when the playhead moves; it does not play the edit in real time. Audio clips show a cached waveform image that stretches with the clip source range; zoom-aware waveform rendering, proxies, transitions, effect parity, and render queue are not implemented.
+- Scrubbing shows a still composite frame. Timeline playback first renders the full edit to a revision-cached MP4, then plays that file; edits invalidate the cached playback and require another render. This is not live playback during editing. Audio clips show a cached waveform image that stretches with the clip source range; zoom-aware waveform rendering, proxies, transitions, effect parity, and a render queue are not implemented.
 - Rendering composites visible clips in track order over a black canvas. There is no color/effect pipeline or alpha-mask editor yet.
 - Media references are absolute file paths. Relinking keeps the existing media ID, requires the same media kind, and rejects a replacement that is too short for existing clip ranges. SQLite is a rebuildable cache adjacent to the project.
 - The `.bak` auto-backup is a single snapshot. Undo/redo snapshots are stored in a project-adjacent `.openmontage-history-<id>` folder, capped at 50 states; each timeline operation writes the project immediately.

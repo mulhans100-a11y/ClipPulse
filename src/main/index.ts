@@ -34,6 +34,19 @@ async function pruneTimelinePreviews(directory: string, keepPath: string): Promi
   await Promise.all(ranked.filter((file) => !keep.has(file.fullPath)).map((file) => fs.rm(file.fullPath, { force: true })));
 }
 
+async function pruneTimelinePlaybacks(directory: string, keepPath: string): Promise<void> {
+  const files = await fs.readdir(directory).catch(() => [] as string[]);
+  const ranked = await Promise.all(files.filter((file) => file.endsWith('.mp4')).map(async (file) => {
+    const fullPath = path.join(directory, file);
+    try { return { fullPath, modified: (await fs.stat(fullPath)).mtimeMs }; }
+    catch { return { fullPath, modified: 0 }; }
+  }));
+  if (ranked.length <= 4) return;
+  ranked.sort((a, b) => b.modified - a.modified);
+  const keep = new Set([keepPath, ...ranked.slice(0, 4).map((file) => file.fullPath)]);
+  await Promise.all(ranked.filter((file) => !keep.has(file.fullPath)).map((file) => fs.rm(file.fullPath, { force: true }).catch(() => undefined)));
+}
+
 async function withProjectLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
   const key = path.resolve(filePath).toLocaleLowerCase();
   const previous = projectLocks.get(key) ?? Promise.resolve();
@@ -196,6 +209,21 @@ ipcMain.handle('timeline:previewFrame', (_event, filePath: string, requestedTime
     if (count % 40 === 0) await pruneTimelinePreviews(path.dirname(outputPath), outputPath);
   }
   return { frame, time, path: outputPath };
+}));
+ipcMain.handle('timeline:playbackPreview', (_event, filePath: string) => withProjectLock(filePath, async () => {
+  const project = await loadProject(filePath);
+  const revision = createHash('sha256').update(JSON.stringify(project)).digest('hex').slice(0, 24);
+  const outputPath = path.join(projectCachePath(filePath, project.id), 'timeline-playback', `${revision}.mp4`);
+  if (!(await fileExists(outputPath))) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await exportVideo(project, {
+      outputPath,
+      overwrite: true,
+      onProgress: (progress) => mainWindow?.webContents.send('timeline:playbackProgress', progress)
+    });
+  }
+  await pruneTimelinePlaybacks(path.dirname(outputPath), outputPath);
+  return { path: outputPath, revision: project.updatedAt };
 }));
 ipcMain.handle('video:export', async (_event, filePath: string) => {
   const response = await dialog.showSaveDialog(mainWindow!, { title: 'Export video', defaultPath: 'Montage.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });

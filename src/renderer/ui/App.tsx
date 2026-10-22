@@ -43,6 +43,10 @@ export default function App() {
   const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
   const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
   const [timelinePreviewBusy, setTimelinePreviewBusy] = useState(false);
+  const [timelinePlayback, setTimelinePlayback] = useState<{ path: string; revision: string } | null>(null);
+  const [timelinePlaybackBusy, setTimelinePlaybackBusy] = useState(false);
+  const [timelinePlaybackProgress, setTimelinePlaybackProgress] = useState<number | null>(null);
+  const [timelinePlaying, setTimelinePlaying] = useState(false);
   const [trimDraft, setTrimDraft] = useState<{ clipId: string; start: number; sourceIn: number; duration: number } | null>(null);
   const [notice, setNotice] = useState('Ready');
   const [error, setError] = useState('');
@@ -58,6 +62,9 @@ export default function App() {
   const [importRoots, setImportRoots] = useState<ImportRoot[]>([]);
   const [missingMediaIds, setMissingMediaIds] = useState<string[]>([]);
   const mediaRef = useRef<HTMLVideoElement>(null);
+  const timelinePlaybackRef = useRef<HTMLVideoElement>(null);
+  const timelinePlaybackStart = useRef(0);
+  const autoplayTimelinePlayback = useRef(false);
   const previewRequest = useRef(0);
   const historyRequest = useRef(0);
   const missingRequest = useRef(0);
@@ -67,6 +74,7 @@ export default function App() {
   const currentClip = getClip(project, selectedClipId);
   const selectedMedia = project?.media.find((asset) => asset.id === selectedMediaId) ?? null;
   const activeMedia = currentClip ? project?.media.find((asset) => asset.id === currentClip.clip.mediaId) ?? null : selectedMedia;
+  const currentTimelinePlayback = project && timelinePlayback?.revision === project.updatedAt ? timelinePlayback : null;
   const duration = project ? Math.max(20, ...project.tracks.flatMap((track) => track.clips.map(clipEnd))) : 20;
   const visibleMedia = useMemo(() => {
     const items = project?.media.filter((asset) => {
@@ -112,6 +120,7 @@ export default function App() {
   }, [filter, favoriteOnly, mediaSort, project?.id]);
   useEffect(() => {
     if (!project || !projectPath || previewMode !== 'timeline') return;
+    if (timelinePlayback && timelinePlayback.revision === project.updatedAt) return;
     const requestId = ++previewRequest.current;
     const timer = setTimeout(() => {
       setTimelinePreviewBusy(true);
@@ -124,7 +133,22 @@ export default function App() {
       });
     }, 180);
     return () => { clearTimeout(timer); previewRequest.current++; };
-  }, [project, projectPath, playhead, previewMode]);
+  }, [project, projectPath, playhead, previewMode, timelinePlayback]);
+  useEffect(() => {
+    const removeProgress = window.openmontage?.onTimelinePlaybackProgress((progress) => setTimelinePlaybackProgress(progress));
+    return () => removeProgress?.();
+  }, []);
+  useEffect(() => {
+    const video = timelinePlaybackRef.current;
+    if (!currentTimelinePlayback || previewMode !== 'timeline' || timelinePlaying || !video || video.readyState === 0) return;
+    const target = Math.min(playhead, Number.isFinite(video.duration) ? video.duration : playhead);
+    if (Math.abs(video.currentTime - target) > 0.02) video.currentTime = target;
+  }, [playhead, currentTimelinePlayback, previewMode, timelinePlaying]);
+  useEffect(() => {
+    if (currentTimelinePlayback && previewMode === 'timeline') return;
+    timelinePlaybackRef.current?.pause();
+    setTimelinePlaying(false);
+  }, [currentTimelinePlayback, previewMode]);
   useEffect(() => {
     const removeProgress = window.openmontage?.onExportProgress((progress) => setExportProgress(progress));
     const removeMediaUpdate = window.openmontage?.onMediaUpdated(({ project: next, result }) => {
@@ -216,6 +240,43 @@ export default function App() {
       if (result) { setNotice(`Export complete · ${result.outputPath}`); await window.openmontage.reveal(result.outputPath); }
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setExportProgress(null); }
+  }
+  async function togglePlayback() {
+    if (previewMode === 'source') {
+      const video = mediaRef.current;
+      if (video) video.paused ? void video.play() : video.pause();
+      return;
+    }
+    const video = timelinePlaybackRef.current;
+    if (video && !video.paused) { video.pause(); return; }
+    if (currentTimelinePlayback && video) {
+      video.currentTime = Math.min(playhead, Number.isFinite(video.duration) ? video.duration : playhead);
+      void video.play().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+      return;
+    }
+    if (!project || !projectPath || timelinePlaybackBusy) return;
+    try {
+      setError(''); setTimelinePlaybackBusy(true); setTimelinePlaybackProgress(0); setNotice('Rendering timeline playback…');
+      const result = await window.openmontage.renderTimelinePlayback(projectPath);
+      timelinePlaybackStart.current = playhead;
+      autoplayTimelinePlayback.current = true;
+      setTimelinePlayback(result);
+      setNotice('Timeline preview rendered');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setTimelinePlaybackBusy(false); setTimelinePlaybackProgress(null);
+    }
+  }
+  function seekTo(time: number) {
+    const video = timelinePlaybackRef.current;
+    const target = previewMode === 'timeline' && currentTimelinePlayback && video && Number.isFinite(video.duration)
+      ? Math.max(0, Math.min(time, video.duration))
+      : time;
+    setPlayhead(target);
+    if (previewMode === 'timeline' && currentTimelinePlayback && video) {
+      video.currentTime = target;
+    }
   }
   async function splitSelected() {
     if (!project || !currentClip) return;
@@ -310,7 +371,7 @@ export default function App() {
       else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void openProject(); }
       else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); void createProject(); }
       else if (event.key === 'Delete' && currentClip) { event.preventDefault(); void removeSelected(); }
-      else if (event.code === 'Space' && previewMode === 'source' && mediaRef.current && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); mediaRef.current.paused ? void mediaRef.current.play() : mediaRef.current.pause(); }
+      else if (event.code === 'Space' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') { event.preventDefault(); void togglePlayback(); }
     }
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
   });
@@ -319,7 +380,7 @@ export default function App() {
     const rect = event.currentTarget.getBoundingClientRect();
     const rawAt = Math.max(0, (event.clientX - rect.left) / timelineScale);
     const at = snapEnabled && project ? snapTimelineTime(project, rawAt, timelineScale, audioAnalyses) : rawAt;
-    setPlayhead(at);
+    seekTo(at);
     if (selectedMedia) void addMediaToTimeline(selectedMedia, at, track.id);
   }
 
@@ -374,7 +435,14 @@ export default function App() {
         <section className="monitor panel">
           <div className="monitor-toolbar"><div className="monitor-tabs"><button className={previewMode === 'timeline' ? 'active-tab' : ''} onClick={() => setPreviewMode('timeline')}><Layers2 size={14} /> Timeline</button><button className={previewMode === 'source' ? 'active-tab' : ''} onClick={() => setPreviewMode('source')}><Video size={14} /> Source</button></div><div className="monitor-meta"><span>{project.width} × {project.height}</span><span>{Number(project.frameRate.num) / Number(project.frameRate.den)} FPS</span><button className="square-button small-square" onClick={() => setShowProjectSettings(true)} title="Project settings"><Settings2 size={14} /></button></div></div>
           <div className="monitor-stage">
-            {previewMode === 'timeline' ? <>{timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{timelinePreviewBusy && <span className="preview-busy">Rendering frame…</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={activeMedia.id} src={window.openmontage.toFileUrl(activeMedia.path)} controls onTimeUpdate={(event) => {
+            {previewMode === 'timeline' ? <>{currentTimelinePlayback ? <video ref={timelinePlaybackRef} key={currentTimelinePlayback.path} src={window.openmontage.toFileUrl(currentTimelinePlayback.path)} onLoadedMetadata={(event) => {
+                const video = event.currentTarget;
+                video.currentTime = Math.min(timelinePlaybackStart.current, video.duration || timelinePlaybackStart.current);
+                if (autoplayTimelinePlayback.current) {
+                  autoplayTimelinePlayback.current = false;
+                  void video.play().catch(() => setNotice('Preview rendered — press Play to start'));
+                }
+              }} onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)} onPlay={() => setTimelinePlaying(true)} onPause={() => setTimelinePlaying(false)} onEnded={(event) => { setTimelinePlaying(false); setPlayhead(event.currentTarget.duration); }} /> : timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{(timelinePlaybackBusy || timelinePreviewBusy) && <span className="preview-busy">{timelinePlaybackBusy ? `Rendering playback${timelinePlaybackProgress === null ? '…' : ` ${Math.round(timelinePlaybackProgress * 100)}%`}` : 'Rendering frame…'}</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={activeMedia.id} src={window.openmontage.toFileUrl(activeMedia.path)} controls onTimeUpdate={(event) => {
               const videoTime = event.currentTarget.currentTime;
               if (currentClip) setPlayhead(secondsOf(currentClip.clip.start) + Math.max(0, videoTime - secondsOf(currentClip.clip.sourceIn)));
               else setPlayhead(videoTime);
@@ -382,7 +450,7 @@ export default function App() {
               if (currentClip) { event.currentTarget.currentTime = secondsOf(currentClip.clip.sourceIn) + Math.max(0, playhead - secondsOf(currentClip.clip.start)); }
             }} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon">{activeMedia ? <Music2 size={32} /> : <Clapperboard size={38} />}</div><strong>{activeMedia ? activeMedia.name : 'Source monitor'}</strong><span>{activeMedia ? 'Audio asset selected' : 'Select a clip or import footage to begin'}</span><div className="playhead-time">{formatTime(playhead)}</div></div>}
           </div>
-          <div className="monitor-bottom"><div className="transport"><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime = Math.max(0, mediaRef.current.currentTime - step); else setPlayhead((value) => Math.max(0, value - step)); }} title="Previous frame"><span>◀|</span></button><button className="play-button" disabled={previewMode !== 'source' || activeMedia?.kind !== 'video'} title={previewMode === 'source' ? 'Play source video' : 'Switch to Source to play video'} onClick={() => { if (mediaRef.current) mediaRef.current.paused ? void mediaRef.current.play() : mediaRef.current.pause(); }}>{mediaRef.current?.paused === false ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}</button><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime += step; else setPlayhead((value) => Math.min(duration, value + step)); }} title="Next frame"><span>|▶</span></button></div><div className="time-readout">{formatTime(playhead)} <span>/ {formatTime(duration)}</span></div><div className="monitor-right"><Volume2 size={15} /><span>Fit</span><ChevronDown size={13} /></div></div>
+          <div className="monitor-bottom"><div className="transport"><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime = Math.max(0, mediaRef.current.currentTime - step); else seekTo(Math.max(0, playhead - step)); }} title="Previous frame"><span>◀|</span></button><button className="play-button" disabled={!ffmpeg || timelinePlaybackBusy || (previewMode === 'timeline' && !project.tracks.some((track) => track.clips.length > 0)) || (previewMode === 'source' && activeMedia?.kind !== 'video')} title={previewMode === 'timeline' ? (timelinePlaying ? 'Pause timeline' : 'Render and play timeline') : 'Play source video'} onClick={() => void togglePlayback()}>{timelinePlaying || (previewMode === 'source' && mediaRef.current?.paused === false) ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}</button><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime += step; else seekTo(Math.min(duration, playhead + step)); }} title="Next frame"><span>|▶</span></button></div><div className="time-readout">{formatTime(playhead)} <span>/ {formatTime(duration)}</span></div><div className="monitor-right"><Volume2 size={15} /><span>Fit</span><ChevronDown size={13} /></div></div>
         </section>
 
         <section className="timeline-panel panel">
