@@ -6,6 +6,7 @@ import { runCommand } from './ffmpeg';
 import { newId } from './ids';
 import { libraryDatabasePath, MediaLibrary, type LibraryAsset } from './library';
 import { add, clampNonNegative, compare, decimal, parseDecimal, rational } from './time';
+import { waveformWidthForDuration } from './waveform';
 import type { ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from './types';
 
 const VIDEO_EXT = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.mts', '.m2ts', '.wmv', '.flv']);
@@ -324,9 +325,10 @@ export async function importMedia(filePath: string, inputPaths: string[], recurs
         const thumb = path.join(thumbDir, `${asset.id}.jpg`);
         await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', decimal(rational(BigInt(asset.duration.num), BigInt(asset.duration.den) * 2n)), '-i', mediaPath, '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', thumb]);
         asset.thumbnailPath = thumb;
-      } else if (asset.kind === 'audio' && (!asset.thumbnailPath || !(await fileExists(asset.thumbnailPath)))) {
-        const waveform = path.join(thumbDir, `${asset.id}-waveform.png`);
-        await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', mediaPath, '-filter_complex', '[0:a:0]aformat=channel_layouts=mono,showwavespic=s=640x144:colors=0xa6e85f:scale=lin[wave]', '-map', '[wave]', '-frames:v', '1', '-update', '1', waveform]);
+      } else if (asset.kind === 'audio' && (!asset.thumbnailPath?.endsWith('-waveform-zoom.png') || !(await fileExists(asset.thumbnailPath)))) {
+        const waveform = path.join(thumbDir, `${asset.id}-waveform-zoom.png`);
+        const width = waveformWidthForDuration(Number(asset.duration.num) / Number(asset.duration.den));
+        await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', mediaPath, '-filter_complex', `[0:a:0]aformat=channel_layouts=mono,showwavespic=s=${width}x144:colors=0xa6e85f:scale=lin[wave]`, '-map', '[wave]', '-frames:v', '1', '-update', '1', waveform]);
         asset.thumbnailPath = waveform;
       }
       const existingProjectAsset = project.media.find((item) => item.id === asset!.id);
@@ -401,9 +403,10 @@ export async function relinkMedia(filePath: string, mediaId: string, replacement
       await fs.rename(tempThumbnail, thumbnail);
       asset.thumbnailPath = thumbnail;
     } else {
-      const waveform = path.join(thumbDir, `${asset.id}-waveform.png`);
+      const waveform = path.join(thumbDir, `${asset.id}-waveform-zoom.png`);
       const tempWaveform = path.join(thumbDir, `${asset.id}.${newId()}.tmp.png`);
-      await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', target, '-filter_complex', '[0:a:0]aformat=channel_layouts=mono,showwavespic=s=640x144:colors=0xa6e85f:scale=lin[wave]', '-map', '[wave]', '-frames:v', '1', '-update', '1', tempWaveform]);
+      const width = waveformWidthForDuration(Number(asset.duration.num) / Number(asset.duration.den));
+      await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', target, '-filter_complex', `[0:a:0]aformat=channel_layouts=mono,showwavespic=s=${width}x144:colors=0xa6e85f:scale=lin[wave]`, '-map', '[wave]', '-frames:v', '1', '-update', '1', tempWaveform]);
       await fs.rename(tempWaveform, waveform);
       asset.thumbnailPath = waveform;
     }

@@ -30,7 +30,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Manual 0–5 highlight ratings, persisted in project and SQLite, editable in the inspector and CLI, with a top-rated sort.
 - [x] Per-asset audio-analysis state (not analyzed, running, ready, failed) in virtualized media cards, with ready state validated against the source file's size and modification time.
 - [x] Sort by modified date, name, or duration, and virtualize media cards while scrolling.
-- [ ] Waveform rendering that adapts to timeline zoom.
+- [ ] Per-clip waveform rendering that regenerates for timeline zoom (current source-wide waveform cache scales with duration for sharper display through 400% zoom, capped at 16,384 px).
 - [ ] Proxy jobs, resumable queue, resource limits, and thumbnail cache invalidation.
 - [x] Medal capture-folder preset detection on Windows, custom-folder fallback, recursive import, and new-file watcher registration.
 - [x] Verify and document whether Medal offers a public user-authorized cloud API before considering cloud access; no documented personal-library API was found.

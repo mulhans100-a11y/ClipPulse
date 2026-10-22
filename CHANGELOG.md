@@ -7,6 +7,7 @@
 - Added a SQLite media index with folder watches, search, tags, favorites, game labels, and local capture-folder import.
 - Added persistent 0–5 highlight ratings, inspector controls, CLI updates, and top-rated library sorting.
 - Added per-asset audio-analysis status in the virtualized media list, restored from source-validated cache files.
+- Increased cached audio waveform resolution to support sharper timeline display across the 50–400% zoom range, with a bounded image width.
 - Added timeline track/clip operations and FFmpeg H.264/AAC export.
 - Added a frame-snapped composite timeline preview with track-order overlays and a separate source playback monitor.
 - Added cached FFmpeg waveform images for imported audio files and timeline clips.

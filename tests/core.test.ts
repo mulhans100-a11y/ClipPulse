@@ -14,6 +14,7 @@ import { runCommand } from '../src/core/ffmpeg';
 import { libraryDatabasePath, MediaLibrary } from '../src/core/library';
 import { watchFolder } from '../src/core/folderWatcher';
 import { medalCaptureFolderPreset } from '../src/core/medal';
+import { waveformWidthForDuration } from '../src/core/waveform';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
 import { audioClipBeatOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
 import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
@@ -36,6 +37,13 @@ test('Medal capture preset follows the Windows system drive and stays opt-in els
   assert.equal(medalCaptureFolderPreset('win32', 'D:'), 'D:\\Medal');
   assert.equal(medalCaptureFolderPreset('win32', undefined), 'C:\\Medal');
   assert.equal(medalCaptureFolderPreset('linux', undefined), null);
+});
+
+test('waveform cache sizing covers short sources and caps large source images', () => {
+  assert.equal(waveformWidthForDuration(1), 640);
+  assert.equal(waveformWidthForDuration(8), 3072);
+  assert.equal(waveformWidthForDuration(120), 16_384);
+  assert.equal(waveformWidthForDuration(Number.NaN), 640);
 });
 
 test('media library upgrades a v1 database and preserves the default unranked score', () => {
@@ -424,6 +432,7 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   const musicAsset = imported.data.added.find((asset: any) => asset.kind === 'audio');
   assert.ok(musicAsset.thumbnailPath, 'audio import includes a cached waveform image');
   assert.ok((await stat(musicAsset.thumbnailPath)).size > 100);
+  assert.equal((await readFile(musicAsset.thumbnailPath)).readUInt32BE(16), waveformWidthForDuration(Number(musicAsset.duration.num) / Number(musicAsset.duration.den)), 'waveform cache resolution follows source duration and the editor zoom range');
   const analysis = await invoke('analyze-audio', '--project', projectPath, '--media', musicAsset.id);
   assert.ok(Math.abs(analysis.data.estimatedBpm - 120) <= 4);
   assert.ok(analysis.data.beats.length > 0);
