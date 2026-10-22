@@ -10,6 +10,7 @@ import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
 import { frameTime } from '../core/time';
 import { watchFolder } from '../core/folderWatcher';
+import { medalCaptureFolderPreset } from '../core/medal';
 import { renderTimelineFrame } from '../core/timelinePreview';
 import type { Project, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
@@ -158,6 +159,26 @@ ipcMain.handle('media:import', async (_event, filePath: string) => {
   const result = await withProjectLock(filePath, () => importMedia(filePath, response.filePaths, true));
   await activateFolderWatchers(filePath);
   return { project: await loadProject(filePath), result };
+});
+ipcMain.handle('media:importMedalFolder', async (_event, filePath: string) => {
+  const preset = medalCaptureFolderPreset();
+  let captureFolder: string | null = null;
+  if (preset) {
+    try { if ((await fs.stat(preset)).isDirectory()) captureFolder = preset; }
+    catch { /* The user may have changed Medal's capture location. */ }
+  }
+  if (!captureFolder) {
+    const response = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Select Medal capture folder',
+      defaultPath: preset ? path.dirname(preset) : undefined,
+      properties: ['openDirectory']
+    });
+    if (response.canceled || !response.filePaths[0]) return null;
+    captureFolder = response.filePaths[0];
+  }
+  const result = await withProjectLock(filePath, () => importMedia(filePath, [captureFolder!], true));
+  await activateFolderWatchers(filePath);
+  return { project: await loadProject(filePath), result, captureFolder };
 });
 ipcMain.handle('media:findMissing', (_event, filePath: string) => findMissingMedia(filePath));
 ipcMain.handle('media:relink', async (_event, filePath: string, mediaId: string) => {

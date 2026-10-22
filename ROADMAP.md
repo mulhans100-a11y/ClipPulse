@@ -31,7 +31,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Sort by modified date, name, or duration, and virtualize media cards while scrolling.
 - [ ] Waveform rendering that adapts to timeline zoom.
 - [ ] Proxy jobs, resumable queue, resource limits, and thumbnail cache invalidation.
-- [ ] Medal local capture-folder presets and new-file watcher.
+- [x] Medal capture-folder preset detection on Windows, custom-folder fallback, recursive import, and new-file watcher registration.
 - [x] Verify and document whether Medal offers a public user-authorized cloud API before considering cloud access; no documented personal-library API was found.
 
 ## Phase C — Music and highlight analysis

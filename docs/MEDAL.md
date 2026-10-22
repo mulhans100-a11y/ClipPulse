@@ -6,6 +6,14 @@ OpenMontage imports files and recursively scans a user-selected local folder. It
 
 There is no Medal account login, private-cloud download, or web scraping in this build.
 
+## Capture-folder shortcut
+
+The Medal button in the media panel checks `<system drive>:\Medal`, matching Medal's documented Windows default (their support article gives `C:\Medal` as an example). If that folder is missing, OpenMontage opens a folder picker so the user can select a custom location configured in Medal. On other platforms, the user selects the local capture folder directly.
+
+The selected folder is recursively imported and registered with OpenMontage's existing recursive watcher. New supported media files are then indexed and added when the watcher detects changes. OpenMontage does not read Medal's private database or modify the capture files.
+
+Source: [Medal Support — Managing PC Storage](https://support.medal.tv/support/solutions/articles/48001275457/)
+
 ## Public API findings
 
 Medal's official API terms describe displaying selected user-generated content that users have shared publicly on Medal through a third-party service. The official Medal developer portal documentation we found is for game developers who create auto-clipping events and trigger Medal's desktop app to save a local player's gameplay around those events. This does not document an account API for browsing and downloading that user's private cloud library.

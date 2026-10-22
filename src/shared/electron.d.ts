@@ -10,6 +10,7 @@ export interface OpenMontageApi {
   undoProject(path: string): Promise<Project>;
   redoProject(path: string): Promise<Project>;
   importMedia(path: string): Promise<{ project: Project; result: ImportResult }>;
+  importMedalFolder(path: string): Promise<{ project: Project; result: ImportResult; captureFolder: string } | null>;
   findMissingMedia(path: string): Promise<string[]>;
   relinkMedia(path: string, mediaId: string): Promise<Project | null>;
   updateMediaMetadata(path: string, mediaId: string, patch: { favorite?: boolean; tags?: string[]; game?: string | null }): Promise<Project>;

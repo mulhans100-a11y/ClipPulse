@@ -26,6 +26,7 @@ const api: OpenMontageApi = {
   undoProject: (filePath) => ipcRenderer.invoke('project:undo', filePath),
   redoProject: (filePath) => ipcRenderer.invoke('project:redo', filePath),
   importMedia: (filePath) => ipcRenderer.invoke('media:import', filePath),
+  importMedalFolder: (filePath) => ipcRenderer.invoke('media:importMedalFolder', filePath),
   findMissingMedia: (filePath) => ipcRenderer.invoke('media:findMissing', filePath),
   relinkMedia: (filePath, mediaId) => ipcRenderer.invoke('media:relink', filePath, mediaId),
   updateMediaMetadata: (filePath, mediaId, patch) => ipcRenderer.invoke('media:updateMetadata', filePath, mediaId, patch),

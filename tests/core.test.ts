@@ -12,6 +12,7 @@ import { exportVideo } from '../src/core/export';
 import { runCommand } from '../src/core/ffmpeg';
 import { libraryDatabasePath } from '../src/core/library';
 import { watchFolder } from '../src/core/folderWatcher';
+import { medalCaptureFolderPreset } from '../src/core/medal';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
 import { audioClipBeatOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
 import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
@@ -28,6 +29,12 @@ test('rational time arithmetic stays exact across non-integer frame rates', () =
   assert.deepEqual(parseDecimal('5/2'), { num: '5', den: '2' });
   assert.equal(decimal(parseDecimal('12.500000')), '12.5');
   assert.equal(compare(rational(1, 3), rational(2, 5)), -1);
+});
+
+test('Medal capture preset follows the Windows system drive and stays opt-in elsewhere', () => {
+  assert.equal(medalCaptureFolderPreset('win32', 'D:'), 'D:\\Medal');
+  assert.equal(medalCaptureFolderPreset('win32', undefined), 'C:\\Medal');
+  assert.equal(medalCaptureFolderPreset('linux', undefined), null);
 });
 
 test('timeline snap points include clip edges and analyzed beats within an audio source range', () => {

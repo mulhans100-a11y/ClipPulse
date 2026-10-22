@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
+import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
 import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, snapTimelineTime } from '../../core/timelineSnapping';
@@ -199,6 +199,21 @@ export default function App() {
       setImportRoots(await window.openmontage.getImportRoots(projectPath));
       await refreshMissingMedia(projectPath);
       if (result.errors.length) setError(result.errors.map((item) => `${item.path}: ${item.message}`).join('\n'));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+  async function importMedalFolder() {
+    if (!project) return;
+    try {
+      const imported = await window.openmontage.importMedalFolder(projectPath);
+      if (!imported) return;
+      if (imported.result.added.length) {
+        setProject(imported.project); setSelectedMediaId(imported.result.added[0].id);
+        await refreshHistory(projectPath);
+      }
+      setImportRoots(await window.openmontage.getImportRoots(projectPath));
+      await refreshMissingMedia(projectPath);
+      setNotice(`Medal captures · ${toastMessage(imported.result)}`);
+      if (imported.result.errors.length) setError(imported.result.errors.map((item) => `${item.path}: ${item.message}`).join('\n'));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
   async function addMediaToTimeline(asset: MediaAsset, start = 0, trackOverride?: string) {
@@ -412,7 +427,7 @@ export default function App() {
 
     <div className="workspace">
       <aside className="media-panel panel">
-        <div className="panel-heading"><div><span className="eyebrow">PROJECT</span><h2>Media</h2></div><button className="square-button" title="Import media" onClick={() => void importMedia()}><Import size={16} /></button></div>
+        <div className="panel-heading"><div><span className="eyebrow">PROJECT</span><h2>Media</h2></div><div className="panel-actions"><button className="square-button" title="Import Medal capture folder" onClick={() => void importMedalFolder()}><Medal size={16} /></button><button className="square-button" title="Import media" onClick={() => void importMedia()}><Import size={16} /></button></div></div>
         <div className="search-wrap"><span>⌕</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search media" /><kbd>⌘ K</kbd></div>
         <div className="media-count"><span>{visibleMedia.length} / {project.media.length} ASSETS</span><div><select className="media-sort" value={mediaSort} onChange={(event) => setMediaSort(event.target.value as typeof mediaSort)} aria-label="Sort media"><option value="recent">Recent</option><option value="name">Name</option><option value="duration">Longest</option></select><button className={`favorite-filter ${favoriteOnly ? "enabled" : ""}`} title="Show favorites only" onClick={() => setFavoriteOnly((value) => !value)}><Star size={12} fill={favoriteOnly ? "currentColor" : "none"} /></button></div></div>
         {importRoots.length > 0 && <details className="watch-folders"><summary><FolderSync size={12} /> {importRoots.filter((root) => root.watching).length} folder{importRoots.filter((root) => root.watching).length === 1 ? '' : 's'} watched <ChevronDown size={11} /></summary><div className="watch-root-list">{importRoots.map((root) => <div className="watch-root" key={root.path}><span title={root.path}>{root.path}</span><button className={`switch mini-switch ${root.watching ? 'on' : ''}`} title={root.watching ? 'Stop watching folder' : 'Watch folder for new clips'} onClick={async () => { try { setImportRoots(await window.openmontage.setImportRootWatching(projectPath, root.path, !root.watching)); setNotice(root.watching ? 'Folder watch paused' : 'Folder watch enabled'); } catch (cause) { setError(String(cause)); } }}><i /></button></div>)}</div></details>}
