@@ -2,7 +2,7 @@
 
 OpenMontage AI is a local-first, open-source desktop video editor focused on gaming montages and music-synchronized edits. The current `0.1.0` development build implements the first usable editing slice: import local media, preview it, assemble clips on multiple tracks, trim and split clips, save a non-destructive project, and render an MP4 with FFmpeg.
 
-The Phase A editing core is complete. The project also contains partial media-library and music-analysis work; gameplay highlight detection, automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are not implemented yet. The app labels planned inspector controls accordingly.
+The Phase A editing core is complete. Phase B and C are in progress. Local music analysis and ranked audio/scene activity cues are available, with detector provenance, timestamps, and project-persisted review/correction. Gameplay classification, independently evaluated detector precision/recall, and calibrated highlight-quality ranking are not implemented. Automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are also future work.
 
 ## Current capabilities
 
@@ -23,6 +23,7 @@ The Phase A editing core is complete. The project also contains partial media-li
 - A JSON-output CLI for project creation, media import/search/metadata, timeline operations, validation, frame extraction, and export.
 - Local audio analysis with BPM hypotheses, beat and downbeat positions, cautious meter estimates, relative energy curves, coarse sections, energy-rise markers, and transient timestamps. Results appear in the inspector and CLI, and validated analysis state appears per asset in the virtualized media list.
 - Beat, downbeat, and energy-rise ticks on analyzed audio clips; optional timeline snapping uses detected beats and clip edges.
+- Ranked local audio-activity and video scene-change cues with event windows, detector provenance, confidence/evidence, a cache, and a CLI command. The ranking is heuristic and does not claim gameplay semantics.
 
 ## Quick start on Windows
 

@@ -9,6 +9,8 @@
 - Added per-asset audio-analysis status in the virtualized media list, restored from source-validated cache files.
 - Increased cached audio waveform resolution to support sharper timeline display across the 50–400% zoom range, with a bounded image width.
 - Expanded local music analysis with relative energy curves, coarse energy sections, energy-rise markers, and cautious meter/downbeat estimates; markers appear on audio clips.
+- Added a typed detector-plugin extension point and ranked audio-activity/scene-change event cues with timestamp windows, evidence, provenance, and a CLI entry point.
+- Added persistent accept/reject/correct review controls and a per-asset reviewed-proposal precision summary for detector cues.
 - Added timeline track/clip operations and FFmpeg H.264/AAC export.
 - Added a frame-snapped composite timeline preview with track-order overlays and a separate source playback monitor.
 - Added cached FFmpeg waveform images for imported audio files and timeline clips.
@@ -22,4 +24,4 @@
 - Added clip audio enable, volume, fade-in, and fade-out controls to the editor, CLI, project model, and export graph.
 - Added a structured JSON CLI and first-pass local beat/transient analysis with BPM hypotheses.
 - Added generated-media integration tests, Windows CI, and Medal API/licensing research.
-- Automatic highlight detection, deeper music analysis, effects, compositing masks, REST, and MCP remain future work.
+- Gameplay highlight classification and review, detector evaluation, deeper music analysis, effects, compositing masks, REST, and MCP remain future work.

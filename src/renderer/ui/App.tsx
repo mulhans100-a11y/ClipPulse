@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
-import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
+import type { AnalysisEventReview, AudioAnalysis, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
@@ -556,7 +556,7 @@ export default function App() {
   </div>;
 }
 
-function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysisStatus, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; analysisStatus?: AudioAnalysisStatus; onAnalysisStatus: (mediaId: string, status: AudioAnalysisStatus) => void; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null; rating: number }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
+function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysisStatus, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; analysisStatus?: AudioAnalysisStatus; onAnalysisStatus: (mediaId: string, status: AudioAnalysisStatus) => void; onRelink: () => void; onSave: (patch: { tags?: string[]; game?: string | null; rating?: number; analysisEventReviews?: AnalysisEventReview[] }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
   const [tags, setTags] = useState((asset.tags ?? []).join(', '));
   const [game, setGame] = useState(asset.game ?? '');
   const [rating, setRating] = useState(asset.rating ?? 0);
@@ -566,17 +566,54 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
   const analyzing = analyzingAssetId === asset.id;
   const [analysisFailure, setAnalysisFailure] = useState<{ assetId: string; message: string } | null>(null);
   const analysisError = analysisFailure?.assetId === asset.id ? analysisFailure.message : null;
+  const [cueResult, setCueResult] = useState<{ assetId: string; data: HighlightAnalysis } | null>(null);
+  const cueAnalysis = cueResult?.assetId === asset.id ? cueResult.data : null;
+  const [cueRunningAssetId, setCueRunningAssetId] = useState<string | null>(null);
+  const cueRunning = cueRunningAssetId === asset.id;
+  const [cueFailure, setCueFailure] = useState<{ assetId: string; message: string } | null>(null);
+  const cueError = cueFailure?.assetId === asset.id ? cueFailure.message : null;
+  const [cueCorrections, setCueCorrections] = useState<Record<string, { start: number; decisive: number; end: number }>>({});
+  const reviewedDetectorPrecision = useMemo(() => {
+    const counts = new Map<string, { accepted: number; rejected: number }>();
+    for (const review of asset.analysisEventReviews ?? []) for (const id of review.detectorIds) {
+      const count = counts.get(id) ?? { accepted: 0, rejected: 0 };
+      if (review.status === 'rejected') count.rejected++;
+      else count.accepted++;
+      counts.set(id, count);
+    }
+    return [...counts].filter(([, count]) => count.accepted + count.rejected > 0).map(([id, count]) => ({ id, accepted: count.accepted, total: count.accepted + count.rejected, precision: count.accepted / (count.accepted + count.rejected) }));
+  }, [asset.analysisEventReviews]);
   const energyBins = analysis?.energyCurve.length ? Array.from({ length: Math.min(120, analysis.energyCurve.length) }, (_unused, index) => {
     const start = Math.floor(index * analysis.energyCurve.length / Math.min(120, analysis.energyCurve.length));
     const end = Math.max(start + 1, Math.floor((index + 1) * analysis.energyCurve.length / Math.min(120, analysis.energyCurve.length)));
     return analysis.energyCurve.slice(start, end).reduce((sum, value) => sum + value, 0) / (end - start);
   }) : [];
-  useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setRating(asset.rating ?? 0); setAnalysisResult(null); setAnalysisFailure(null); }, [asset.id, asset.tags, asset.game, asset.rating]);
+  useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setRating(asset.rating ?? 0); setAnalysisResult(null); setAnalysisFailure(null); setCueResult(null); setCueFailure(null); setCueCorrections({}); }, [asset.id, asset.tags, asset.game, asset.rating]);
   async function runAnalysis() {
     setAnalyzingAssetId(asset.id); setAnalysisFailure(null); onAnalysisStatus(asset.id, 'running');
     try { const data = await window.openmontage.analyzeAudio(projectPath, asset.id); setAnalysisResult({ assetId: asset.id, data }); onAnalysis(asset.id, data); }
     catch (error) { setAnalysisFailure({ assetId: asset.id, message: error instanceof Error ? error.message : String(error) }); onAnalysisStatus(asset.id, 'failed'); }
     finally { setAnalyzingAssetId((current) => current === asset.id ? null : current); }
+  }
+  async function runCueAnalysis() {
+    setCueRunningAssetId(asset.id); setCueFailure(null);
+    try { setCueResult({ assetId: asset.id, data: await window.openmontage.analyzeHighlightCues(projectPath, asset.id) }); }
+    catch (error) { setCueFailure({ assetId: asset.id, message: error instanceof Error ? error.message : String(error) }); }
+    finally { setCueRunningAssetId((current) => current === asset.id ? null : current); }
+  }
+  function saveEventReview(event: HighlightAnalysis['events'][number], status: AnalysisEventReview['status']) {
+    const correction = cueCorrections[event.id] ?? { start: event.startSeconds, decisive: event.decisiveSeconds, end: event.endSeconds };
+    if (status === 'corrected' && (![correction.start, correction.decisive, correction.end].every(Number.isFinite) || correction.start < 0 || correction.start > correction.decisive || correction.decisive > correction.end || correction.end > secondsOf(asset.duration))) return;
+    const existing = asset.analysisEventReviews?.find((item) => item.eventId === event.id);
+    const review: AnalysisEventReview = {
+      eventId: event.id, detectorIds: event.detectors.map((item) => item.detectorId), status,
+      startSeconds: status === 'corrected' ? correction.start : existing?.startSeconds ?? event.startSeconds,
+      decisiveSeconds: status === 'corrected' ? correction.decisive : existing?.decisiveSeconds ?? event.decisiveSeconds,
+      endSeconds: status === 'corrected' ? correction.end : existing?.endSeconds ?? event.endSeconds,
+      updatedAt: new Date().toISOString()
+    };
+    const previous = asset.analysisEventReviews ?? [];
+    onSave({ analysisEventReviews: [...previous.filter((item) => item.eventId !== event.id), review] });
   }
   return <>
     <div className="inspector-asset"><div className="inspector-thumb">{asset.thumbnailPath ? <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} /> : <Music2 size={19} />}</div><div><strong>{asset.name}</strong><small>{asset.kind.toUpperCase()} · {formatTime(secondsOf(asset.duration))}</small></div></div>
@@ -598,9 +635,26 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
         <div className="analysis-cues"><span>METER</span><strong>{analysis.meter ? `${analysis.meter.beatsPerBar}/4 · ${Math.round(analysis.meter.confidence * 100)}%` : 'Unclear'}</strong><span>SECTIONS · ENERGY RISES</span><strong>{analysis.energySections.length} · {analysis.drops.length}{analysis.drops.length ? ` · ${formatTime(analysis.drops[0])}` : ''}</strong></div>
         <small>Local onset and RMS heuristics · meter confidence is not a probability</small>
       </div>}
-      <div className="disabled-row"><Sparkles size={14} /><span>Gameplay highlight detection</span><small>Planned</small></div>
+      <button className="analyze-highlights" disabled={cueRunning} onClick={() => void runCueAnalysis()}><Sparkles size={14} />{cueRunning ? 'Finding activity cues…' : cueAnalysis ? 'Refresh ranked activity cues' : 'Find ranked activity cues'}</button>
+      {cueError && <div className="analysis-error">{cueError}</div>}
+      {cueAnalysis && <div className="cue-analysis-card">
+        <div className="cue-analysis-heading"><strong>{cueAnalysis.events.length} ranked cues</strong><span>HEURISTIC</span></div>
+        {cueAnalysis.events.length ? <div className="cue-event-list">{cueAnalysis.events.slice(0, 12).map((event) => {
+          const review = asset.analysisEventReviews?.find((item) => item.eventId === event.id);
+          const correction = cueCorrections[event.id] ?? { start: review?.startSeconds ?? event.startSeconds, decisive: review?.decisiveSeconds ?? event.decisiveSeconds, end: review?.endSeconds ?? event.endSeconds };
+          return <div className="cue-event" key={event.id}>
+            <span className="cue-rank">{String(event.rank).padStart(2, '0')}</span><div><strong>{event.kind === 'coincident_activity' ? 'Audio + scene activity' : event.kind === 'scene_change' ? 'Scene change' : 'Audio activity'}</strong><small>{formatTime(review?.startSeconds ?? event.startSeconds)}–{formatTime(review?.endSeconds ?? event.endSeconds)} · event {formatTime(review?.decisiveSeconds ?? event.decisiveSeconds)}</small><small>{event.detectors.map((detector) => detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')).join(' + ')}</small><small>Confidence {Math.round(event.confidence * 100)}% · cue strength {Math.round(event.interestingness * 100)}%</small>
+              <div className="cue-review-actions"><button className={review?.status === 'accepted' ? 'selected' : ''} onClick={() => saveEventReview(event, 'accepted')}>Accept</button><button className={review?.status === 'rejected' ? 'selected' : ''} onClick={() => saveEventReview(event, 'rejected')}>Reject</button><span>{review?.status ?? 'unreviewed'}</span></div>
+              <div className="cue-correction-fields"><label>Start<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.start} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, start: Number(e.target.value) } }))} /></label><label>Event<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.decisive} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, decisive: Number(e.target.value) } }))} /></label><label>End<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.end} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, end: Number(e.target.value) } }))} /></label><button onClick={() => saveEventReview(event, 'corrected')}>Save correction</button></div>
+            </div><b>{event.rankScore}</b>
+          </div>;
+        })}</div> : <div className="cue-empty">No activity cues found.</div>}
+        {reviewedDetectorPrecision.length > 0 && <div className="review-metrics"><strong>Reviewed proposal precision · this asset</strong>{reviewedDetectorPrecision.map((item) => <span key={item.id}>{item.id.replace('openmontage.', '').replaceAll('-', ' ')} · {Math.round(item.precision * 100)}% ({item.accepted}/{item.total})</span>)}</div>}
+        {cueAnalysis.warnings.map((warning) => <div className="analysis-error" key={warning}>{warning}</div>)}
+        <small>Rank reflects local audio/scene heuristics. It is not a gameplay label or calibrated highlight-quality score.</small>
+      </div>}
     </section>
-    <section className="inspector-section muted-section"><div className="section-label"><span>DETECTORS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Activity size={14} /><span>Scene and game events</span><small>Planned</small></div></section>
+    <section className="inspector-section muted-section"><div className="section-label"><span>DETECTOR STATUS</span><button><ChevronDown size={14} /></button></div>{cueAnalysis ? cueAnalysis.detectors.map((detector) => <div className="detector-status-row" key={detector.detectorId}><Activity size={13} /><span>{detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')}</span><small>{detector.status}</small></div>) : <div className="disabled-row"><Activity size={14} /><span>Scene and audio cues</span><small>Ready to run</small></div>}<div className="disabled-row"><Sparkles size={14} /><span>Gameplay and OCR models</span><small>Not installed</small></div></section>
   </>;
 }
 

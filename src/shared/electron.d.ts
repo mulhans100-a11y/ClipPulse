@@ -1,4 +1,4 @@
-import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TrackKind } from '../core/types';
+import type { AnalysisEventReview, AudioAnalysis, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TrackKind } from '../core/types';
 
 export interface OpenMontageApi {
   version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; message?: string }>;
@@ -13,11 +13,12 @@ export interface OpenMontageApi {
   importMedalFolder(path: string): Promise<{ project: Project; result: ImportResult; captureFolder: string } | null>;
   findMissingMedia(path: string): Promise<string[]>;
   relinkMedia(path: string, mediaId: string): Promise<Project | null>;
-  updateMediaMetadata(path: string, mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null }): Promise<Project>;
+  updateMediaMetadata(path: string, mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null; analysisEventReviews?: AnalysisEventReview[] }): Promise<Project>;
   searchMedia(path: string, query: string, favoriteOnly: boolean): Promise<MediaAsset[]>;
   getImportRoots(path: string): Promise<ImportRoot[]>;
   setImportRootWatching(path: string, rootPath: string, watching: boolean): Promise<ImportRoot[]>;
   analyzeAudio(path: string, mediaId: string): Promise<AudioAnalysis>;
+  analyzeHighlightCues(path: string, mediaId: string): Promise<HighlightAnalysis>;
   getAudioAnalysisStatuses(path: string): Promise<string[]>;
   addTrack(path: string, kind: TrackKind): Promise<Project>;
   updateTrack(path: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean }): Promise<Project>;

@@ -38,6 +38,67 @@ export interface AudioAnalysis {
   onsets: number[];
 }
 
+export type DetectorModality = 'audio' | 'video' | 'text';
+export type AnalysisEventKind = 'audio_activity' | 'scene_change' | 'coincident_activity';
+
+export interface DetectorProvenance {
+  detectorId: string;
+  version: string;
+  modality: DetectorModality;
+  confidence: number;
+  evidence: Record<string, string | number | boolean>;
+}
+
+export interface AnalysisEvent {
+  id: string;
+  mediaId: string;
+  kind: AnalysisEventKind;
+  startSeconds: number;
+  decisiveSeconds: number;
+  endSeconds: number;
+  /** Heuristic detector score, not a calibrated probability. */
+  confidence: number;
+  /** Relative technical cue strength, not a gameplay-quality judgment. */
+  interestingness: number;
+  /** Configurable heuristic rank from 0 to 100. */
+  rankScore: number;
+  rank: number;
+  detectors: DetectorProvenance[];
+}
+
+export interface DetectorRunStatus {
+  detectorId: string;
+  version: string;
+  modality: DetectorModality;
+  status: 'complete' | 'skipped' | 'failed';
+  message?: string;
+}
+
+export interface HighlightScoringWeights {
+  confidence: number;
+  interestingness: number;
+  corroboration: number;
+}
+
+export interface HighlightAnalysis {
+  method: 'heuristic-detector-pipeline-v1';
+  durationSeconds: number;
+  scoreWeights: HighlightScoringWeights;
+  detectors: DetectorRunStatus[];
+  warnings: string[];
+  events: AnalysisEvent[];
+}
+
+export interface AnalysisEventReview {
+  eventId: string;
+  detectorIds: string[];
+  status: 'accepted' | 'rejected' | 'corrected';
+  startSeconds: number;
+  decisiveSeconds: number;
+  endSeconds: number;
+  updatedAt: string;
+}
+
 export interface MediaAsset {
   id: string;
   path: string;
@@ -56,6 +117,7 @@ export interface MediaAsset {
   favorite?: boolean;
   /** Manual highlight score; zero means unranked. */
   rating?: number;
+  analysisEventReviews?: AnalysisEventReview[];
   tags?: string[];
   game?: string;
 }

@@ -13,6 +13,7 @@ media-search --project FILE [--query TEXT] [--favorites]
 media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]
 media-relink --project FILE --media ID --path FILE
 analyze-audio --project FILE --media ID
+analyze-highlights --project FILE --media ID
 history --project FILE
 undo --project FILE
 redo --project FILE
@@ -38,6 +39,10 @@ doctor
 The desktop media list restores completed audio-analysis status only when its cache matches the source file size and modification time. Running and failed states are tracked per asset while the editor is open.
 
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]` writes library metadata; rating zero clears a manual highlight score, while 1–5 ranks a clip. The score is stored in the project and SQLite index. `analyze-audio --project FILE --media ID` decodes audio locally and returns BPM hypotheses, beat and downbeat positions, a cautious meter estimate, relative one-second energy, coarse energy sections, energy-rise markers, and transient timestamps. Results are cached beside the project using file size and modification time. Rhythm and meter values are heuristic; scores are not calibrated probabilities.
+
+`analyze-highlights --project FILE --media ID` runs the built-in audio-activity and FFmpeg scene-change detectors when their streams are available. It returns ranked event windows with start, decisive, and end times, detector IDs/versions, evidence, confidence, and relative cue scores. Coincident audio and scene activity is combined into one event. These scores are technical heuristics; they do not classify gameplay or measure highlight quality. Results are cached by source file metadata, detector versions, and scoring weights. The core `DetectorPlugin` interface accepts additional local or model-backed detectors; callers can pass alternate scoring weights to `analyzeHighlightCues`.
+
+In the desktop inspector, each event can be accepted, rejected, or corrected by editing its start, decisive, and end times. Reviews are stored in the `.omproj`. The displayed per-detector reviewed-proposal precision is the acceptance rate among decisions on that asset. Recall remains unreported until missed events are independently labeled.
 
 `media-relink --project FILE --media ID --path FILE` replaces a missing source path while retaining its ID. The replacement must have the same audio/video kind and cover every existing clip source range.
 

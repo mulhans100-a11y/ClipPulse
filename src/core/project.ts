@@ -7,7 +7,7 @@ import { newId } from './ids';
 import { libraryDatabasePath, MediaLibrary, type LibraryAsset } from './library';
 import { add, clampNonNegative, compare, decimal, parseDecimal, rational } from './time';
 import { waveformWidthForDuration } from './waveform';
-import type { ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from './types';
+import type { AnalysisEventReview, ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from './types';
 
 const VIDEO_EXT = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.mts', '.m2ts', '.wmv', '.flv']);
 const AUDIO_EXT = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus', '.wma']);
@@ -212,6 +212,9 @@ export function validateProject(project: Project): void {
     throw new AppError('INVALID_PROJECT', 'Project name and even output dimensions of at least 2 pixels are required.');
   if (BigInt(project.frameRate.num) <= 0n || BigInt(project.frameRate.den) <= 0n) throw new AppError('INVALID_PROJECT', 'Project frame rate must be positive.');
   const validTime = (value: Rational | undefined): boolean => !!value && /^-?\d+$/.test(value.num) && /^\d+$/.test(value.den) && BigInt(value.den) > 0n;
+  for (const asset of project.media) {
+    if (asset?.analysisEventReviews !== undefined && asset.duration && validTime(asset.duration)) validateEventReviews(asset.analysisEventReviews, Number(asset.duration.num) / Number(asset.duration.den));
+  }
   const mediaIds = new Set(project.media.map((asset) => asset.id));
   const trackIds = new Set<string>();
   const clipIds = new Set<string>();
@@ -593,17 +596,19 @@ export async function removeClip(filePath: string, clipId: string): Promise<Proj
   return project;
 }
 
-export async function updateMediaMetadata(filePath: string, mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null }): Promise<Project> {
+export async function updateMediaMetadata(filePath: string, mediaId: string, patch: { favorite?: boolean; rating?: number; tags?: string[]; game?: string | null; analysisEventReviews?: AnalysisEventReview[] }): Promise<Project> {
   const project = await loadProject(filePath);
   const asset = project.media.find((item) => item.id === mediaId);
   if (!asset) throw new AppError('MEDIA_NOT_FOUND', `Media asset not found: ${mediaId}`);
   if (patch.rating !== undefined && (!Number.isInteger(patch.rating) || patch.rating < 0 || patch.rating > 5)) {
     throw new AppError('INVALID_RATING', 'Highlight rating must be an integer from 0 to 5.');
   }
+  if (patch.analysisEventReviews !== undefined) validateEventReviews(patch.analysisEventReviews, Number(asset.duration.num) / Number(asset.duration.den));
   if (patch.favorite !== undefined) asset.favorite = patch.favorite;
   if (patch.rating !== undefined) asset.rating = patch.rating;
   if (patch.tags !== undefined) asset.tags = [...new Set(patch.tags.map((tag) => tag.trim()).filter(Boolean))].slice(0, 100);
   if (patch.game !== undefined) asset.game = patch.game?.trim() || undefined;
+  if (patch.analysisEventReviews !== undefined) asset.analysisEventReviews = patch.analysisEventReviews.map((review) => ({ ...review, detectorIds: [...review.detectorIds] }));
   const library = new MediaLibrary(libraryDatabasePath(filePath, project.id));
   try {
     library.upsert(asset);
@@ -611,6 +616,24 @@ export async function updateMediaMetadata(filePath: string, mediaId: string, pat
     await saveProject(filePath, project);
   } finally { library.close(); }
   return project;
+}
+
+function validateEventReviews(reviews: AnalysisEventReview[], durationSeconds: number): void {
+  if (!Array.isArray(reviews) || reviews.length > 5000) throw new AppError('INVALID_EVENT_REVIEW', 'Event review list must contain at most 5000 entries.');
+  const ids = new Set<string>();
+  for (const review of reviews) {
+    if (!review || typeof review.eventId !== 'string' || !review.eventId || review.eventId.length > 256 || ids.has(review.eventId)) {
+      throw new AppError('INVALID_EVENT_REVIEW', 'Event review IDs must be unique, non-empty strings of at most 256 characters.');
+    }
+    ids.add(review.eventId);
+    if (!['accepted', 'rejected', 'corrected'].includes(review.status) || !Array.isArray(review.detectorIds) || review.detectorIds.length > 16 || review.detectorIds.some((id) => typeof id !== 'string' || id.length > 128)) {
+      throw new AppError('INVALID_EVENT_REVIEW', `Event review ${review.eventId} has an invalid status or detector list.`);
+    }
+    const times = [review.startSeconds, review.decisiveSeconds, review.endSeconds];
+    if (!times.every(Number.isFinite) || review.startSeconds < 0 || review.startSeconds > review.decisiveSeconds || review.decisiveSeconds > review.endSeconds || review.endSeconds > durationSeconds + 0.001 || typeof review.updatedAt !== 'string') {
+      throw new AppError('INVALID_EVENT_REVIEW', `Event review ${review.eventId} has invalid timestamps.`);
+    }
+  }
 }
 
 export async function searchMedia(filePath: string, query = '', favoriteOnly = false): Promise<LibraryAsset[]> {

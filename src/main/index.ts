@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { analyzeAudio, readCachedAudioAnalysis } from '../core/audioAnalysis';
+import { analyzeHighlightCues } from '../core/highlightAnalysis';
 import { AppError } from '../core/errors';
 import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
@@ -196,6 +197,23 @@ ipcMain.handle('media:analyzeAudio', async (_event, filePath: string, mediaId: s
   if (!asset.hasAudio) throw new AppError('NO_AUDIO_STREAM', `Media asset has no audio stream: ${asset.name}`);
   const cachePath = path.join(projectCachePath(filePath, project.id), 'analysis', `${asset.id}.json`);
   return analyzeAudio(asset.path, cachePath);
+});
+ipcMain.handle('media:analyzeHighlightCues', async (_event, filePath: string, mediaId: string) => {
+  const project = await loadProject(filePath);
+  const asset = project.media.find((item) => item.id === mediaId);
+  if (!asset) throw new AppError('MEDIA_NOT_FOUND', `Media asset not found: ${mediaId}`);
+  const analysisDirectory = path.join(projectCachePath(filePath, project.id), 'analysis');
+  let audioAnalysis;
+  let audioAnalysisError: string | undefined;
+  if (asset.hasAudio) {
+    try { audioAnalysis = await analyzeAudio(asset.path, path.join(analysisDirectory, `${asset.id}.json`)); }
+    catch (error) { audioAnalysisError = error instanceof Error ? error.message : String(error); }
+  }
+  const cachePath = path.join(analysisDirectory, `cues-${asset.id}.json`);
+  return analyzeHighlightCues({
+    mediaId: asset.id, mediaPath: asset.path, mediaKind: asset.kind,
+    durationSeconds: Number(asset.duration.num) / Number(asset.duration.den), audioAnalysis, audioAnalysisError
+  }, cachePath);
 });
 ipcMain.handle('media:getAudioAnalysisStatuses', async (_event, filePath: string) => {
   const project = await loadProject(filePath);
