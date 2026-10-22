@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+*.log
+*.tmp
+*.rendering.mp4
+.openmontage-cache-*/
+coverage/
+.DS_Store
+Thumbs.db

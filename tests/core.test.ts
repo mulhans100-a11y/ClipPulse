@@ -1,0 +1,222 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { addClip, addTrack, createProject, getImportRoots, importMedia, loadProject, removeClip, searchMedia, setImportRootWatching, splitClip, updateMediaMetadata } from '../src/core/project';
+import { analyzeAudio } from '../src/core/audioAnalysis';
+import { exportVideo } from '../src/core/export';
+import { runCommand } from '../src/core/ffmpeg';
+import { libraryDatabasePath } from '../src/core/library';
+import { watchFolder } from '../src/core/folderWatcher';
+import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
+
+const scratch: string[] = [];
+test.after(async () => { for (const directory of scratch) await rm(directory, { recursive: true, force: true }); });
+
+test('rational time arithmetic stays exact across non-integer frame rates', () => {
+  const fps = rational(30000, 1001);
+  const oneFrame = frameTime(1, fps);
+  assert.deepEqual(oneFrame, { num: '1001', den: '30000' });
+  assert.equal(toFrame(add(oneFrame, oneFrame), fps), 2);
+  assert.deepEqual(parseDecimal('5/2'), { num: '5', den: '2' });
+  assert.equal(decimal(parseDecimal('12.500000')), '12.5');
+  assert.equal(compare(rational(1, 3), rational(2, 5)), -1);
+});
+
+test('imports, backs up, trims, splits and exports real media without modifying its source', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-integration-'));
+  scratch.push(directory);
+  const source = path.join(directory, 'synthetic.mp4');
+  const exactDuplicate = path.join(directory, 'synthetic-copy.mp4');
+  const projectFile = path.join(directory, 'cut.omproj');
+  const output = path.join(directory, 'render.mp4');
+  await runCommand('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30:duration=4',
+    '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=4',
+    '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', source
+  ]);
+  const before = createHash('sha256').update(await readFile(source)).digest('hex');
+  await copyFile(source, exactDuplicate);
+
+  await createProject(projectFile, { name: 'Integration cut', frameRate: rational(30), width: 640, height: 360 });
+  const imported = await importMedia(projectFile, [source, exactDuplicate]);
+  assert.equal(imported.added.length, 1, 'exact duplicate content is indexed once');
+  assert.equal(imported.duplicates.length, 1);
+  assert.ok(imported.added[0].thumbnailPath);
+  assert.ok((await stat(imported.added[0].thumbnailPath!)).size > 0);
+
+  const project = await loadProject(projectFile);
+  const videoTrack = project.tracks.find((track) => track.kind === 'video')!;
+  const inserted = await addClip(projectFile, imported.added[0].id, videoTrack.id, rational(1, 2), rational(1), rational(2));
+  const originalClip = inserted.tracks.find((track) => track.id === videoTrack.id)!.clips[0];
+  const split = await splitClip(projectFile, originalClip.id, rational(3, 2));
+  const splitClips = split.tracks.find((track) => track.id === videoTrack.id)!.clips;
+  assert.equal(splitClips.length, 2);
+  assert.deepEqual(splitClips.map((clip) => clip.duration), [rational(1), rational(1)]);
+  await removeClip(projectFile, splitClips[1].id);
+
+  const multiTrackProject = await addTrack(projectFile, 'video', 'V2');
+  assert.equal(multiTrackProject.tracks.filter((track) => track.kind === 'video').length, 2);
+  const renderedProject = await loadProject(projectFile);
+  const result = await exportVideo(renderedProject, { outputPath: output });
+  assert.equal(decimal(result.duration), '1.5');
+  const { stdout } = await runCommand('ffprobe', ['-v', 'error', '-count_frames', '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate,nb_read_frames', '-of', 'json', output]);
+  const info = JSON.parse(stdout);
+  const video = info.streams.find((stream: any) => stream.codec_type === 'video');
+  const audio = info.streams.find((stream: any) => stream.codec_type === 'audio');
+  assert.equal(video.width, 640);
+  assert.equal(video.height, 360);
+  assert.equal(video.nb_read_frames, '45');
+  assert.ok(audio, 'source audio is included in the rendered timeline');
+  assert.ok((await stat(output)).size > 10_000);
+  assert.equal(createHash('sha256').update(await readFile(source)).digest('hex'), before, 'source file remains byte-for-byte unchanged');
+});
+
+test('core rejects source overwrite and invalid split positions with stable errors', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-errors-'));
+  scratch.push(directory);
+  const source = path.join(directory, 'source.mp4');
+  const projectFile = path.join(directory, 'guard.omproj');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=red:size=320x240:rate=24:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
+  await createProject(projectFile, { frameRate: rational(24), width: 320, height: 240 });
+  const imported = await importMedia(projectFile, [source]);
+  const project = await loadProject(projectFile);
+  const track = project.tracks.find((item) => item.kind === 'video')!;
+  const withClip = await addClip(projectFile, imported.added[0].id, track.id, rational(0), rational(0), rational(1));
+  const clip = withClip.tracks.find((item) => item.id === track.id)!.clips[0];
+  await assert.rejects(() => splitClip(projectFile, clip.id, rational(1)), (error: any) => error.code === 'SPLIT_OUTSIDE_CLIP');
+  await assert.rejects(() => exportVideo(withClip, { outputPath: source, overwrite: true }), (error: any) => error.code === 'SOURCE_OVERWRITE_BLOCKED');
+});
+
+test('SQLite library caches folder imports and persists game, tags, favorites, and watcher settings', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-library-'));
+  scratch.push(directory);
+  const captures = path.join(directory, 'Medal');
+  const source = path.join(captures, 'round.mp4');
+  const projectFile = path.join(directory, 'library.omproj');
+  await mkdir(captures);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:size=320x180:rate=30:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
+  await createProject(projectFile, { frameRate: rational(30), width: 320, height: 180 });
+  const first = await importMedia(projectFile, [captures]);
+  assert.equal(first.added.length, 1);
+  assert.deepEqual(first.watchedRoots, [captures]);
+  const project = await loadProject(projectFile);
+  assert.ok((await stat(libraryDatabasePath(projectFile, project.id))).size > 0);
+  assert.equal((await getImportRoots(projectFile))[0].watching, true);
+
+  const updated = await updateMediaMetadata(projectFile, first.added[0].id, { favorite: true, game: 'Valorant', tags: ['headshot', 'round win'] });
+  assert.equal(updated.media[0].favorite, true);
+  const results = await searchMedia(projectFile, 'headshot', true);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].game, 'Valorant');
+  assert.deepEqual(results[0].tags, ['headshot', 'round win']);
+
+  const second = await importMedia(projectFile, [captures]);
+  assert.equal(second.added.length, 0, 'unchanged files are reused from the SQLite path/stat cache');
+  assert.equal(second.duplicates.length, 1);
+  assert.equal((await setImportRootWatching(projectFile, captures, false))[0].watching, false);
+});
+
+test('recursive folder watcher reports new nested media files and closes cleanly', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-watch-'));
+  scratch.push(directory);
+  const nested = path.join(directory, 'game', 'session');
+  await mkdir(nested, { recursive: true });
+  let resolveChange!: () => void;
+  let changeCount = 0;
+  const changed = new Promise<void>((resolve) => { resolveChange = resolve; });
+  const watcher = watchFolder(directory, () => { changeCount++; resolveChange(); }, true, 100);
+  try {
+    await writeFile(path.join(nested, 'capture.mp4'), 'new capture');
+    let timeout: NodeJS.Timeout | undefined;
+    await Promise.race([changed, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('No file-system change notification arrived.')), 5000); })]);
+    if (timeout) clearTimeout(timeout);
+    assert.equal(changeCount, 1);
+  } finally { watcher.close(); }
+});
+
+test('local audio analysis finds a synthetic 120 BPM click track and reuses its cache', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-audio-analysis-'));
+  scratch.push(directory);
+  const source = path.join(directory, 'clicks.wav');
+  const cache = path.join(directory, 'analysis', 'clicks.json');
+  await writeClickTrack(source, 120, 16);
+  const result = await analyzeAudio(source, cache);
+  assert.ok(result.estimatedBpm, 'a tempo hypothesis was found');
+  assert.ok(Math.abs(result.estimatedBpm - 120) <= 4, `expected about 120 BPM, got ${result.estimatedBpm}`);
+  assert.ok(result.beats.length >= 25, `expected beat positions, got ${result.beats.length}`);
+  assert.ok(result.onsets.length >= 25, `expected detected onsets, got ${result.onsets.length}`);
+  assert.ok(result.beatPhaseSeconds !== undefined && result.beatPhaseSeconds < 0.1);
+  assert.ok((await stat(cache)).size > 100);
+  assert.deepEqual(await analyzeAudio(source, cache), result, 'a matching source size and mtime reuse the saved result');
+});
+
+test('headless CLI creates a project, imports media, assembles a timeline and exports MP4', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-cli-'));
+  scratch.push(directory);
+  const source = path.join(directory, 'cli-source.mp4');
+  const music = path.join(directory, 'cli-music.wav');
+  const projectPath = path.join(directory, 'cli-project.omproj');
+  const output = path.join(directory, 'cli-output.mp4');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24:duration=2', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', source]);
+  await writeClickTrack(music, 120, 8);
+  const cliPath = path.join(process.cwd(), 'dist', 'src', 'main', 'cli.js');
+  const invoke = (...args: string[]) => new Promise<any>((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], { cwd: process.cwd(), windowsHide: true });
+    let stdout = '', stderr = '';
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => stdout += chunk); child.stderr.on('data', (chunk) => stderr += chunk);
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`CLI failed (${code}): ${stderr}`));
+      try { resolve(JSON.parse(stdout)); } catch (error) { reject(new Error(`CLI returned invalid JSON: ${stdout}`, { cause: error })); }
+    });
+  });
+  const created = await invoke('create', '--project', projectPath, '--fps', '24/1', '--width', '320', '--height', '180');
+  assert.equal(created.ok, true);
+  const imported = await invoke('import', '--project', projectPath, source, music);
+  assert.equal(imported.data.added.length, 2);
+  const musicAsset = imported.data.added.find((asset: any) => asset.kind === 'audio');
+  const analysis = await invoke('analyze-audio', '--project', projectPath, '--media', musicAsset.id);
+  assert.ok(Math.abs(analysis.data.estimatedBpm - 120) <= 4);
+  assert.ok(analysis.data.beats.length > 0);
+  const inspected = await invoke('inspect', '--project', projectPath);
+  const videoTrack = inspected.data.project.tracks.find((track: any) => track.kind === 'video');
+  const inserted = await invoke('clip-add', '--project', projectPath, '--media', imported.data.added[0].id, '--track', videoTrack.id, '--start', '0', '--source-in', '1/2', '--duration', '1');
+  assert.equal(inserted.data.mediaId, imported.data.added[0].id);
+  const validation = await invoke('validate', '--project', projectPath);
+  assert.equal(validation.data.valid, true);
+  const exported = await invoke('export', '--project', projectPath, '--output', output);
+  assert.equal(exported.data.outputPath, output);
+  assert.ok((await stat(output)).size > 5000);
+});
+
+async function writeClickTrack(filePath: string, bpm: number, durationSeconds: number): Promise<void> {
+  const sampleRate = 22_050;
+  const sampleCount = sampleRate * durationSeconds;
+  const dataBytes = sampleCount * 2;
+  const wave = Buffer.alloc(44 + dataBytes);
+  wave.write('RIFF', 0); wave.writeUInt32LE(36 + dataBytes, 4); wave.write('WAVE', 8);
+  wave.write('fmt ', 12); wave.writeUInt32LE(16, 16); wave.writeUInt16LE(1, 20);
+  wave.writeUInt16LE(1, 22); wave.writeUInt32LE(sampleRate, 24); wave.writeUInt32LE(sampleRate * 2, 28);
+  wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34); wave.write('data', 36); wave.writeUInt32LE(dataBytes, 40);
+  const beatStep = 60 / bpm;
+  const clickSamples = Math.round(sampleRate * 0.035);
+  for (let sample = 0; sample < sampleCount; sample++) {
+    const time = sample / sampleRate;
+    const nearestBeat = Math.round(time / beatStep);
+    const offset = time - nearestBeat * beatStep;
+    const clickIndex = Math.round(offset * sampleRate);
+    let value = 0;
+    if (clickIndex >= 0 && clickIndex < clickSamples) {
+      const envelope = Math.exp(-clickIndex / (sampleRate * 0.012));
+      value = Math.sin(2 * Math.PI * 1_000 * clickIndex / sampleRate) * envelope * 0.85;
+    }
+    wave.writeInt16LE(Math.round(value * 32767), 44 + sample * 2);
+  }
+  await writeFile(filePath, wave);
+}

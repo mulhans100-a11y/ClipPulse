@@ -1,0 +1,80 @@
+# OpenMontage AI
+
+OpenMontage AI is a local-first, open-source desktop video editor focused on gaming montages and music-synchronized edits. The current `0.1.0` development build implements the first usable editing slice: import local media, preview it, assemble clips on multiple tracks, trim and split clips, save a non-destructive project, and render an MP4 with FFmpeg.
+
+This is an early Phase A/B/C build. The editor includes an initial local beat and transient analysis, while gameplay highlight detection, automatic montage planning, advanced effects, object masking, Medal cloud access, and MCP tools are not implemented yet. The app labels planned inspector controls accordingly.
+
+## Current capabilities
+
+- Electron + React + TypeScript desktop shell with isolated renderer context.
+- `.omproj` project files with versioned JSON, rational time values, autosaved edits, and a `.bak` previous project snapshot.
+- Local single-file and recursive folder import, SHA-256 duplicate detection, FFprobe metadata, and cached video thumbnails. Original media files are referenced and never modified.
+- A project-adjacent SQLite index accelerates unchanged imports, supports search/tags/favorites/game names, and watches selected folders for new local clips.
+- Video and audio tracks; additional tracks can be added. Clips can be inserted, moved between tracks, trimmed, split, and removed.
+- Preview of imported source video, timeline playhead, undo/redo for UI edits, and keyboard shortcuts for save/undo/redo/delete/playback.
+- FFmpeg MP4/H.264 + AAC rendering with video layer compositing, source audio mixing, output validation, and a CPU H.264 default. Hardware encoders can be selected by CLI.
+- A JSON-output CLI for project creation, media import/search/metadata, timeline operations, validation, frame extraction, and export.
+- Local audio beat analysis with BPM hypotheses, beat positions, and transient timestamps, exposed in the media inspector and CLI.
+
+## Quick start on Windows
+
+Requirements: Windows 10/11, Node.js 24 or newer, npm, Git, and FFmpeg 6 or newer (`ffmpeg` and `ffprobe` available on `PATH`). The desktop build is currently developed with Node.js 24 and FFmpeg 9.
+
+```powershell
+git clone <repository-url>
+cd OpenMontage-AI
+npm ci
+npm run dev
+```
+
+Native Windows installer packaging is a later milestone. FFmpeg must currently be installed separately; Linux and macOS packaging are future work.
+
+## CLI example
+
+```powershell
+npm run build
+npm run cli -- create --project .\montage.omproj --fps 60/1
+npm run cli -- import --project .\montage.omproj D:\Captures\Valorant
+npm run cli -- inspect --project .\montage.omproj
+```
+
+The `import` command returns asset IDs. Use those IDs to build a timeline and render:
+
+```powershell
+npm run cli -- clip-add --project .\montage.omproj --media <MEDIA_ID> --track <VIDEO_TRACK_ID> --start 0 --source-in 4.2 --duration 3.5
+npm run cli -- export --project .\montage.omproj --output .\montage.mp4
+```
+
+`inspect` reports the project, track IDs, asset IDs, and clip IDs. All successful CLI commands write structured JSON to stdout; errors use stable `code` and `message` fields and exit with code 1. See [API.md](API.md).
+
+Search indexed assets and add library metadata:
+
+```powershell
+npm run cli -- media-search --project .\montage.omproj --query headshot
+npm run cli -- media-update --project .\montage.omproj --media <MEDIA_ID> --favorite true --tag headshot --game Valorant
+```
+
+## Development
+
+```powershell
+npm run dev
+npm run build
+npm test
+```
+
+The tests generate their own short synthetic video and audio with FFmpeg. No personal or copyrighted media is included. CI installs FFmpeg on its Windows runner and runs the same build and tests.
+
+## Architecture and status
+
+See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.md](INSTALLATION.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md). This repository is licensed under GPL-3.0-or-later; see [LICENSE](LICENSE).
+
+## Current limitations
+
+- Timeline editing currently uses rational seconds; the inspector also shows project-frame positions. UI fields are rounded to microsecond precision when they call the editor core.
+- The application previews source media. A composited timeline preview, proxies, waveform rendering, transitions, effect parity, and render queue are not implemented.
+- Rendering composites visible clips in track order over a black canvas. There is no color/effect pipeline or alpha-mask editor yet.
+- Media references are absolute file paths. Moving media requires re-importing or editing project JSON; relinking UI is not implemented. SQLite is a rebuildable cache adjacent to the project.
+- The auto-backup is a single `.bak` file and each timeline operation writes the project immediately.
+- The Medal integration currently means authorized local-folder import only. No cloud API integration is claimed.
+- Beat analysis detects amplitude rises with onset autocorrelation; it does not identify downbeats, meter, harmonic content, or musical sections.
+- No GitHub remote is configured in this local checkout, so no public repository or release has been published.
