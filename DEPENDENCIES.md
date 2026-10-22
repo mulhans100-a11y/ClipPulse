@@ -4,7 +4,7 @@ The application source is offered under GPL-3.0-or-later. This document records 
 
 ## Application packages
 
-The app uses Electron (MIT), React and React DOM (MIT), Lucide React icons (ISC), Vite and the React Vite plugin (MIT), TypeScript (Apache-2.0), and small development process utilities. Media-folder watching uses Node.js filesystem primitives. Their installed package metadata can be summarized with:
+The app uses Electron (MIT), React and React DOM (MIT), Lucide React icons (ISC), Chokidar for cross-platform recursive media-folder watching (MIT), Vite and the React Vite plugin (MIT), TypeScript (Apache-2.0), and small development process utilities. Their installed package metadata can be summarized with:
 
 ```powershell
 npx license-checker --summary
