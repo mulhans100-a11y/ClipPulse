@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Phase H preparation
+## 0.1.0 — Phase A–H draft release
 
 - Added electron-builder targets and native GitHub Actions release builds for Windows x64, Linux x64, macOS arm64, and macOS Intel.
 - Added a Windows fresh-runner installer/start smoke test, production dependency audit, CycloneDX SBOM, SHA-256 checksums, and draft-only GitHub release assembly.
@@ -9,8 +9,6 @@
 - Added Chokidar for cross-platform recursive media-folder watching, canonicalized Windows short paths before watch startup, and made watcher readiness and shutdown explicit.
 - Made optional OCR evaluation checks follow the detector's actual availability on each CI runner.
 - Corrected FFT-window onset timestamp bias and meter estimation so the local music-analysis regression tests pass.
-
-## 0.1.0 — Phase A–G development build
 
 - Added Electron/React desktop shell with media bin, source preview, multitrack timeline, and clip inspector.
 - Added rational-time project model, media probing/import, thumbnail caching, duplicate detection, and project backups.
