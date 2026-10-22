@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
 import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
-import { audioClipBeatOffsets, snapTimelineTime } from '../../core/timelineSnapping';
+import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
 
 const MEDIA_CARD_HEIGHT = 64;
@@ -515,9 +515,11 @@ export default function App() {
                         objectFit: 'fill', opacity: 0.72
                       } : undefined;
                       const beatOffsets = asset.kind === 'audio' ? audioClipBeatOffsets(clip, audioAnalyses[asset.id]) : [];
+                      const downbeatOffsets = asset.kind === 'audio' ? audioClipDownbeatOffsets(clip, audioAnalyses[asset.id]) : [];
+                      const dropOffsets = asset.kind === 'audio' ? audioClipDropOffsets(clip, audioAnalyses[asset.id]) : [];
                       return <div key={clip.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/clip-id', clip.id)} onClick={(event) => { event.stopPropagation(); setSelectedClipId(clip.id); setSelectedMediaId(asset.id); setPlayhead(start); }} className={`timeline-clip ${track.kind} ${selectedClipId === clip.id ? 'active' : ''}`} style={{ left: start * timelineScale, width, '--clip-hue': `${(index * 61 + asset.name.length * 13) % 360}` } as React.CSSProperties}>
                         {asset.thumbnailPath && <img className="clip-filmstrip" style={clipArtworkStyle} src={window.openmontage.toFileUrl(asset.thumbnailPath)} />}
-                        {beatOffsets.length > 0 && <span className="timeline-beat-markers" aria-hidden="true">{beatOffsets.map((offset, beatIndex) => <i key={beatIndex} style={{ left: `${offset * 100}%` }} />)}</span>}
+                        {beatOffsets.length > 0 && <span className="timeline-beat-markers" aria-hidden="true">{beatOffsets.map((offset, beatIndex) => <i key={beatIndex} className={downbeatOffsets.includes(offset) ? 'downbeat' : ''} style={{ left: `${offset * 100}%` }} />)}{dropOffsets.map((offset, dropIndex) => <i key={`drop-${dropIndex}`} className="drop" style={{ left: `${offset * 100}%` }} />)}</span>}
                         <div className="clip-content"><strong>{asset.name}</strong><span>{formatTime(clipDuration)}</span></div>
                         <span className="clip-edge left" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'left')} title="Drag to trim clip start" /><span className="clip-edge right" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'right')} title="Drag to trim clip end" />
                       </div>;
@@ -564,6 +566,11 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
   const analyzing = analyzingAssetId === asset.id;
   const [analysisFailure, setAnalysisFailure] = useState<{ assetId: string; message: string } | null>(null);
   const analysisError = analysisFailure?.assetId === asset.id ? analysisFailure.message : null;
+  const energyBins = analysis?.energyCurve.length ? Array.from({ length: Math.min(120, analysis.energyCurve.length) }, (_unused, index) => {
+    const start = Math.floor(index * analysis.energyCurve.length / Math.min(120, analysis.energyCurve.length));
+    const end = Math.max(start + 1, Math.floor((index + 1) * analysis.energyCurve.length / Math.min(120, analysis.energyCurve.length)));
+    return analysis.energyCurve.slice(start, end).reduce((sum, value) => sum + value, 0) / (end - start);
+  }) : [];
   useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setRating(asset.rating ?? 0); setAnalysisResult(null); setAnalysisFailure(null); }, [asset.id, asset.tags, asset.game, asset.rating]);
   async function runAnalysis() {
     setAnalyzingAssetId(asset.id); setAnalysisFailure(null); onAnalysisStatus(asset.id, 'running');
@@ -586,8 +593,10 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
       {analysisError && <div className="analysis-error">{analysisError}</div>}
       {analysis && <div className="analysis-card"><div className="analysis-bpm"><span>ESTIMATED TEMPO</span><strong>{analysis.estimatedBpm ? `${analysis.estimatedBpm} BPM` : 'No stable tempo'}</strong></div>
         {analysis.bpmHypotheses.length > 1 && <div className="analysis-hypotheses"><span>Other tempo matches</span><strong>{analysis.bpmHypotheses.slice(1).map((item) => `${item.bpm} BPM · ${item.score.toFixed(2)}`).join('  /  ')}</strong></div>}
-        <div className="analysis-counts"><span>{analysis.beats.length} beat positions</span><span>{analysis.onsets.length} transients</span></div>
-        <small>Local amplitude analysis · match scores compare rhythmic patterns</small>
+        <div className="analysis-counts"><span>{analysis.beats.length} beats · {analysis.downbeats.length} downbeats</span><span>{analysis.onsets.length} transients</span></div>
+        <div className="energy-strip" role="img" aria-label="Relative one-second music energy" title="Relative energy by second">{energyBins.map((energy, index) => <i key={index} style={{ height: `${Math.max(3, Math.round(energy * 22))}px` }} />)}</div>
+        <div className="analysis-cues"><span>METER</span><strong>{analysis.meter ? `${analysis.meter.beatsPerBar}/4 · ${Math.round(analysis.meter.confidence * 100)}%` : 'Unclear'}</strong><span>SECTIONS · ENERGY RISES</span><strong>{analysis.energySections.length} · {analysis.drops.length}{analysis.drops.length ? ` · ${formatTime(analysis.drops[0])}` : ''}</strong></div>
+        <small>Local onset and RMS heuristics · meter confidence is not a probability</small>
       </div>}
       <div className="disabled-row"><Sparkles size={14} /><span>Gameplay highlight detection</span><small>Planned</small></div>
     </section>

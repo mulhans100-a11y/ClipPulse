@@ -16,7 +16,7 @@ import { watchFolder } from '../src/core/folderWatcher';
 import { medalCaptureFolderPreset } from '../src/core/medal';
 import { waveformWidthForDuration } from '../src/core/waveform';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
-import { audioClipBeatOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
+import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
 import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
 import type { MediaAsset, Project, TimelineClip } from '../src/core/types';
 
@@ -83,8 +83,10 @@ test('timeline snap points include clip edges and analyzed beats within an audio
     media: [{ id: 'music', path: 'music.wav', name: 'music.wav', kind: 'audio', duration: rational(5), hasAudio: true, sizeBytes: 1, modifiedAt: '', contentHash: 'music-hash', importedAt: '' }],
     tracks: [{ id: 'audio-track', name: 'A1', kind: 'audio', muted: false, locked: false, clips: [clip] }]
   };
-  const analysis = { method: 'rms-onset-autocorrelation-v1' as const, sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 5, beats: [0.5, 1, 1.5, 2, 2.5, 3], onsets: [], bpmHypotheses: [] };
+  const analysis = { method: 'rms-onset-autocorrelation-v2' as const, sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 5, beats: [0.5, 1, 1.5, 2, 2.5, 3], downbeats: [1, 1.5, 2.5], energyHopSeconds: 1, energyCurve: [0, 0.5, 1], energySections: [], drops: [1.75], onsets: [], bpmHypotheses: [] };
   assert.deepEqual(audioClipBeatOffsets(clip, analysis), [0, 0.25, 0.5, 0.75]);
+  assert.deepEqual(audioClipDownbeatOffsets(clip, analysis), [0, 0.25, 0.75]);
+  assert.deepEqual(audioClipDropOffsets(clip, analysis), [0.375]);
   assert.deepEqual(collectTimelineSnapPoints(project, { music: analysis }), [2, 2.5, 3, 3.5, 4]);
   assert.equal(snapTimelineTime(project, 3.53, 96, { music: analysis }), 3.5);
   assert.equal(snapTimelineTime(project, 3.8, 96, { music: analysis }), 3.8, 'snap only catches positions near a beat or clip edge');
@@ -346,6 +348,12 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
   assert.ok(result.beats.length >= 25, `expected beat positions, got ${result.beats.length}`);
   assert.ok(result.onsets.length >= 25, `expected detected onsets, got ${result.onsets.length}`);
   assert.ok(result.beatPhaseSeconds !== undefined && result.beatPhaseSeconds < 0.1);
+  assert.equal(result.method, 'rms-onset-autocorrelation-v2');
+  assert.ok(result.energyCurve.length >= 15);
+  assert.ok(result.energySections.length > 0);
+  assert.equal(result.meter, undefined, 'even beats without bar accents do not invent a meter');
+  assert.deepEqual(result.drops, [], 'a steady click track does not produce a false energy rise');
+  assert.equal(result.energyHopSeconds, 1);
   assert.ok((await stat(cache)).size > 100);
   assert.deepEqual(await readCachedAudioAnalysis(source, cache), result, 'the library can identify a fresh completed analysis cache');
   assert.deepEqual(await analyzeAudio(source, cache), result, 'a matching source size and mtime reuse the saved result');
@@ -358,6 +366,18 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
     assert.ok(detected.estimatedBpm, `a tempo hypothesis was found for ${bpm} BPM`);
     assert.ok(Math.abs(detected.estimatedBpm - bpm) <= 5, `expected about ${bpm} BPM, got ${detected.estimatedBpm}`);
   }
+});
+
+test('audio analysis reports accented meter, downbeats, and a high-energy transition', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-audio-structure-'));
+  scratch.push(directory);
+  const source = path.join(directory, 'accented.wav');
+  await writeClickTrack(source, 120, 24, { accentEvery: 4, highEnergyAt: 12 });
+  const analysis = await analyzeAudio(source);
+  assert.ok(analysis.estimatedBpm && Math.abs(analysis.estimatedBpm - 120) <= 4);
+  assert.equal(analysis.meter?.beatsPerBar, 4, `expected accented 4/4, got ${JSON.stringify(analysis.meter)}`);
+  assert.ok(analysis.downbeats.length >= 10);
+  assert.ok(analysis.drops.some((time) => Math.abs(time - 12) <= 2), `expected an energy rise near 12 seconds, got ${analysis.drops.join(', ')}`);
 });
 
 test('timeline preview composites active video tracks in track order and renders black across gaps', async () => {
@@ -477,7 +497,7 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   assert.equal((await invoke('validate', '--project', projectPath)).data.valid, true);
 });
 
-async function writeClickTrack(filePath: string, bpm: number, durationSeconds: number): Promise<void> {
+async function writeClickTrack(filePath: string, bpm: number, durationSeconds: number, options: { accentEvery?: number; highEnergyAt?: number } = {}): Promise<void> {
   const sampleRate = 22_050;
   const sampleCount = sampleRate * durationSeconds;
   const dataBytes = sampleCount * 2;
@@ -496,7 +516,9 @@ async function writeClickTrack(filePath: string, bpm: number, durationSeconds: n
     let value = 0;
     if (clickIndex >= 0 && clickIndex < clickSamples) {
       const envelope = Math.exp(-clickIndex / (sampleRate * 0.012));
-      value = Math.sin(2 * Math.PI * 1_000 * clickIndex / sampleRate) * envelope * 0.85;
+      const accent = nearestBeat % (options.accentEvery ?? 1) === 0 ? 0.85 : 0.22;
+      const sectionGain = options.highEnergyAt !== undefined && time < options.highEnergyAt ? 0.22 : 1;
+      value = Math.sin(2 * Math.PI * 1_000 * clickIndex / sampleRate) * envelope * accent * sectionGain;
     }
     wave.writeInt16LE(Math.round(value * 32767), 44 + sample * 2);
   }

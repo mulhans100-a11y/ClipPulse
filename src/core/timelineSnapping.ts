@@ -13,6 +13,26 @@ export function audioClipBeatOffsets(clip: TimelineClip, analysis?: AudioAnalysi
     .map((beat) => (beat - sourceIn) / duration);
 }
 
+export function audioClipDownbeatOffsets(clip: TimelineClip, analysis?: AudioAnalysis): number[] {
+  if (!analysis) return [];
+  const sourceIn = seconds(clip.sourceIn);
+  const sourceEnd = sourceIn + seconds(clip.duration);
+  const duration = seconds(clip.duration);
+  return analysis.downbeats
+    .filter((beat) => beat >= sourceIn && beat < sourceEnd)
+    .map((beat) => (beat - sourceIn) / duration);
+}
+
+export function audioClipDropOffsets(clip: TimelineClip, analysis?: AudioAnalysis): number[] {
+  if (!analysis) return [];
+  const sourceIn = seconds(clip.sourceIn);
+  const sourceEnd = sourceIn + seconds(clip.duration);
+  const duration = seconds(clip.duration);
+  return analysis.drops
+    .filter((drop) => drop >= sourceIn && drop < sourceEnd)
+    .map((drop) => (drop - sourceIn) / duration);
+}
+
 export function collectTimelineSnapPoints(project: Project, analyses: AudioAnalysisMap): number[] {
   const points: number[] = [];
   for (const track of project.tracks) {

@@ -6,8 +6,22 @@ export interface BpmHypothesis {
   score: number;
 }
 
+export interface MeterEstimate {
+  beatsPerBar: number;
+  denominator: 4;
+  downbeatPhase: number;
+  confidence: number;
+}
+
+export interface EnergySection {
+  startSeconds: number;
+  endSeconds: number;
+  level: 'low' | 'medium' | 'high';
+  meanEnergy: number;
+}
+
 export interface AudioAnalysis {
-  method: 'rms-onset-autocorrelation-v1';
+  method: 'rms-onset-autocorrelation-v2';
   sampleRate: number;
   hopSeconds: number;
   durationSeconds: number;
@@ -15,6 +29,12 @@ export interface AudioAnalysis {
   bpmHypotheses: BpmHypothesis[];
   beatPhaseSeconds?: number;
   beats: number[];
+  meter?: MeterEstimate;
+  downbeats: number[];
+  energyHopSeconds: number;
+  energyCurve: number[];
+  energySections: EnergySection[];
+  drops: number[];
   onsets: number[];
 }
 

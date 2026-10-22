@@ -21,8 +21,8 @@ The Phase A editing core is complete. The project also contains partial media-li
 - Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback. The timeline can render a revision-cached MP4 using the same FFmpeg pipeline as export; that preview supports playback, audio, seeking, and frame stepping.
 - FFmpeg MP4/H.264 + AAC rendering with video layer compositing, source audio mixing, output validation, and a CPU H.264 default. Hardware encoders can be selected by CLI.
 - A JSON-output CLI for project creation, media import/search/metadata, timeline operations, validation, frame extraction, and export.
-- Local audio beat analysis with BPM hypotheses, beat positions, and transient timestamps, exposed in the media inspector and CLI. The virtualized media list shows per-asset analysis state and restores completed status from valid caches.
-- Beat ticks on analyzed audio clips and optional timeline snapping to detected beats and clip edges.
+- Local audio analysis with BPM hypotheses, beat and downbeat positions, cautious meter estimates, relative energy curves, coarse sections, energy-rise markers, and transient timestamps. Results appear in the inspector and CLI, and validated analysis state appears per asset in the virtualized media list.
+- Beat, downbeat, and energy-rise ticks on analyzed audio clips; optional timeline snapping uses detected beats and clip edges.
 
 ## Quick start on Windows
 
@@ -85,6 +85,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 - Media references are absolute file paths. Relinking keeps the existing media ID, requires the same media kind, and rejects a replacement that is too short for existing clip ranges. SQLite is a rebuildable cache adjacent to the project.
 - The `.bak` auto-backup is a single snapshot. Undo/redo snapshots are stored in a project-adjacent `.openmontage-history-<id>` folder, capped at 50 states; each timeline operation writes the project immediately.
 - The Medal integration currently means authorized local-folder import only. No cloud API integration is claimed.
-- Beat analysis detects amplitude rises with onset autocorrelation; it does not identify downbeats, meter, harmonic content, or musical sections.
+- Beat and meter estimates use local RMS/onset heuristics, not a trained music model. Meter confidence is a heuristic, energy sections are coarse four-second summaries, and harmonic analysis, confidence calibration, and varied real-music evaluation remain incomplete.
 - Beat snapping uses those estimated beat positions; it does not yet distinguish strong impacts or drops from regular beats.
 - No GitHub remote is configured in this local checkout, so no public repository or release has been published.

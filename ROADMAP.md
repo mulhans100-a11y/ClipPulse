@@ -39,7 +39,7 @@ Status reflects the repository at `0.1.0`.
 
 - [x] Initial local audio analysis: BPM hypotheses, beat positions, and amplitude-transient timestamps, with cached JSON results.
 - [x] Show analyzed beat positions on audio timeline clips and snap editing positions to them.
-- [ ] Improve audio analysis with downbeats, meter, energy sections/drops, confidence calibration, and varied real-music evaluation.
+- [ ] Complete audio-analysis improvements: downbeats, heuristic meter, one-second relative energy, coarse sections, and energy-rise markers are implemented; confidence calibration and varied real-music evaluation remain.
 - [ ] Plugin interface and initial game-specific detector evaluation set.
 - [ ] Scene, motion, audio-transient and OCR detector provenance with timestamped event results.
 - [ ] Review/correction UI and per-detector precision/recall reporting.

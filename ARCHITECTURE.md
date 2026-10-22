@@ -40,6 +40,6 @@ The Timeline monitor requests a frame-snapped still image from `renderTimelineFr
 
 ## Planned expansion
 
-The extension points are the `MediaAsset`, `TimelineTrack`, `TimelineClip`, and typed core operations. Next increments should add real-time preview and export parity, richer audio analysis and detector records with provenance, then an edit planner that creates ordinary editable timeline clips. Effects should be serialized as typed clip properties and compiled by a renderer used by both preview and export. Masks and tracking should likewise produce persisted frame/time data and use that same compositor. API/MCP should be thin validated adapters around core operations rather than a second editor implementation.
+The extension points are the `MediaAsset`, `TimelineTrack`, `TimelineClip`, and typed core operations. Local audio analysis currently returns beat/downbeat hypotheses, relative energy sections, and transient timestamps through a versioned source cache. Next increments should add varied real-music evaluation, detector records with provenance and review, then an edit planner that creates ordinary editable timeline clips. Effects should be serialized as typed clip properties and compiled by a renderer used by both preview and export. Masks and tracking should likewise produce persisted frame/time data and use that same compositor. API/MCP should be thin validated adapters around core operations rather than a second editor implementation.
 
 OpenTimelineIO may be added for interchange, but it will not replace the FFmpeg rendering engine.
