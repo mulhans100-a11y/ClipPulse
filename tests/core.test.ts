@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setImportRootWatching, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
+import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setClipEffects, setImportRootWatching, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
 import { analyzeAudio, readCachedAudioAnalysis } from '../src/core/audioAnalysis';
 import { analyzeHighlightCues } from '../src/core/highlightAnalysis';
 import { evaluateHighlightDataset } from '../src/core/analysisEvaluation';
@@ -22,6 +22,7 @@ import { waveformWidthForDuration } from '../src/core/waveform';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
 import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
+import { clipAudioSpeedChunks, clipSetptsExpression, clipSourceDuration, clipSourceOffsetAt } from '../src/core/clipEffects';
 import type { AudioAnalysis, HighlightAnalysis, MediaAsset, Project, TimelineClip } from '../src/core/types';
 
 const scratch: string[] = [];
@@ -333,6 +334,88 @@ test('clip audio fades are validated, persisted, and audible in the rendered out
   const late = await rawRms(rawAudio, 1.85, 0.1);
   assert.ok(peak > early * 3, `fade in should raise audio level, early=${early}, peak=${peak}`);
   assert.ok(peak > late * 3, `fade out should lower audio level, late=${late}, peak=${peak}`);
+});
+
+test('Phase E speed ramps, shared preview/export effects, titles, transitions, LUTs, and audio automation render consistently', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-effects-'));
+  scratch.push(directory);
+  const red = path.join(directory, 'red.mp4'), blue = path.join(directory, 'blue.mp4');
+  const music = path.join(directory, 'music.wav'), dialogue = path.join(directory, 'dialogue.wav');
+  const lut = path.join(directory, 'identity.cube'), projectFile = path.join(directory, 'effects.omproj');
+  const mixedOutput = path.join(directory, 'effects-mixed.mp4'), isolatedOutput = path.join(directory, 'effects-isolated.mp4'), noDuckOutput = path.join(directory, 'effects-no-duck.mp4');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=24:d=4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', red]);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=24:d=4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', blue]);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=4', '-c:a', 'pcm_s16le', music]);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=1', '-c:a', 'pcm_s16le', dialogue]);
+  await writeFile(lut, 'TITLE "Identity"\nLUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n');
+  await createProject(projectFile, { frameRate: rational(24), width: 320, height: 180 });
+  const imported = await importMedia(projectFile, [red, blue, music, dialogue]);
+  const tracks = await addTrack(projectFile, 'video', 'V2');
+  const audioTracks = await addTrack(projectFile, 'audio', 'A2');
+  const videoTracks = tracks.tracks.filter((track) => track.kind === 'video');
+  const audio = audioTracks.tracks.filter((track) => track.kind === 'audio');
+  const redClip = (await addClip(projectFile, imported.added.find((asset) => asset.path === red)!.id, videoTracks[0].id, rational(0), rational(0), rational(5, 2))).tracks.find((track) => track.id === videoTracks[0].id)!.clips[0];
+  const blueClip = (await addClip(projectFile, imported.added.find((asset) => asset.path === blue)!.id, videoTracks[1].id, rational(0), rational(0), rational(5, 2))).tracks.find((track) => track.id === videoTracks[1].id)!.clips[0];
+  const musicClip = (await addClip(projectFile, imported.added.find((asset) => asset.path === music)!.id, audio[0].id, rational(0), rational(0), rational(5, 2))).tracks.find((track) => track.id === audio[0].id)!.clips[0];
+  const dialogueClip = (await addClip(projectFile, imported.added.find((asset) => asset.path === dialogue)!.id, audio[1].id, rational(0), rational(0), rational(3, 5))).tracks.find((track) => track.id === audio[1].id)!.clips[0];
+  await setClipEffects(projectFile, redClip.id, {
+    playbackRate: rational(1), speedKeyframes: [{ time: rational(0), rate: rational(1) }, { time: rational(5, 2), rate: rational(2) }],
+    transform: { scale: 0.8, x: 12, y: -4, rotationDegrees: 0 },
+    color: { brightness: 0.08, contrast: 1.1, saturation: 0.8, lutPath: lut },
+    keyframes: [{ property: 'opacity', time: rational(0), value: 0.65 }, { property: 'opacity', time: rational(5, 2), value: 0.9 }],
+    transitionIn: { type: 'dissolve', duration: rational(2, 5) },
+    title: { text: 'Ranked: win!', fontSize: 24, color: '#ffffff', x: 0.5, y: 0.1, start: rational(0), duration: rational(2), box: true }
+  });
+  await setClipEffects(projectFile, blueClip.id, { transitionIn: { type: 'wipe-left', duration: rational(7, 10) } });
+  await setClipAudio(projectFile, musicClip.id, { volume: 0.8, fadeIn: rational(1, 5), fadeOut: rational(1, 5) });
+  await setClipEffects(projectFile, musicClip.id, { normalizeAudio: true, playbackRate: rational(1), speedKeyframes: [{ time: rational(0), rate: rational(1) }, { time: rational(5, 2), rate: rational(2) }] });
+  await updateTrackSettings(projectFile, audio[0].id, { audioRole: 'music', duckUnderDialogue: true, volume: 0.75, volumeKeyframes: [{ time: rational(0), value: 1 }, { time: rational(2), value: 0.7 }] });
+  await updateTrackSettings(projectFile, audio[1].id, { audioRole: 'dialogue', volume: 1.5 });
+
+  const saved = await loadProject(projectFile);
+  const savedRed = saved.tracks.flatMap((track) => track.clips).find((clip) => clip.id === redClip.id)!;
+  assert.equal(decimal(clipSourceDuration(savedRed)), '3.75', 'a linear 1×→2× ramp over 2.5 s consumes exactly 3.75 source seconds');
+  assert.equal(decimal(clipSourceOffsetAt(savedRed, rational(5, 4))), '1.5625');
+  assert.match(clipSetptsExpression(savedRed), /sqrt\(/, 'video speed ramps use the inverse integrated rate curve');
+  assert.ok(clipAudioSpeedChunks(savedRed).length > 2, 'audio speed ramps are split into short pitch-preserving tempo sections');
+  assert.equal(saved.tracks.find((track) => track.id === audio[0].id)?.duckUnderDialogue, true);
+  const splitProject = await splitClip(projectFile, redClip.id, rational(5, 4));
+  const splitRed = splitProject.tracks.find((track) => track.id === videoTracks[0].id)!.clips;
+  const rightRed = splitRed.find((clip) => compare(clip.start, rational(5, 4)) === 0)!;
+  assert.equal(decimal(rightRed.sourceIn), '1.5625', 'splitting a speed-ramped clip advances source-in by its integrated speed');
+  assert.equal(decimal(add(clipSourceDuration(splitRed[0]), clipSourceDuration(rightRed))), '3.75', 'splitting preserves total source coverage');
+  const extendedProject = await trimClip(projectFile, rightRed.id, { start: rational(1), sourceIn: rational(19, 16), duration: rational(3, 2) });
+  const extendedRed = extendedProject.tracks.find((track) => track.id === videoTracks[0].id)!.clips.find((clip) => clip.id === rightRed.id)!;
+  assert.equal(decimal(extendedRed.sourceIn), '1.1875');
+  assert.equal(decimal(clipSourceOffsetAt(extendedRed, rational(1, 2))), '0.7625', 'extending a clip head repositions its speed curve and preserves the original frame mapping');
+
+  const wipePreview = path.join(directory, 'wipe-preview.png');
+  await renderTimelineFrame(saved, rational(5, 24), wipePreview);
+  const leftWipe = await pixelAt(wipePreview, directory, 'wipe-left.rgb', 20, 90);
+  const rightWipe = await pixelAt(wipePreview, directory, 'wipe-right.rgb', 270, 90);
+  assert.ok(leftWipe[2] > leftWipe[0] * 3, `wipe-left should reveal the upper blue image first on the left, got ${leftWipe.join(',')}`);
+  assert.ok(rightWipe[0] > rightWipe[2] * 3, `wipe-left should leave the red image visible on the right, got ${rightWipe.join(',')}`);
+
+  const mixed = await exportVideo(saved, { outputPath: mixedOutput });
+  assert.equal(decimal(mixed.duration), '2.5');
+  const isolated = await updateTrackSettings(projectFile, videoTracks[1].id, { muted: true });
+  const previewFrame = path.join(directory, 'effect-preview.png');
+  await renderTimelineFrame(isolated, rational(3, 2), previewFrame);
+  await exportVideo(isolated, { outputPath: isolatedOutput });
+  const exportFrame = path.join(directory, 'effect-export.png');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', '1.5', '-i', isolatedOutput, '-frames:v', '1', exportFrame]);
+  const previewPixel = await firstRgb(previewFrame, directory, 'effect-preview.rgb');
+  const exportPixel = await firstRgb(exportFrame, directory, 'effect-export.rgb');
+  assert.ok(Math.abs(previewPixel[0] - exportPixel[0]) < 35 && Math.abs(previewPixel[1] - exportPixel[1]) < 35 && Math.abs(previewPixel[2] - exportPixel[2]) < 35, `preview and export should agree after effects; preview=${previewPixel.join(',')} export=${exportPixel.join(',')}`);
+  const probe = JSON.parse((await runCommand('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,width,height', '-of', 'json', mixedOutput])).stdout);
+  assert.ok(probe.streams.some((stream: any) => stream.codec_type === 'audio'), 'normalized, faded, sidechain-ducked audio is encoded');
+  assert.ok(probe.streams.some((stream: any) => stream.codec_type === 'video' && stream.width === 320 && stream.height === 180));
+  const noDuck = await updateTrackSettings(projectFile, audio[0].id, { duckUnderDialogue: false });
+  await exportVideo(noDuck, { outputPath: noDuckOutput });
+  const duckRaw = path.join(directory, 'duck.raw'), noDuckRaw = path.join(directory, 'no-duck.raw');
+  for (const [input, output] of [[mixedOutput, duckRaw], [noDuckOutput, noDuckRaw]]) await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', input, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '48000', '-f', 's16le', output]);
+  const duckedMusicMix = await rawRms(duckRaw, 0.25, 0.1), unDuckedMusicMix = await rawRms(noDuckRaw, 0.25, 0.1);
+  assert.ok(unDuckedMusicMix > duckedMusicMix * 1.05, `dialogue ducking should lower the concurrent music mix, ducked=${duckedMusicMix}, un-ducked=${unDuckedMusicMix}`);
 });
 
 test('core rejects source overwrite and invalid split positions with stable errors', async () => {
@@ -703,6 +786,14 @@ async function firstRgb(imagePath: string, directory: string, fileName: string):
   const rawPath = path.join(directory, fileName);
   await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', imagePath, '-vf', 'scale=1:1:flags=neighbor', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', rawPath]);
   return readFile(rawPath);
+}
+
+async function pixelAt(imagePath: string, directory: string, fileName: string, x: number, y: number): Promise<number[]> {
+  const rawPath = path.join(directory, fileName);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', imagePath, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', rawPath]);
+  const bytes = await readFile(rawPath);
+  const offset = (y * 320 + x) * 3;
+  return [bytes[offset], bytes[offset + 1], bytes[offset + 2]];
 }
 
 async function rawRms(filePath: string, startSeconds: number, durationSeconds: number): Promise<number> {

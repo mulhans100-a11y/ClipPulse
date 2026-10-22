@@ -11,7 +11,7 @@ import { generateAutomaticMontages } from '../core/autoMontage';
 import { renderTimelineFrame } from '../core/timelinePreview';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable, runCommand } from '../core/ffmpeg';
-import { addClip, addTrack, createProject, duplicateClip, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, searchMedia, setClipAudio, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateTrackSettings, validateProject } from '../core/project';
+import { addClip, addTrack, createProject, duplicateClip, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, searchMedia, setClipAudio, setClipEffects, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateTrackSettings, validateProject } from '../core/project';
 import { decimal, frameTime, parseDecimal, rational, toFrame } from '../core/time';
 import type { AutoMontageCustomRules, AutoMontageFormat, AutoMontageStyle } from '../core/types';
 
@@ -44,7 +44,7 @@ function secondsFlag(args: ParsedArgs, key: string, fallback?: string) {
 }
 function json(data: unknown): void { process.stdout.write(`${JSON.stringify({ ok: true, data }, null, 2)}\n`); }
 function help(): void {
-  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C/D)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  generate-montage --project FILE --music ID --duration SEC [--style clean|aggressive|cinematic|velocity|custom] [--custom-rules JSON] [--video ID ...] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]\n  evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]\n  analysis-runtimes\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nGenerated montage variants are separate editable .omproj files; the source project is not modified. Preview by opening a variant, then use export as usual. All successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
+  process.stdout.write(`OpenMontage AI CLI (Phase A/B/C/D/E)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  generate-montage --project FILE --music ID --duration SEC [--style clean|aggressive|cinematic|velocity|custom] [--custom-rules JSON] [--video ID ...] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]\n  evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]\n  analysis-runtimes\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false] [--volume 0-8] [--role standard|dialogue|music] [--normalize true|false] [--duck-under-dialogue true|false] [--volume-keyframes FILE.json]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-effects --project FILE --clip ID --effects FILE.json\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nGenerated montage variants are separate editable .omproj files; the source project is not modified. Preview by opening a variant, then use export as usual. All successful commands return JSON on stdout. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
 }
 
 async function main(): Promise<void> {
@@ -169,14 +169,32 @@ async function main(): Promise<void> {
     json(project.tracks.at(-1)); return;
   }
   if (args.command === 'track-set') {
-    const patch: { muted?: boolean; solo?: boolean; locked?: boolean } = {};
+    const patch: Parameters<typeof updateTrackSettings>[2] = {};
     for (const [flag, property] of [['mute', 'muted'], ['solo', 'solo'], ['lock', 'locked']] as const) {
       const value = one(args, flag);
       if (value === undefined) continue;
       if (value !== 'true' && value !== 'false') throw new AppError('INVALID_ARGUMENTS', `--${flag} must be true or false.`);
       patch[property] = value === 'true';
     }
-    if (!Object.keys(patch).length) throw new AppError('INVALID_ARGUMENTS', 'Provide at least one of --mute, --solo or --lock.');
+    const volume = one(args, 'volume'); if (volume !== undefined) patch.volume = Number(volume);
+    const role = one(args, 'role');
+    if (role !== undefined) {
+      if (!['standard', 'dialogue', 'music'].includes(role)) throw new AppError('INVALID_ARGUMENTS', '--role must be standard, dialogue, or music.');
+      patch.audioRole = role as NonNullable<typeof patch.audioRole>;
+    }
+    for (const [flag, property] of [['normalize', 'normalizeAudio'], ['duck-under-dialogue', 'duckUnderDialogue']] as const) {
+      const value = one(args, flag);
+      if (value !== undefined) {
+        if (value !== 'true' && value !== 'false') throw new AppError('INVALID_ARGUMENTS', `--${flag} must be true or false.`);
+        patch[property] = value === 'true';
+      }
+    }
+    const volumeKeyframes = one(args, 'volume-keyframes');
+    if (volumeKeyframes) {
+      try { patch.volumeKeyframes = JSON.parse(await fs.readFile(path.resolve(volumeKeyframes), 'utf8')); }
+      catch (error) { throw new AppError('INVALID_ARGUMENTS', `Could not read volume keyframes: ${error instanceof Error ? error.message : error}`); }
+    }
+    if (!Object.keys(patch).length) throw new AppError('INVALID_ARGUMENTS', 'Provide at least one track setting.');
     const trackId = one(args, 'track', true)!;
     const project = await updateTrackSettings(file, trackId, patch);
     json(project.tracks.find((track) => track.id === trackId)); return;
@@ -209,6 +227,17 @@ async function main(): Promise<void> {
     if (!Object.keys(patch).length) throw new AppError('INVALID_ARGUMENTS', 'Provide --enabled, --volume, --fade-in or --fade-out.');
     const project = await setClipAudio(file, one(args, 'clip', true)!, patch);
     const clipId = one(args, 'clip');
+    json(project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === clipId)); return;
+  }
+  if (args.command === 'clip-effects') {
+    const effectsPath = path.resolve(one(args, 'effects', true)!);
+    let patch;
+    try { patch = JSON.parse(await fs.readFile(effectsPath, 'utf8')); }
+    catch (error) { throw new AppError('INVALID_ARGUMENTS', `Could not read clip effects JSON: ${error instanceof Error ? error.message : error}`); }
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new AppError('INVALID_ARGUMENTS', 'Clip effects JSON must contain an object.');
+    for (const field of ['playbackRate', 'speedKeyframes', 'transform', 'color', 'keyframes', 'transitionIn', 'title']) if (patch[field] === null) patch[field] = undefined;
+    const clipId = one(args, 'clip', true)!;
+    const project = await setClipEffects(file, clipId, patch);
     json(project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === clipId)); return;
   }
   if (args.command === 'clip-trim') {

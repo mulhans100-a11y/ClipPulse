@@ -1,0 +1,27 @@
+{
+  "playbackRate": { "num": "1", "den": "1" },
+  "speedKeyframes": [
+    { "time": { "num": "0", "den": "1" }, "rate": { "num": "1", "den": "1" } },
+    { "time": { "num": "4", "den": "1" }, "rate": { "num": "2", "den": "1" } }
+  ],
+  "transform": { "scale": 1.1, "x": 0, "y": -24, "rotationDegrees": 0 },
+  "color": { "brightness": 0.04, "contrast": 1.1, "saturation": 1.15, "lutPath": "C:/LUTs/cinematic.cube" },
+  "keyframes": [
+    { "property": "opacity", "time": { "num": "0", "den": "1" }, "value": 0, "interpolation": "linear" },
+    { "property": "opacity", "time": { "num": "1", "den": "1" }, "value": 1, "interpolation": "linear" },
+    { "property": "volume", "time": { "num": "0", "den": "1" }, "value": 0.5 },
+    { "property": "volume", "time": { "num": "2", "den": "1" }, "value": 0.9 }
+  ],
+  "transitionIn": { "type": "dissolve", "duration": { "num": "1", "den": "2" } },
+  "title": {
+    "text": "Ranked win",
+    "fontSize": 48,
+    "color": "#ffffff",
+    "x": 0.5,
+    "y": 0.12,
+    "start": { "num": "0", "den": "1" },
+    "duration": { "num": "3", "den": "1" },
+    "box": true
+  },
+  "normalizeAudio": true
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
-import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
-import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
+import { add as addTime, compare, decimal, frameTime, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
 
@@ -28,6 +28,30 @@ function frameLabel(value: { num: string; den: string }, fps: Project['frameRate
   return String(toFrame(value, fps));
 }
 function clipEnd(clip: TimelineClip): number { return secondsOf(clip.start) + secondsOf(clip.duration); }
+function clipSourceOffsetAtSeconds(clip: TimelineClip, localTime: number): number {
+  const base = secondsOf(clip.playbackRate ?? rational(1));
+  if (localTime < 0) return localTime * base;
+  const byTime = new Map<number, { time: number; rate: number }>([[0, { time: 0, rate: base }]]);
+  for (const frame of clip.speedKeyframes ?? []) byTime.set(secondsOf(frame.time), { time: secondsOf(frame.time), rate: secondsOf(frame.rate) });
+  const unique = [...byTime.values()].sort((a, b) => a.time - b.time);
+  if (unique[0].time > 0) unique.unshift({ time: 0, rate: base });
+  let source = 0;
+  let currentTime = 0;
+  let currentRate = unique[0].rate;
+  for (let index = 1; index < unique.length; index++) {
+    const next = unique[index];
+    if (localTime <= currentTime) return source;
+    const step = Math.min(localTime, next.time) - currentTime;
+    const fraction = step / (next.time - currentTime);
+    const rateAtEnd = currentRate + (next.rate - currentRate) * fraction;
+    source += step * (currentRate + rateAtEnd) / 2;
+    currentTime += step;
+    currentRate = rateAtEnd;
+    if (localTime <= next.time) return source;
+    currentRate = next.rate;
+  }
+  return source + Math.max(0, localTime - currentTime) * currentRate;
+}
 function getTrack(project: Project, clipId: string): TimelineTrack | undefined { return project.tracks.find((track) => track.clips.some((clip) => clip.id === clipId)); }
 function getClip(project: Project | null, id: string | null): { track: TimelineTrack; clip: TimelineClip } | null {
   if (!project || !id) return null;
@@ -418,6 +442,10 @@ export default function App() {
     if (!project || !currentClip) return;
     await run(() => window.openmontage.setClipAudio(projectPath, currentClip.clip.id, patch), (next) => next, 'Clip audio updated');
   }
+  async function patchClipEffects(patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>) {
+    if (!project || !currentClip) return;
+    await run(() => window.openmontage.setClipEffects(projectPath, currentClip.clip.id, patch), (next) => next, 'Clip effects updated');
+  }
   function beginClipTrim(event: React.PointerEvent<HTMLSpanElement>, clip: TimelineClip, asset: MediaAsset, edge: 'left' | 'right') {
     if (!project) return;
     event.preventDefault(); event.stopPropagation();
@@ -431,8 +459,9 @@ export default function App() {
       const deltaFrames = Math.round((pointer.clientX - originX) / timelineScale / frameStep);
       const rawDelta = deltaFrames * frameStep;
       if (edge === 'left') {
-        const delta = Math.max(Math.max(-start, -sourceIn), Math.min(duration - frameStep, rawDelta));
-        latest = { clipId: clip.id, start: start + delta, sourceIn: sourceIn + delta, duration: duration - delta };
+        const startRate = secondsOf(clip.playbackRate ?? rational(1));
+        const delta = Math.max(Math.max(-start, -sourceIn / Math.max(startRate, 0.001)), Math.min(duration - frameStep, rawDelta));
+        latest = { clipId: clip.id, start: start + delta, sourceIn: sourceIn + clipSourceOffsetAtSeconds(clip, delta), duration: duration - delta };
       } else {
         const maxDelta = secondsOf(asset.duration) - sourceIn - duration;
         const delta = Math.max(frameStep - duration, Math.min(maxDelta, rawDelta));
@@ -585,6 +614,7 @@ export default function App() {
                       <button className={`track-solo ${track.solo ? 'solo-active' : ''}`} title={track.solo ? 'Disable track solo' : 'Solo track'} onClick={() => void run(() => window.openmontage.updateTrack(projectPath, track.id, { solo: !track.solo }), (next) => next, track.solo ? 'Track solo disabled' : 'Track solo enabled')}><span>S</span></button>
                       <button title={track.locked ? 'Unlock track' : 'Lock track'} onClick={() => void run(() => window.openmontage.updateTrack(projectPath, track.id, { locked: !track.locked }), (next) => next, track.locked ? 'Track unlocked' : 'Track locked')}><span className={track.locked ? 'lock-active' : ''}>⌑</span></button>
                     </div>
+                    {track.kind === 'audio' && <TrackAudioControls track={track} project={project} playhead={playhead} onUpdate={(patch) => void run(() => window.openmontage.updateTrack(projectPath, track.id, patch), (next) => next, 'Track audio updated')} />}
                   </div>
                   <div className="track-lane" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                     event.preventDefault(); const clipId = event.dataTransfer.getData('text/clip-id'); if (!clipId) return;
@@ -606,8 +636,19 @@ export default function App() {
                       const beatOffsets = asset.kind === 'audio' ? audioClipBeatOffsets(clip, audioAnalyses[asset.id]) : [];
                       const downbeatOffsets = asset.kind === 'audio' ? audioClipDownbeatOffsets(clip, audioAnalyses[asset.id]) : [];
                       const dropOffsets = asset.kind === 'audio' ? audioClipDropOffsets(clip, audioAnalyses[asset.id]) : [];
+                      const fadeInSeconds = secondsOf(clip.fadeIn ?? rational(0)), fadeOutSeconds = secondsOf(clip.fadeOut ?? rational(0));
+                      const envelopeFrames = track.kind === 'audio' ? [
+                        { time: 0, value: fadeInSeconds > 0 ? 0 : clip.volume * (track.volume ?? 1) },
+                        ...(fadeInSeconds > 0 ? [{ time: fadeInSeconds, value: clip.volume * (track.volume ?? 1) }] : []),
+                        ...(clip.keyframes ?? []).filter((frame) => frame.property === 'volume').map((frame) => ({ time: secondsOf(frame.time), value: frame.value * (track.volume ?? 1) })),
+                        ...(track.volumeKeyframes ?? []).filter((frame) => secondsOf(frame.time) >= start && secondsOf(frame.time) <= start + clipDuration).map((frame) => ({ time: secondsOf(frame.time) - start, value: frame.value * clip.volume })),
+                        ...(fadeOutSeconds > 0 ? [{ time: clipDuration - fadeOutSeconds, value: clip.volume * (track.volume ?? 1) }, { time: clipDuration, value: 0 }] : []),
+                        { time: clipDuration, value: fadeOutSeconds > 0 ? 0 : clip.volume * (track.volume ?? 1) }
+                      ].sort((a, b) => a.time - b.time) : [];
+                      const envelopePoints = envelopeFrames.map((frame) => `${Math.max(0, Math.min(100, frame.time / Math.max(clipDuration, 0.001) * 100))},${100 - Math.max(0, Math.min(100, frame.value / 8 * 90 + 5))}`).join(' ');
                       return <div key={clip.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/clip-id', clip.id)} onClick={(event) => { event.stopPropagation(); setSelectedClipId(clip.id); setSelectedMediaId(asset.id); setPlayhead(start); }} className={`timeline-clip ${track.kind} ${selectedClipId === clip.id ? 'active' : ''}`} style={{ left: start * timelineScale, width, '--clip-hue': `${(index * 61 + asset.name.length * 13) % 360}` } as React.CSSProperties}>
                         {artworkPath && <img className="clip-filmstrip" style={clipArtworkStyle} src={`${window.openmontage.toFileUrl(artworkPath)}${clipWaveform ? `?v=${clipWaveform.updatedAt}` : ''}`} />}
+                        {track.kind === 'audio' && envelopeFrames.length > 2 && <svg className="clip-audio-envelope" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Audio gain automation"><polyline points={envelopePoints} /></svg>}
                         {beatOffsets.length > 0 && <span className="timeline-beat-markers" aria-hidden="true">{beatOffsets.map((offset, beatIndex) => <i key={beatIndex} className={downbeatOffsets.includes(offset) ? 'downbeat' : ''} style={{ left: `${offset * 100}%` }} />)}{dropOffsets.map((offset, dropIndex) => <i key={`drop-${dropIndex}`} className="drop" style={{ left: `${offset * 100}%` }} />)}</span>}
                         <div className="clip-content"><strong>{asset.name}</strong><span>{formatTime(clipDuration)}</span></div>
                         <span className="clip-edge left" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'left')} title="Drag to trim clip start" /><span className="clip-edge right" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'right')} title="Drag to trim clip end" />
@@ -632,8 +673,9 @@ export default function App() {
             <NumberField label="Volume" unit="×" value={currentClip.clip.volume} min={0} max={8} step={0.05} onCommit={(volume) => void patchClipAudio({ volume })} />
             <NumberField label="Fade in" unit="s" value={secondsOf(currentClip.clip.fadeIn ?? rational(0))} max={secondsOf(currentClip.clip.duration)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(fadeIn) => void patchClipAudio({ fadeIn })} />
             <NumberField label="Fade out" unit="s" value={secondsOf(currentClip.clip.fadeOut ?? rational(0))} max={secondsOf(currentClip.clip.duration)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(fadeOut) => void patchClipAudio({ fadeOut })} />
+            <div className="toggle-row"><span><Activity size={14} /> Loudness normalization</span><button className={`switch ${currentClip.clip.normalizeAudio ? 'on' : ''}`} onClick={() => void patchClipEffects({ normalizeAudio: !currentClip.clip.normalizeAudio })}><i /></button></div>
           </section>
-          <section className="inspector-section muted-section"><div className="section-label"><span>MORE CONTROLS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Sparkles size={14} /><span>Effects and keyframes</span><small>Planned</small></div><div className="disabled-row"><Activity size={14} /><span>Masking and tracking</span><small>Planned</small></div></section>
+          <ClipEffectsInspector key={currentClip.clip.id} clip={currentClip.clip} project={project} playhead={playhead} onPatch={(patch) => void patchClipEffects(patch)} />
         </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} analysisStatus={audioAnalysisStatuses[selectedMedia.id]} onAnalysisStatus={setAudioAnalysisStatus} mediaJobs={mediaJobs} queuePaused={mediaJobsPaused} onQueueProxy={() => void generateProxy(selectedMedia.id)} onClearProxies={() => void clearProxyCache()} onPauseQueue={() => void setMediaQueuePaused(true)} onResumeQueue={() => void setMediaQueuePaused(false)} onRetryJob={(jobId) => void retryMediaJob(jobId)} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} onAnalysis={cacheAudioAnalysis} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
         <div className="inspector-footer"><span>PROJECT</span><strong>{project.name}</strong><small>{project.width} × {project.height} · {Number(project.frameRate.num) / Number(project.frameRate.den)} fps</small></div>
       </aside>
@@ -644,6 +686,105 @@ export default function App() {
 
     <footer className="statusbar"><span className={error ? 'status-error' : ''}>{error ? error : notice}</span><span className="status-right"><i className={ffmpeg ? 'online' : ''} />{ffmpeg ? 'Ready' : 'FFmpeg missing'} <span className="status-separator" />{project ? `${project.media.length} media` : ''}</span></footer>
   </div>;
+}
+
+type ClipEffectPatch = Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>;
+
+function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: TimelineClip; project: Project; playhead: number; onPatch: (patch: ClipEffectPatch) => void }) {
+  const transform = clip.transform ?? { scale: 1, x: 0, y: 0, rotationDegrees: 0 };
+  const color = clip.color ?? { brightness: 0, contrast: 1, saturation: 1 };
+  const local = Math.max(0, Math.min(secondsOf(clip.duration), playhead - secondsOf(clip.start)));
+  const localTime = frameTime(toFrame(parseDecimal(local), project.frameRate), project.frameRate);
+  const [property, setProperty] = useState<NonNullable<TimelineClip['keyframes']>[number]['property']>('opacity');
+  const [value, setValue] = useState('1');
+  const [speedValue, setSpeedValue] = useState(String(secondsOf(clip.playbackRate ?? rational(1))));
+  const [titleText, setTitleText] = useState(clip.title?.text ?? '');
+  useEffect(() => { setSpeedValue(String(secondsOf(clip.playbackRate ?? rational(1)))); }, [clip.playbackRate]);
+  useEffect(() => { setTitleText(clip.title?.text ?? ''); }, [clip.title?.text]);
+
+  function updateTransform(patch: Partial<NonNullable<TimelineClip['transform']>>) { onPatch({ transform: { ...transform, ...patch } }); }
+  function updateColor(patch: Partial<NonNullable<TimelineClip['color']>>) { onPatch({ color: { ...color, ...patch } }); }
+  function addKeyframe() {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return;
+    const frames = (clip.keyframes ?? []).filter((frame) => frame.property !== property || compare(frame.time, localTime) !== 0);
+    onPatch({ keyframes: [...frames, { property, time: localTime, value: number, interpolation: 'linear' as const }].sort((a, b) => compare(a.time, b.time)) });
+  }
+  function addSpeedKeyframe() {
+    const rate = parseDecimal(speedValue);
+    const frames = (clip.speedKeyframes ?? []).filter((frame) => compare(frame.time, localTime) !== 0);
+    onPatch({ speedKeyframes: [...frames, { time: localTime, rate }].sort((a, b) => compare(a.time, b.time)) });
+  }
+  function updateTitle(patch: Partial<NonNullable<TimelineClip['title']>>) {
+    const title = clip.title ?? { text: '', fontSize: 56, color: '#ffffff', x: 0.5, y: 0.12, start: rational(0), duration: clip.duration, box: true };
+    onPatch({ title: { ...title, ...patch } });
+  }
+  function updateTransition(type: string) {
+    if (type === 'none') { onPatch({ transitionIn: undefined }); return; }
+    const duration = Math.min(0.5, secondsOf(clip.duration));
+    onPatch({ transitionIn: { type: type as NonNullable<TimelineClip['transitionIn']>['type'], duration: parseDecimal(duration) } });
+  }
+  const keyframeRange: Record<typeof property, [number, number]> = { opacity: [0, 1], brightness: [-1, 1], contrast: [0, 4], saturation: [0, 4], volume: [0, 8] };
+  return <>
+    <section className="inspector-section"><div className="section-label"><span>VIDEO EFFECTS</span><ChevronDown size={14} /></div>
+      <NumberField label="Scale" unit="×" value={transform.scale} min={0.1} max={4} step={0.05} onCommit={(scale) => updateTransform({ scale })} />
+      <NumberField label="Position X" unit="px" value={transform.x} min={-project.width * 2} max={project.width * 2} step={1} onCommit={(x) => updateTransform({ x })} />
+      <NumberField label="Position Y" unit="px" value={transform.y} min={-project.height * 2} max={project.height * 2} step={1} onCommit={(y) => updateTransform({ y })} />
+      <NumberField label="Rotation" unit="°" value={transform.rotationDegrees} min={-360} max={360} step={1} onCommit={(rotationDegrees) => updateTransform({ rotationDegrees })} />
+      <NumberField label="Brightness" unit="" value={color.brightness} min={-1} max={1} step={0.05} onCommit={(brightness) => updateColor({ brightness })} />
+      <NumberField label="Contrast" unit="×" value={color.contrast} min={0} max={4} step={0.05} onCommit={(contrast) => updateColor({ contrast })} />
+      <NumberField label="Saturation" unit="×" value={color.saturation} min={0} max={4} step={0.05} onCommit={(saturation) => updateColor({ saturation })} />
+      <TextField label="3D LUT file" value={color.lutPath ?? ''} placeholder="Optional .cube path" onCommit={(lutPath) => updateColor({ lutPath: lutPath.trim() || undefined })} />
+    </section>
+    <section className="inspector-section"><div className="section-label"><span>SPEED & TRANSITION</span><ChevronDown size={14} /></div>
+      <NumberField label="Playback rate" unit="×" value={secondsOf(clip.playbackRate ?? rational(1))} min={0.25} max={4} step={0.05} onCommit={(rate) => onPatch({ playbackRate: parseDecimal(rate) })} />
+      <label className="text-field"><span>Transition in</span><select value={clip.transitionIn?.type ?? 'none'} onChange={(event) => updateTransition(event.target.value)}><option value="none">None</option><option value="dissolve">Dissolve</option><option value="wipe-left">Wipe left</option><option value="wipe-right">Wipe right</option></select></label>
+      {clip.transitionIn && <NumberField label="Transition length" unit="s" value={secondsOf(clip.transitionIn.duration)} min={0.04} max={secondsOf(clip.duration)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(duration) => onPatch({ transitionIn: { ...clip.transitionIn!, duration: parseDecimal(duration) } })} />}
+      <div className="keyframe-add-row"><input aria-label="Speed at playhead" type="number" min="0.25" max="4" step="0.05" value={speedValue} onChange={(event) => setSpeedValue(event.target.value)} /><button onClick={addSpeedKeyframe}>Add speed ramp point at {formatTime(local)}</button></div>
+      {!!clip.speedKeyframes?.length && <div className="keyframe-list">{clip.speedKeyframes.map((frame, index) => <div key={`speed-${index}`}><span>{formatTime(secondsOf(frame.time))} · {secondsOf(frame.rate).toFixed(2)}×</span><button title="Remove speed point" onClick={() => onPatch({ speedKeyframes: clip.speedKeyframes!.filter((_, frameIndex) => frameIndex !== index) })}>×</button></div>)}</div>}
+    </section>
+    <section className="inspector-section"><div className="section-label"><span>TITLE</span><ChevronDown size={14} /></div>
+      {!clip.title ? <button className="small-action" onClick={() => updateTitle({})}>Add title overlay</button> : <>
+        <label className="text-field"><span>Text</span><input value={titleText} maxLength={500} onChange={(event) => setTitleText(event.target.value)} onBlur={() => updateTitle({ text: titleText })} /></label>
+        <div className="title-style-row"><label>Color<input type="color" value={clip.title.color} onChange={(event) => updateTitle({ color: event.target.value })} /></label><label>Box<input type="checkbox" checked={clip.title.box ?? false} onChange={(event) => updateTitle({ box: event.target.checked })} /></label><button onClick={() => onPatch({ title: undefined })}>Remove title</button></div>
+        <TextField label="Font file" value={clip.title.fontFile ?? ''} placeholder="System font by default" onCommit={(fontFile) => updateTitle({ fontFile: fontFile.trim() || undefined })} />
+        <NumberField label="Font size" unit="px" value={clip.title.fontSize} min={8} max={256} step={1} onCommit={(fontSize) => updateTitle({ fontSize })} />
+        <NumberField label="Position X" unit="%" value={clip.title.x * 100} min={0} max={100} step={1} onCommit={(x) => updateTitle({ x: x / 100 })} />
+        <NumberField label="Position Y" unit="%" value={clip.title.y * 100} min={0} max={100} step={1} onCommit={(y) => updateTitle({ y: y / 100 })} />
+        <NumberField label="Start" unit="s" value={secondsOf(clip.title.start)} max={secondsOf(clip.duration)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(start) => updateTitle({ start: parseDecimal(start) })} />
+        <NumberField label="Duration" unit="s" value={secondsOf(clip.title.duration)} max={secondsOf(clip.duration) - secondsOf(clip.title.start)} step={Number(project.frameRate.den) / Number(project.frameRate.num)} onCommit={(duration) => updateTitle({ duration: parseDecimal(duration) })} />
+      </>}
+    </section>
+    <section className="inspector-section"><div className="section-label"><span>KEYFRAMES</span><ChevronDown size={14} /></div>
+      <label className="text-field"><span>Property</span><select value={property} onChange={(event) => setProperty(event.target.value as typeof property)}><option value="opacity">Opacity</option><option value="brightness">Brightness</option><option value="contrast">Contrast</option><option value="saturation">Saturation</option><option value="volume">Clip volume</option></select></label>
+      <div className="keyframe-add-row"><input aria-label="Keyframe value" type="number" min={keyframeRange[property][0]} max={keyframeRange[property][1]} step="0.05" value={value} onChange={(event) => setValue(event.target.value)} /><button onClick={addKeyframe}>Add at {formatTime(local)}</button></div>
+      {!!clip.keyframes?.length && <div className="keyframe-list">{clip.keyframes.map((frame, index) => <div key={`key-${index}`}><span>{frame.property} · {formatTime(secondsOf(frame.time))} · {frame.value.toFixed(2)}</span><button title="Remove keyframe" onClick={() => onPatch({ keyframes: clip.keyframes!.filter((_, frameIndex) => frameIndex !== index) })}>×</button></div>)}</div>}
+    </section>
+  </>;
+}
+
+function TrackAudioControls({ track, project, playhead, onUpdate }: { track: TimelineTrack; project: Project; playhead: number; onUpdate: (patch: Parameters<typeof window.openmontage.updateTrack>[2]) => void }) {
+  const [volume, setVolume] = useState(track.volume ?? 1);
+  useEffect(() => setVolume(track.volume ?? 1), [track.volume]);
+  const commitVolume = () => onUpdate({ volume });
+  function addVolumeKeyframe() {
+    const time = frameTime(toFrame(parseDecimal(playhead), project.frameRate), project.frameRate);
+    const keyframes = (track.volumeKeyframes ?? []).filter((frame) => compare(frame.time, time) !== 0);
+    onUpdate({ volumeKeyframes: [...keyframes, { time, value: volume, interpolation: 'linear' as const }].sort((a, b) => compare(a.time, b.time)) });
+  }
+  return <div className="track-audio-controls" onClick={(event) => event.stopPropagation()}>
+    <select aria-label={`${track.name} audio role`} value={track.audioRole ?? 'standard'} onChange={(event) => onUpdate({ audioRole: event.target.value as TimelineTrack['audioRole'] })}><option value="standard">Standard</option><option value="dialogue">Dialogue</option><option value="music">Music</option></select>
+    <input aria-label={`${track.name} volume`} type="range" min="0" max="8" step="0.05" value={volume} onChange={(event) => setVolume(Number(event.target.value))} onPointerUp={commitVolume} onBlur={commitVolume} />
+    <button title="Add a track gain keyframe at the playhead" onClick={addVolumeKeyframe}>◇</button>
+    {track.audioRole === 'music' && <button title={track.duckUnderDialogue ? 'Disable dialogue ducking' : 'Duck under dialogue'} className={track.duckUnderDialogue ? 'active' : ''} onClick={() => onUpdate({ duckUnderDialogue: !track.duckUnderDialogue })}>D</button>}
+    <button title={track.normalizeAudio ? 'Disable track loudness normalization' : 'Normalize track loudness'} className={track.normalizeAudio ? 'active' : ''} onClick={() => onUpdate({ normalizeAudio: !track.normalizeAudio })}>N</button>
+  </div>;
+}
+
+function TextField({ label, value, placeholder, onCommit }: { label: string; value: string; placeholder?: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return <label className="text-field"><span>{label}</span><input value={draft} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} onBlur={() => onCommit(draft)} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></label>;
 }
 
 function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysisStatus, mediaJobs, queuePaused, onQueueProxy, onClearProxies, onPauseQueue, onResumeQueue, onRetryJob, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; analysisStatus?: AudioAnalysisStatus; onAnalysisStatus: (mediaId: string, status: AudioAnalysisStatus) => void; mediaJobs: MediaJob[]; queuePaused: boolean; onQueueProxy: () => void; onClearProxies: () => void; onPauseQueue: () => void; onResumeQueue: () => void; onRetryJob: (jobId: string) => void; onRelink: () => void; onSave: (patch: { tags?: string[]; game?: string | null; rating?: number; analysisEventReviews?: AnalysisEventReview[] }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {

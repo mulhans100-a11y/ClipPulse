@@ -1,0 +1,4 @@
+[
+  { "time": { "num": "0", "den": "1" }, "value": 1, "interpolation": "linear" },
+  { "time": { "num": "10", "den": "1" }, "value": 0.65, "interpolation": "linear" }
+]

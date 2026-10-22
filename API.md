@@ -1,4 +1,4 @@
-# CLI and project API (Phase A/B/C/D)
+# CLI and project API (Phase A/B/C/D/E)
 
 The desktop app and CLI use the same `src/core` operations. The CLI supports project, media library, audio and highlight analysis, automatic montage generation, timeline, and export operations; there is no REST or MCP server yet.
 
@@ -23,10 +23,11 @@ redo --project FILE
 inspect --project FILE
 validate --project FILE
 track-add --project FILE --kind video|audio [--name NAME]
-track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]
+track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false] [--volume 0-8] [--role standard|dialogue|music] [--normalize true|false] [--duck-under-dialogue true|false] [--volume-keyframes FILE.json]
 clip-add --project FILE --media ID --track ID [--start TIME] [--source-in TIME] [--duration TIME]
 clip-duplicate --project FILE --clip ID [--start TIME]
 clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in TIME] [--fade-out TIME]
+clip-effects --project FILE --clip ID --effects FILE.json
 clip-trim --project FILE --clip ID [--start TIME] [--source-in TIME] [--duration TIME]
 clip-move --project FILE --clip ID --start TIME [--track ID]
 clip-split --project FILE --clip ID --at TIME
@@ -45,7 +46,7 @@ The desktop media list restores completed audio-analysis status only when its ca
 
 Styles change real cut cadence, anchor preferences, cut placement, and source/music audio levels. `clean`, `aggressive`, `cinematic`, and `velocity` use built-in presets. `custom` requires `--custom-rules FILE.json`; use [`config/auto-montage-rules.example.json`](config/auto-montage-rules.example.json), validated against [`config/auto-montage-rules.schema.json`](config/auto-montage-rules.schema.json). `--intensity` is a 0–100 cut-pacing control. Output format can preserve the source project profile or create 16:9, 9:16, or square 1080p projects.
 
-In the desktop app, select **Auto edit**, choose audio, video sources, style, length, output format, intensity, and variant count, then choose an output folder. Generated projects appear in the same modal. Open one to edit or render timeline playback, then use the regular Export command. The source timeline remains a separate project. Unsupported playback-speed ramps, transitions, and visual effects are reported in each plan rather than implied as applied.
+In the desktop app, select **Auto edit**, choose audio, video sources, style, length, output format, intensity, and variant count, then choose an output folder. Generated projects appear in the same modal. Open one to edit or render timeline playback, then use the regular Export command. The source timeline remains a separate project.
 
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]` writes library metadata; rating zero clears a manual highlight score, while 1–5 ranks a clip. The score is stored in the project and SQLite index. `analyze-audio --project FILE --media ID` decodes audio locally and returns BPM hypotheses, beat and downbeat positions, a cautious meter estimate, relative one-second energy, coarse energy sections, energy-rise markers, and transient timestamps. Results are cached beside the project using file size and modification time. Rhythm and meter values are heuristic; scores are not calibrated probabilities.
 
@@ -61,9 +62,13 @@ In the desktop inspector, each event can be accepted, rejected, or corrected by 
 
 In the desktop timeline, analyzed audio clips display beat ticks. The Snap toggle aligns playhead placement, clip insertion, and clip moves to detected beats and clip boundaries within a 10-pixel threshold; timing resolves to the nearest project frame.
 
-`track-set` updates track mute, solo, and lock state. Solo is applied independently to video and audio track groups in both the timeline preview and final export. `clip-duplicate` copies a clip's source range and audio settings to the same track immediately after it; `--start` overrides that timeline position.
+`track-set` updates track mute, solo, lock, gain, audio role, normalization, ducking, and gain keyframes. The volume-keyframe JSON file is an array of `{ "time": Rational, "value": number, "interpolation": "linear"|"hold" }` entries; times are timeline times. Use [`config/track-volume-keyframes.example.json`](config/track-volume-keyframes.example.json) as a starting point. Set a music track to `--role music --duck-under-dialogue true` and dialogue tracks to `--role dialogue` to apply sidechain compression while they overlap. Solo is applied independently to video and audio track groups in both the timeline preview and final export. `clip-duplicate` copies a clip's source range and audio/effect settings to the same track immediately after it; `--start` overrides that timeline position.
 
 `clip-audio` changes the selected clip's audio enable flag, linear volume multiplier, and fade durations. Fade durations are nonnegative project-time values no longer than the clip; export applies them to the trimmed source audio before timeline mixing.
+
+`clip-effects --project FILE --clip ID --effects FILE.json` applies a JSON patch to a clip. Start from [`config/clip-effects.example.json`](config/clip-effects.example.json), validated by [`config/clip-effects.schema.json`](config/clip-effects.schema.json). Use `null` for optional fields to clear them. Playback rate and speed-keyframe rates are rational source-seconds-per-timeline-second values from 0.25× to 4×. Speed-keyframe times are relative to the clip's timeline start; linear rates are integrated to choose source frames. The clip's source range must cover that integral. Video keyframes support opacity, brightness, contrast, saturation, and clip gain. Interpolation is linear by default; `hold` keeps the previous value until the next keyframe.
+
+Clip effects also support scale, pixel position, rotation, brightness/contrast/saturation, an optional `.cube` LUT file, dissolve/wipe transitions, and a title with font, color, position, timing, and optional backing box. LUT and custom font paths are read-only render inputs. Timeline still preview and final export use the shared video filter builder; cached timeline playback uses the export graph. Audio speed ramps are rendered as pitch-preserving tempo sections averaging the linear rate over at most 250 ms chunks. Clip and track loudness normalization uses FFmpeg `loudnorm`; music ducking uses `sidechaincompress` keyed by dialogue-role tracks. Audio gain keyframes are shown as an envelope over the cached waveform.
 
 `timeline-frame --project FILE --time TIME` renders one frame-snapped composite from the active, unmuted video tracks. The desktop Timeline monitor uses this command's shared core operation for its still preview; source video playback remains available in the Source monitor.
 

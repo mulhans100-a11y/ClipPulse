@@ -56,6 +56,7 @@ const api: OpenMontageApi = {
   addClip: (filePath, mediaId, trackId, start) => ipcRenderer.invoke('timeline:addClip', filePath, mediaId, trackId, start),
   duplicateClip: (filePath, clipId, start) => ipcRenderer.invoke('timeline:duplicateClip', filePath, clipId, start),
   setClipAudio: (filePath, clipId, patch) => ipcRenderer.invoke('timeline:setClipAudio', filePath, clipId, patch),
+  setClipEffects: (filePath, clipId, patch) => ipcRenderer.invoke('timeline:setClipEffects', filePath, clipId, patch),
   trimClip: (filePath, clipId, patch) => ipcRenderer.invoke('timeline:trimClip', filePath, clipId, patch),
   moveClip: (filePath, clipId, start, trackId) => ipcRenderer.invoke('timeline:moveClip', filePath, clipId, start, trackId),
   splitClip: (filePath, clipId, at) => ipcRenderer.invoke('timeline:splitClip', filePath, clipId, at),

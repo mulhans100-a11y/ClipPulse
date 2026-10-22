@@ -8,7 +8,7 @@ import { analyzeHighlightCues } from '../core/highlightAnalysis';
 import { getPublicAnalysisRuntimeStatuses } from '../core/analysisRuntimes';
 import { generateAutomaticMontages } from '../core/autoMontage';
 import { AppError } from '../core/errors';
-import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
+import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, setClipEffects, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
 import { frameTime } from '../core/time';
@@ -16,7 +16,7 @@ import { watchFolder } from '../core/folderWatcher';
 import { medalCaptureFolderPreset } from '../core/medal';
 import { renderTimelineFrame } from '../core/timelinePreview';
 import { PersistentMediaJobQueue, mediaJobQueuePath, type MediaJobSource } from '../core/mediaJobs';
-import type { AutoMontageOptions, MediaAsset, Project, TrackKind } from '../core/types';
+import type { AutoMontageOptions, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
 
 const here = __dirname;
@@ -313,13 +313,14 @@ ipcMain.handle('media:setRootWatching', async (_event, filePath: string, rootPat
   return roots;
 });
 ipcMain.handle('timeline:addTrack', (_event, filePath: string, kind: TrackKind) => withProjectLock(filePath, () => addTrack(filePath, kind)));
-ipcMain.handle('timeline:updateTrack', (_event, filePath: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean }) => withProjectLock(filePath, () => updateTrackSettings(filePath, trackId, patch)));
+ipcMain.handle('timeline:updateTrack', (_event, filePath: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean; volume?: number; audioRole?: TimelineTrack['audioRole']; normalizeAudio?: boolean; duckUnderDialogue?: boolean; volumeKeyframes?: TimelineTrack['volumeKeyframes'] }) => withProjectLock(filePath, () => updateTrackSettings(filePath, trackId, patch)));
 ipcMain.handle('timeline:addClip', (_event, filePath: string, mediaId: string, trackId: string, start: number) => withProjectLock(filePath, async () => addClip(filePath, mediaId, trackId, await uiFrameTime(filePath, start))));
 ipcMain.handle('timeline:duplicateClip', (_event, filePath: string, clipId: string, start?: number) => withProjectLock(filePath, async () => duplicateClip(filePath, clipId, start === undefined ? undefined : await uiFrameTime(filePath, start))));
 ipcMain.handle('timeline:setClipAudio', async (_event, filePath: string, clipId: string, patch: { audioEnabled?: boolean; volume?: number; fadeIn?: number; fadeOut?: number }) => {
   const converted = { ...patch, fadeIn: patch.fadeIn === undefined ? undefined : await uiFrameTime(filePath, patch.fadeIn), fadeOut: patch.fadeOut === undefined ? undefined : await uiFrameTime(filePath, patch.fadeOut) };
   return withProjectLock(filePath, () => setClipAudio(filePath, clipId, converted));
 });
+ipcMain.handle('timeline:setClipEffects', (_event, filePath: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>) => withProjectLock(filePath, () => setClipEffects(filePath, clipId, patch)));
 ipcMain.handle('timeline:trimClip', async (_event, filePath: string, clipId: string, patch: { start?: number; sourceIn?: number; duration?: number }) => {
   const converted = Object.fromEntries(await Promise.all(Object.entries(patch).map(async ([key, value]) => [key, value === undefined ? undefined : await uiFrameTime(filePath, value)])));
   return withProjectLock(filePath, () => trimClip(filePath, clipId, converted));

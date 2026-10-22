@@ -2,10 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
+import { clipPlaybackRateAt, clipSourceDuration, clipSourceOffsetAt, extendClipAnimation, splitClipAnimation } from './clipEffects';
 import { runCommand } from './ffmpeg';
 import { newId } from './ids';
 import { libraryDatabasePath, MediaLibrary, type LibraryAsset } from './library';
-import { add, clampNonNegative, compare, decimal, parseDecimal, rational } from './time';
+import { add, clampNonNegative, compare, decimal, parseDecimal, rational, sub } from './time';
 import { waveformWidthForDuration } from './waveform';
 import type { AnalysisEventReview, ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from './types';
 
@@ -233,12 +234,63 @@ export function validateProject(project: Project): void {
       }
       clampNonNegative(clip.start, 'Clip start'); clampNonNegative(clip.sourceIn, 'Clip source in');
       if (!Number.isFinite(clip.volume) || clip.volume < 0 || clip.volume > 8) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid volume.`);
+        if (clip.playbackRate !== undefined && (!validTime(clip.playbackRate) || Number(clip.playbackRate.num) / Number(clip.playbackRate.den) < 0.25 || Number(clip.playbackRate.num) / Number(clip.playbackRate.den) > 4))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid playback rate (expected 0.25–4).`);
+        if (clip.speedKeyframes !== undefined) {
+          if (!Array.isArray(clip.speedKeyframes) || clip.speedKeyframes.length > 256) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has too many speed keyframes.`);
+          let previous: Rational | undefined;
+          for (const frame of clip.speedKeyframes) {
+            if (!validTime(frame.time) || BigInt(frame.time.num) < 0n || compare(frame.time, clip.duration) > 0 || !validTime(frame.rate))
+              throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid speed keyframe.`);
+            const rate = Number(frame.rate.num) / Number(frame.rate.den);
+            if (rate < 0.25 || rate > 4 || (previous && compare(previous, frame.time) >= 0)) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} speed keyframes must be ordered and use rates from 0.25 to 4.`);
+            previous = frame.time;
+          }
+        }
+        if (clip.transform !== undefined && (!Number.isFinite(clip.transform.scale) || clip.transform.scale < 0.1 || clip.transform.scale > 4 || !Number.isFinite(clip.transform.x) || Math.abs(clip.transform.x) > project.width * 2 || !Number.isFinite(clip.transform.y) || Math.abs(clip.transform.y) > project.height * 2 || !Number.isFinite(clip.transform.rotationDegrees) || Math.abs(clip.transform.rotationDegrees) > 360))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid transform values.`);
+        if (clip.color !== undefined && (!Number.isFinite(clip.color.brightness) || clip.color.brightness < -1 || clip.color.brightness > 1 || !Number.isFinite(clip.color.contrast) || clip.color.contrast < 0 || clip.color.contrast > 4 || !Number.isFinite(clip.color.saturation) || clip.color.saturation < 0 || clip.color.saturation > 4 || (clip.color.lutPath !== undefined && (typeof clip.color.lutPath !== 'string' || clip.color.lutPath.length > 4096))))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid color settings.`);
+        if (clip.keyframes !== undefined) {
+          if (!Array.isArray(clip.keyframes) || clip.keyframes.length > 1024) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has too many effect keyframes.`);
+          const seen = new Set<string>();
+          for (const frame of clip.keyframes) {
+            if (!['opacity', 'brightness', 'contrast', 'saturation', 'volume'].includes(frame.property) || !validTime(frame.time) || BigInt(frame.time.num) < 0n || compare(frame.time, clip.duration) > 0 || !Number.isFinite(frame.value) || (frame.interpolation !== undefined && !['linear', 'hold'].includes(frame.interpolation)))
+              throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid effect keyframe.`);
+            const limits: Record<string, [number, number]> = { opacity: [0, 1], brightness: [-1, 1], contrast: [0, 4], saturation: [0, 4], volume: [0, 8] };
+            const [min, max] = limits[frame.property];
+            if (frame.value < min || frame.value > max) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an out-of-range ${frame.property} keyframe.`);
+            const key = `${frame.property}:${frame.time.num}/${frame.time.den}`;
+            if (seen.has(key)) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has duplicate ${frame.property} keyframes at the same time.`);
+            seen.add(key);
+          }
+        }
+        if (clip.transitionIn !== undefined && (!['dissolve', 'wipe-left', 'wipe-right'].includes(clip.transitionIn.type) || !validTime(clip.transitionIn.duration) || BigInt(clip.transitionIn.duration.num) <= 0n || compare(clip.transitionIn.duration, clip.duration) > 0))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid video transition.`);
+        if (clip.title !== undefined && (typeof clip.title.text !== 'string' || clip.title.text.length > 500 || !Number.isFinite(clip.title.fontSize) || clip.title.fontSize < 8 || clip.title.fontSize > 256 || !/^#[0-9a-fA-F]{6}$/.test(clip.title.color) || !Number.isFinite(clip.title.x) || clip.title.x < 0 || clip.title.x > 1 || !Number.isFinite(clip.title.y) || clip.title.y < 0 || clip.title.y > 1 || !validTime(clip.title.start) || !validTime(clip.title.duration) || BigInt(clip.title.start.num) < 0n || BigInt(clip.title.duration.num) <= 0n || compare(add(clip.title.start, clip.title.duration), clip.duration) > 0 || (clip.title.fontFile !== undefined && (typeof clip.title.fontFile !== 'string' || clip.title.fontFile.length > 4096))))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid title settings.`);
+        if (clip.normalizeAudio !== undefined && typeof clip.normalizeAudio !== 'boolean') throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid audio normalization settings.`);
+        const asset = project.media.find((item) => item.id === clip.mediaId)!;
+        if (validTime(asset.duration) && compare(add(clip.sourceIn, clipSourceDuration(clip)), asset.duration) > 0)
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} playback exceeds the available source media range.`);
+    }
+    if (track.volume !== undefined && (!Number.isFinite(track.volume) || track.volume < 0 || track.volume > 8)) throw new AppError('INVALID_PROJECT', `Track ${track.id} has invalid volume.`);
+    if (track.audioRole !== undefined && !['standard', 'dialogue', 'music'].includes(track.audioRole)) throw new AppError('INVALID_PROJECT', `Track ${track.id} has an invalid audio role.`);
+    if (track.normalizeAudio !== undefined && typeof track.normalizeAudio !== 'boolean') throw new AppError('INVALID_PROJECT', `Track ${track.id} has invalid normalization settings.`);
+    if (track.duckUnderDialogue !== undefined && (typeof track.duckUnderDialogue !== 'boolean' || (track.kind !== 'audio' && track.duckUnderDialogue))) throw new AppError('INVALID_PROJECT', `Track ${track.id} has invalid ducking settings.`);
+    if (track.volumeKeyframes !== undefined) {
+      if (!Array.isArray(track.volumeKeyframes) || track.volumeKeyframes.length > 1024) throw new AppError('INVALID_PROJECT', `Track ${track.id} has too many volume keyframes.`);
+      let previous: Rational | undefined;
+      for (const frame of track.volumeKeyframes) {
+        if (!validTime(frame.time) || BigInt(frame.time.num) < 0n || !Number.isFinite(frame.value) || frame.value < 0 || frame.value > 8 || (frame.interpolation !== undefined && !['linear', 'hold'].includes(frame.interpolation)) || (previous && compare(previous, frame.time) >= 0)) throw new AppError('INVALID_PROJECT', `Track ${track.id} has invalid volume keyframes.`);
+        previous = frame.time;
+      }
     }
   }
 }
 
 export function newTrack(name: string, kind: TrackKind): TimelineTrack {
-  return { id: newId(), name, kind, muted: false, solo: false, locked: false, clips: [] };
+  return { id: newId(), name, kind, muted: false, solo: false, locked: false, volume: 1, audioRole: 'standard', normalizeAudio: false, duckUnderDialogue: false, clips: [] };
 }
 
 export function isTrackEnabled(project: Project, track: TimelineTrack): boolean {
@@ -247,13 +299,19 @@ export function isTrackEnabled(project: Project, track: TimelineTrack): boolean 
   return !kindTracks.some((candidate) => candidate.solo) || track.solo === true;
 }
 
-export async function updateTrackSettings(filePath: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean }): Promise<Project> {
+export async function updateTrackSettings(filePath: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean; volume?: number; audioRole?: TimelineTrack['audioRole']; normalizeAudio?: boolean; duckUnderDialogue?: boolean; volumeKeyframes?: TimelineTrack['volumeKeyframes'] }): Promise<Project> {
   const project = await loadProject(filePath);
   const track = project.tracks.find((item) => item.id === trackId);
   if (!track) throw new AppError('TRACK_NOT_FOUND', `Track not found: ${trackId}`);
   if (patch.muted !== undefined) track.muted = patch.muted;
   if (patch.solo !== undefined) track.solo = patch.solo;
   if (patch.locked !== undefined) track.locked = patch.locked;
+  if (patch.volume !== undefined) track.volume = patch.volume;
+  if (patch.audioRole !== undefined) track.audioRole = patch.audioRole;
+  if (patch.normalizeAudio !== undefined) track.normalizeAudio = patch.normalizeAudio;
+  if (patch.duckUnderDialogue !== undefined) track.duckUnderDialogue = patch.duckUnderDialogue;
+  if (patch.volumeKeyframes !== undefined) track.volumeKeyframes = structuredClone(patch.volumeKeyframes);
+  validateProject(project);
   await saveProject(filePath, project);
   return project;
 }
@@ -507,7 +565,7 @@ export async function addClip(filePath: string, mediaId: string, trackId: string
   const resolvedDuration = duration ?? subSafe(asset.duration, sourceIn);
   if (BigInt(resolvedDuration.num) <= 0n) throw new AppError('INVALID_DURATION', 'Clip duration must be positive.');
   if (compare(add(sourceIn, resolvedDuration), asset.duration) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', `The selected source range exceeds ${asset.name}'s duration (${decimal(asset.duration)} s).`);
-  const clip: TimelineClip = { id: newId(), mediaId, start, sourceIn, duration: resolvedDuration, audioEnabled: true, volume: 1, fadeIn: rational(0), fadeOut: rational(0) };
+  const clip: TimelineClip = { id: newId(), mediaId, start, sourceIn, duration: resolvedDuration, audioEnabled: true, volume: 1, fadeIn: rational(0), fadeOut: rational(0), playbackRate: rational(1), transform: { scale: 1, x: 0, y: 0, rotationDegrees: 0 }, color: { brightness: 0, contrast: 1, saturation: 1 } };
   track.clips.push(clip);
   track.clips.sort((a, b) => compare(a.start, b.start));
   await saveProject(filePath, project);
@@ -518,7 +576,7 @@ export async function duplicateClip(filePath: string, clipId: string, start?: Ra
   const project = await loadProject(filePath);
   const { clip, track } = findClip(project, clipId);
   if (track.locked) throw new AppError('TRACK_LOCKED', `Track ${track.name} is locked.`);
-  const duplicate: TimelineClip = { ...clip, id: newId(), start: start ?? add(clip.start, clip.duration) };
+  const duplicate: TimelineClip = { ...structuredClone(clip), id: newId(), start: start ?? add(clip.start, clip.duration) };
   clampNonNegative(duplicate.start, 'Clip start');
   track.clips.push(duplicate);
   track.clips.sort((a, b) => compare(a.start, b.start));
@@ -539,8 +597,38 @@ export async function trimClip(filePath: string, clipId: string, patch: { start?
   const asset = project.media.find((item) => item.id === clip.mediaId)!;
   const next = { ...clip, ...patch };
   clampNonNegative(next.start, 'Clip start'); clampNonNegative(next.sourceIn, 'Source in');
-  if (BigInt(next.duration.num) <= 0n || compare(add(next.sourceIn, next.duration), asset.duration) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', 'The trimmed source range is invalid or exceeds the media duration.');
-  Object.assign(clip, patch);
+  if (patch.start !== undefined && patch.sourceIn !== undefined && compare(patch.start, clip.start) > 0 && patch.duration !== undefined && compare(patch.duration, clip.duration) < 0) {
+    const offset = sub(patch.start, clip.start);
+    const animation = splitClipAnimation(clip, offset);
+    next.playbackRate = animation.rightPlaybackRate;
+    next.speedKeyframes = animation.rightSpeedKeyframes;
+    next.keyframes = animation.rightKeyframes;
+    if (clip.title) {
+      const titleEnd = add(clip.title.start, clip.title.duration);
+      const start = compare(clip.title.start, offset) < 0 ? offset : clip.title.start;
+      const end = compare(titleEnd, add(offset, next.duration)) > 0 ? add(offset, next.duration) : titleEnd;
+      next.title = compare(end, start) > 0 ? { ...clip.title, start: sub(start, offset), duration: sub(end, start) } : undefined;
+    }
+    next.transitionIn = undefined;
+  } else if (patch.start !== undefined && patch.sourceIn !== undefined && compare(patch.start, clip.start) < 0 && patch.duration !== undefined && compare(patch.duration, clip.duration) > 0) {
+    const extension = sub(clip.start, patch.start);
+    const animation = extendClipAnimation(clip, extension);
+    next.playbackRate = animation.playbackRate;
+    next.speedKeyframes = animation.speedKeyframes;
+    next.keyframes = animation.keyframes;
+    if (clip.title) next.title = { ...clip.title, start: add(clip.title.start, extension) };
+  } else if (patch.duration !== undefined && compare(patch.duration, clip.duration) < 0) {
+    const animation = splitClipAnimation(clip, patch.duration);
+    next.speedKeyframes = animation.leftSpeedKeyframes;
+    next.keyframes = animation.leftKeyframes;
+    if (next.transitionIn && compare(next.transitionIn.duration, patch.duration) > 0) next.transitionIn = { ...next.transitionIn, duration: patch.duration };
+    if (next.title) {
+      if (compare(next.title.start, patch.duration) >= 0) next.title = undefined;
+      else if (compare(add(next.title.start, next.title.duration), patch.duration) > 0) next.title = { ...next.title, duration: sub(patch.duration, next.title.start) };
+    }
+  }
+  if (BigInt(next.duration.num) <= 0n || compare(add(next.sourceIn, clipSourceDuration(next)), asset.duration) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', 'The trimmed source range is invalid or exceeds the media duration at the selected playback speed.');
+  Object.assign(clip, next);
   if (clip.fadeIn && compare(clip.fadeIn, clip.duration) > 0) clip.fadeIn = clip.duration;
   if (clip.fadeOut && compare(clip.fadeOut, clip.duration) > 0) clip.fadeOut = clip.duration;
   track.clips.sort((a, b) => compare(a.start, b.start));
@@ -560,6 +648,19 @@ export async function setClipAudio(filePath: string, clipId: string, patch: { au
   if (patch.volume !== undefined && (!Number.isFinite(patch.volume) || patch.volume < 0 || patch.volume > 8))
     throw new AppError('INVALID_VOLUME', 'Clip volume must be between 0 and 8.');
   Object.assign(clip, patch);
+  await saveProject(filePath, project);
+  return project;
+}
+
+export async function setClipEffects(filePath: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>): Promise<Project> {
+  const project = await loadProject(filePath);
+  const { clip, track } = findClip(project, clipId);
+  if (track.locked) throw new AppError('TRACK_LOCKED', `Track ${track.name} is locked.`);
+  const updated = { ...clip, ...structuredClone(patch) };
+  const asset = project.media.find((item) => item.id === clip.mediaId)!;
+  if (compare(add(updated.sourceIn, clipSourceDuration(updated)), asset.duration) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', 'The selected speed curve consumes more source media than is available.');
+  Object.assign(clip, structuredClone(patch));
+  validateProject(project);
   await saveProject(filePath, project);
   return project;
 }
@@ -600,7 +701,26 @@ export async function splitClip(filePath: string, clipId: string, atTimeline: Ra
   const rightFadeIn = compare(oldFadeIn, offset) > 0 ? subSafe(oldFadeIn, offset) : rational(0);
   const leftFadeOut = compare(offset, fadeOutStart) > 0 ? subSafe(offset, fadeOutStart) : rational(0);
   const rightFadeOut = compare(oldFadeOut, rightDuration) > 0 ? rightDuration : oldFadeOut;
-  const right: TimelineClip = { ...clip, id: newId(), start: atTimeline, sourceIn: add(clip.sourceIn, offset), duration: rightDuration, fadeIn: rightFadeIn, fadeOut: rightFadeOut };
+  const animation = splitClipAnimation(clip, offset);
+  const rightTitle = clip.title ? (() => {
+    const titleEnd = add(clip.title!.start, clip.title!.duration);
+    const start = compare(clip.title!.start, offset) < 0 ? offset : clip.title!.start;
+    const end = compare(titleEnd, oldDuration) > 0 ? oldDuration : titleEnd;
+    return compare(end, offset) > 0 ? { ...clip.title!, start: sub(start, offset), duration: sub(end, start) } : undefined;
+  })() : undefined;
+  if (clip.title) {
+    const titleEnd = add(clip.title.start, clip.title.duration);
+    const end = compare(titleEnd, offset) > 0 ? offset : titleEnd;
+    clip.title = compare(end, clip.title.start) > 0 ? { ...clip.title, duration: sub(end, clip.title.start) } : undefined;
+  }
+  const right: TimelineClip = {
+    ...structuredClone(clip), id: newId(), start: atTimeline, sourceIn: add(clip.sourceIn, clipSourceOffsetAt(clip, offset)), duration: rightDuration,
+    playbackRate: animation.rightPlaybackRate, speedKeyframes: animation.rightSpeedKeyframes, keyframes: animation.rightKeyframes,
+    title: rightTitle, transitionIn: undefined, fadeIn: rightFadeIn, fadeOut: rightFadeOut
+  };
+  clip.speedKeyframes = animation.leftSpeedKeyframes;
+  clip.keyframes = animation.leftKeyframes;
+  if (clip.transitionIn && compare(clip.transitionIn.duration, offset) > 0) clip.transitionIn = { ...clip.transitionIn, duration: offset };
   clip.duration = offset;
   clip.fadeIn = leftFadeIn;
   clip.fadeOut = leftFadeOut;

@@ -59,15 +59,15 @@ Status reflects the repository at `0.1.0`.
 - [x] Generate one to five score-comparable variants as separate editable `.omproj` files and `.edit-plan.json` reports; source projects and timelines remain untouched.
 - [x] UI and CLI workflow analyzes music/highlights and validates frame-exact duration/source coverage. The UI opens variants for shared timeline playback; the CLI exposes timeline-frame inspection and verified FFmpeg export.
 
-Phase D scores use detector and music heuristics; they are not calibrated gameplay-quality predictions. Velocity changes edit pacing, while playback speed/ramping, transitions, and visual effects remain in the later effect pipeline. A real gameplay benchmark remains an open Phase C evaluation task.
+Phase D scores use detector and music heuristics; they are not calibrated gameplay-quality predictions. A real gameplay benchmark remains an open Phase C evaluation task.
 
 ## Phase E — Effects and audio controls
 
 - [x] Per-clip audio enable, volume, fade-in, and fade-out controls with FFmpeg export and CLI support.
-- [ ] Shared preview/export effect semantics and keyframes.
-- [ ] Speed changes and ramps, transitions, titles, transforms, LUT/color controls.
-- [ ] Track/clip audio automation, fades, normalization, ducking and waveform display.
-- [ ] Automated parity tests across representative frames and audio boundaries.
+- [x] Shared preview/export effect semantics and clip keyframes for opacity, brightness, contrast, saturation, and gain; timeline still preview and rendered playback share the export graph.
+- [x] Constant speed changes and linear speed ramps; dissolves and directional wipes; title overlays; scale, position, and rotation; brightness, contrast, saturation, and external `.cube` LUTs.
+- [x] Track/clip gain automation, clip fades, per-clip or per-track loudness normalization, dialogue-triggered music ducking, and visible audio gain envelopes over cached waveforms.
+- [x] Automated FFmpeg parity coverage for representative preview/export frames, speed-ramped edits, wipe boundaries, gain fades, normalization, and sidechain ducking.
 
 ## Phase F — Compositing
 

@@ -170,6 +170,16 @@ export interface TimelineClip {
   volume: number;
   fadeIn?: Rational;
   fadeOut?: Rational;
+  /** Playback rate as source seconds consumed per timeline second. Defaults to 1. */
+  playbackRate?: Rational;
+  /** Linear speed-ramp keyframes, relative to the start of this clip. */
+  speedKeyframes?: Array<{ time: Rational; rate: Rational }>;
+  transform?: { scale: number; x: number; y: number; rotationDegrees: number };
+  color?: { brightness: number; contrast: number; saturation: number; lutPath?: string };
+  keyframes?: Array<{ property: 'opacity' | 'brightness' | 'contrast' | 'saturation' | 'volume'; time: Rational; value: number; interpolation?: 'linear' | 'hold' }>;
+  transitionIn?: { type: 'dissolve' | 'wipe-left' | 'wipe-right'; duration: Rational };
+  title?: { text: string; fontSize: number; color: string; x: number; y: number; start: Rational; duration: Rational; box?: boolean; fontFile?: string };
+  normalizeAudio?: boolean;
 }
 
 export interface TimelineTrack {
@@ -179,6 +189,11 @@ export interface TimelineTrack {
   muted: boolean;
   solo?: boolean;
   locked: boolean;
+  volume?: number;
+  volumeKeyframes?: Array<{ time: Rational; value: number; interpolation?: 'linear' | 'hold' }>;
+  audioRole?: 'standard' | 'dialogue' | 'music';
+  normalizeAudio?: boolean;
+  duckUnderDialogue?: boolean;
   clips: TimelineClip[];
 }
 

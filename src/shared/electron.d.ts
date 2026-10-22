@@ -1,4 +1,4 @@
-import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageOptions, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, TimelineClip, TrackKind } from '../core/types';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageOptions, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 
 export interface OpenMontageApi {
   version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; message?: string }>;
@@ -32,10 +32,11 @@ export interface OpenMontageApi {
   getAnalysisRuntimes(): Promise<AnalysisRuntimeStatus[]>;
   getAudioAnalysisStatuses(path: string): Promise<string[]>;
   addTrack(path: string, kind: TrackKind): Promise<Project>;
-  updateTrack(path: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean }): Promise<Project>;
+  updateTrack(path: string, trackId: string, patch: { muted?: boolean; solo?: boolean; locked?: boolean; volume?: number; audioRole?: TimelineTrack['audioRole']; normalizeAudio?: boolean; duckUnderDialogue?: boolean; volumeKeyframes?: TimelineTrack['volumeKeyframes'] }): Promise<Project>;
   addClip(path: string, mediaId: string, trackId: string, start: number): Promise<Project>;
   duplicateClip(path: string, clipId: string, start?: number): Promise<Project>;
   setClipAudio(path: string, clipId: string, patch: { audioEnabled?: boolean; volume?: number; fadeIn?: number; fadeOut?: number }): Promise<Project>;
+  setClipEffects(path: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>): Promise<Project>;
   trimClip(path: string, clipId: string, patch: { start?: number; sourceIn?: number; duration?: number }): Promise<Project>;
   moveClip(path: string, clipId: string, start: number, trackId?: string): Promise<Project>;
   splitClip(path: string, clipId: string, at: number): Promise<Project>;

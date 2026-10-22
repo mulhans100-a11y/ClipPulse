@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenMontage clip effects patch",
+  "type": "object",
+  "properties": {
+    "playbackRate": { "$ref": "#/$defs/rational", "description": "Source seconds per timeline second, between 0.25 and 4." },
+    "speedKeyframes": { "type": ["array", "null"], "maxItems": 256, "items": { "type": "object", "required": ["time", "rate"], "properties": { "time": { "$ref": "#/$defs/rational" }, "rate": { "$ref": "#/$defs/rational" } }, "additionalProperties": false } },
+    "transform": { "type": ["object", "null"], "required": ["scale", "x", "y", "rotationDegrees"], "properties": { "scale": { "type": "number", "minimum": 0.1, "maximum": 4 }, "x": { "type": "number" }, "y": { "type": "number" }, "rotationDegrees": { "type": "number", "minimum": -360, "maximum": 360 } }, "additionalProperties": false },
+    "color": { "type": ["object", "null"], "required": ["brightness", "contrast", "saturation"], "properties": { "brightness": { "type": "number", "minimum": -1, "maximum": 1 }, "contrast": { "type": "number", "minimum": 0, "maximum": 4 }, "saturation": { "type": "number", "minimum": 0, "maximum": 4 }, "lutPath": { "type": "string", "maxLength": 4096 } }, "additionalProperties": false },
+    "keyframes": { "type": ["array", "null"], "maxItems": 1024, "items": { "type": "object", "required": ["property", "time", "value"], "properties": { "property": { "enum": ["opacity", "brightness", "contrast", "saturation", "volume"] }, "time": { "$ref": "#/$defs/rational" }, "value": { "type": "number" }, "interpolation": { "enum": ["linear", "hold"] } }, "additionalProperties": false } },
+    "transitionIn": { "type": ["object", "null"], "required": ["type", "duration"], "properties": { "type": { "enum": ["dissolve", "wipe-left", "wipe-right"] }, "duration": { "$ref": "#/$defs/rational" } }, "additionalProperties": false },
+    "title": { "type": ["object", "null"], "required": ["text", "fontSize", "color", "x", "y", "start", "duration"], "properties": { "text": { "type": "string", "maxLength": 500 }, "fontSize": { "type": "number", "minimum": 8, "maximum": 256 }, "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }, "x": { "type": "number", "minimum": 0, "maximum": 1 }, "y": { "type": "number", "minimum": 0, "maximum": 1 }, "start": { "$ref": "#/$defs/rational" }, "duration": { "$ref": "#/$defs/rational" }, "box": { "type": "boolean" }, "fontFile": { "type": "string", "maxLength": 4096 } }, "additionalProperties": false },
+    "normalizeAudio": { "type": "boolean" }
+  },
+  "$defs": { "rational": { "type": "object", "required": ["num", "den"], "properties": { "num": { "type": "string", "pattern": "^-?\\d+$" }, "den": { "type": "string", "pattern": "^[1-9]\\d*$" } }, "additionalProperties": false } },
+  "additionalProperties": false
+}

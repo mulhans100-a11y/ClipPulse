@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
+import { buildClipPreviewFilters, clipSourceOffsetAt, clipVideoOverlayPosition } from './clipEffects';
 import { runCommand, tail } from './ffmpeg';
 import { add, compare, decimal, rational, sub } from './time';
 import { isTrackEnabled, validateProject } from './project';
@@ -26,7 +27,8 @@ export async function renderTimelineFrame(project: Project, timelineTime: Ration
       const end = add(clip.start, clip.duration);
       if (compare(timelineTime, clip.start) < 0 || compare(timelineTime, end) >= 0) return [];
       const media = project.media.find((asset) => asset.id === clip.mediaId);
-      return media?.kind === 'video' ? [{ clip, media, sourceTime: add(clip.sourceIn, sub(timelineTime, clip.start)) }] : [];
+      const localTime = sub(timelineTime, clip.start);
+      return media?.kind === 'video' ? [{ clip, media, localTime, sourceTime: add(clip.sourceIn, clipSourceOffsetAt(clip, localTime)) }] : [];
     });
   });
   const args: string[] = ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y'];
@@ -39,10 +41,12 @@ export async function renderTimelineFrame(project: Project, timelineTime: Ration
   const filter: string[] = [`color=c=black:s=${project.width}x${project.height}:r=${fps}:d=1,format=rgba[vbase0]`];
   let base = 'vbase0';
   for (let i = 0; i < active.length; i++) {
+    const item = active[i];
     const clip = `preview${i}`;
     const next = `vbase${i + 1}`;
-    filter.push(`[${i}:v:0]setpts=PTS-STARTPTS,fps=${fps},scale=${project.width}:${project.height}:force_original_aspect_ratio=decrease,pad=${project.width}:${project.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=rgba[${clip}]`);
-    filter.push(`[${base}][${clip}]overlay=shortest=1:eof_action=pass:repeatlast=0[${next}]`);
+    const position = clipVideoOverlayPosition(item.clip, project);
+    filter.push(`[${i}:v:0]setpts=PTS-STARTPTS+(${decimal(item.localTime, 9)})/TB,${buildClipPreviewFilters(item.clip, project, item.localTime).join(',')},fps=${fps},setpts=PTS-STARTPTS[${clip}]`);
+    filter.push(`[${base}][${clip}]overlay=x='${position.x}':y='${position.y}':shortest=1:eof_action=pass:repeatlast=0[${next}]`);
     base = next;
   }
   filter.push(`[${base}]trim=end_frame=1,format=rgb24[vout]`);

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — Initial Phase A/B/C development build
+## 0.1.0 — Phase A–E development build
 
 - Added Electron/React desktop shell with media bin, source preview, multitrack timeline, and clip inspector.
 - Added rational-time project model, media probing/import, thumbnail caching, duplicate detection, and project backups.
@@ -26,4 +26,5 @@
 - Added generated-media integration tests, Windows CI, and Medal API/licensing research.
 - Phase C adds local music/highlight analysis, persistent cue review/correction, optional OCR, and independent-annotation evaluation. Trained gameplay models, calibrated ranking, and populated real-media benchmarks remain unavailable.
 - Phase D adds automatic montage planning, scoring, style strategies, separate editable variants, timeline preview, duration/source validation, and normal FFmpeg export.
-- Visual effects, playback speed/ramping, transitions, compositing masks, REST, and MCP remain future work.
+- Phase E adds shared preview/export filter semantics, keyframes, speed ramps, dissolve/wipe transitions, title overlays, transforms, color/LUT controls, track/clip audio automation, normalization, ducking, gain envelopes, and FFmpeg parity tests.
+- Compositing masks, tracking, REST, MCP, and real-game evaluation datasets remain future work.

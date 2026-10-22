@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
+import { atempoFilters, buildClipVideoFilters, clipAudioSpeedChunks, clipSetptsExpression, clipSourceDuration, clipVideoOverlayPosition, clipAudioVolumeExpression, trackVolumeExpression } from './clipEffects';
 import { runCommand, tail } from './ffmpeg';
 import { add, compare, decimal, rational, sub } from './time';
 import { isTrackEnabled, timelineDuration, validateProject } from './project';
@@ -40,38 +41,78 @@ export async function exportVideo(project: Project, options: ExportOptions): Pro
   for (let i = 0; i < videoClips.length; i++) {
     const item = videoClips[i];
     const source = decimal(item.clip.sourceIn, 9);
-    const clipDuration = decimal(item.clip.duration, 9);
+    const clipDuration = decimal(clipSourceDuration(item.clip), 9);
     const start = decimal(item.clip.start, 9);
-    const finish = decimal(add(item.clip.start, item.clip.duration), 9);
     const clipLabel = `vclip${i}`;
     const next = `vbase${i + 1}`;
-    filter.push(`[${item.input}:v:0]trim=start=${source}:duration=${clipDuration},setpts=PTS-STARTPTS+(${start})/TB,fps=${fps},scale=${project.width}:${project.height}:force_original_aspect_ratio=decrease,pad=${project.width}:${project.height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=rgba[${clipLabel}]`);
-    filter.push(`[${base}][${clipLabel}]overlay=shortest=0:eof_action=pass:repeatlast=0:enable='gte(t,${start})*lt(t,${finish})'[${next}]`);
+    const position = clipVideoOverlayPosition(item.clip, project);
+    filter.push(`[${item.input}:v:0]trim=start=${source}:duration=${clipDuration},${clipSetptsExpression(item.clip)},fps=${fps},${buildClipVideoFilters(item.clip, project).join(',')},setpts=PTS-STARTPTS+(${start})/TB[${clipLabel}]`);
+    filter.push(`[${base}][${clipLabel}]overlay=x='${position.x}':y='${position.y}':shortest=0:eof_action=pass:repeatlast=0[${next}]`);
     base = next;
   }
   filter.push(`[${base}]trim=duration=${totalSeconds},setpts=PTS-STARTPTS[vout]`);
 
   const audioClips = inputs.filter((item) => item.media.hasAudio && item.clip.audioEnabled && (item.track.kind === 'audio' || item.track.kind === 'video'));
+  const audioRecords: Array<{ track: TimelineTrack; label: string }> = [];
   if (!audioClips.length) {
     const silentInput = inputs.length;
     args.push('-f', 'lavfi', '-t', totalSeconds, '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
     filter.push(`[${silentInput}:a]atrim=duration=${totalSeconds},asetpts=PTS-STARTPTS[aout]`);
   } else {
-    const audioLabels: string[] = [];
     audioClips.forEach((item, i) => {
       const source = decimal(item.clip.sourceIn, 9);
+      const sourceDuration = decimal(clipSourceDuration(item.clip), 9);
       const clipDuration = decimal(item.clip.duration, 9);
       const start = decimal(item.clip.start, 9);
       const fadeIn = item.clip.fadeIn ?? rational(0);
       const fadeOut = item.clip.fadeOut ?? rational(0);
+      const sourceLabel = `asource${i}`;
+      const chunks = clipAudioSpeedChunks(item.clip);
+      filter.push(`[${item.input}:a:0]atrim=start=${source}:duration=${sourceDuration},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,asetpts=PTS-STARTPTS[${sourceLabel}]`);
+      const splitLabels = chunks.map((_, chunkIndex) => `asplit${i}_${chunkIndex}`);
+      if (chunks.length > 1) filter.push(`[${sourceLabel}]asplit=${chunks.length}${splitLabels.map((label) => `[${label}]`).join('')}`);
+      const pieceLabels: string[] = [];
+      chunks.forEach((chunk, chunkIndex) => {
+        const splitInput = chunks.length > 1 ? splitLabels[chunkIndex] : sourceLabel;
+        const piece = `aspeed${i}_${chunkIndex}`;
+        const speedFilters = atempoFilters(chunk.rate).join(',');
+        filter.push(`[${splitInput}]atrim=start=${decimal(chunk.sourceStart, 9)}:duration=${decimal(chunk.sourceDuration, 9)},asetpts=PTS-STARTPTS,${speedFilters}[${piece}]`);
+        pieceLabels.push(`[${piece}]`);
+      });
+      const assembled = `aspeedclip${i}`;
+      if (pieceLabels.length > 1) filter.push(`${pieceLabels.join('')}concat=n=${pieceLabels.length}:v=0:a=1,atrim=duration=${clipDuration}[${assembled}]`);
+      else filter.push(`${pieceLabels[0]}atrim=duration=${clipDuration}[${assembled}]`);
       const label = `aclip${i}`;
-      const audioEffects = [`volume=${item.clip.volume}`];
+      const audioEffects: string[] = [];
+      if (item.clip.normalizeAudio || item.track.normalizeAudio) audioEffects.push('loudnorm=I=-16:TP=-1.5:LRA=11');
       if (compare(fadeIn, rational(0)) > 0) audioEffects.push(`afade=t=in:st=0:d=${decimal(fadeIn, 9)}`);
       if (compare(fadeOut, rational(0)) > 0) audioEffects.push(`afade=t=out:st=${decimal(sub(item.clip.duration, fadeOut), 9)}:d=${decimal(fadeOut, 9)}`);
-      filter.push(`[${item.input}:a:0]atrim=start=${source}:duration=${clipDuration},aresample=48000,asetpts=PTS-STARTPTS,${audioEffects.join(',')},asetpts=N/SR/TB+(${start})/TB[${label}]`);
-      audioLabels.push(`[${label}]`);
+      const clipVolume = clipAudioVolumeExpression(item.clip);
+      audioEffects.push(`volume='${clipVolume}':eval=frame`);
+      filter.push(`[${assembled}]${audioEffects.join(',')},asetpts=PTS-STARTPTS+(${start})/TB,volume='${trackVolumeExpression(item.track)}':eval=frame[${label}]`);
+      audioRecords.push({ track: item.track, label });
     });
-    filter.push(`${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,atrim=duration=${totalSeconds},alimiter=limit=0.95[aout]`);
+    const dialogue = audioRecords.filter((record) => record.track.audioRole === 'dialogue');
+    const duckedMusic = audioRecords.filter((record) => record.track.audioRole === 'music' && record.track.duckUnderDialogue);
+    const regular = audioRecords.filter((record) => !dialogue.includes(record) && !duckedMusic.includes(record));
+    let finalLabels: string[] = [];
+    const addMix = (records: typeof audioRecords, label: string, includeInFinal = true) => {
+      if (!records.length) return;
+      if (records.length === 1) filter.push(`[${records[0].label}]anull[${label}]`);
+      else filter.push(`${records.map((record) => `[${record.label}]`).join('')}amix=inputs=${records.length}:duration=longest:dropout_transition=0:normalize=0[${label}]`);
+      if (includeInFinal) finalLabels.push(`[${label}]`);
+    };
+    if (dialogue.length && duckedMusic.length) {
+      addMix(dialogue, 'dialoguebus', false);
+      addMix(duckedMusic, 'musicbus', false);
+      filter.push(`[musicbus][dialoguebus]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[duckedmusic]`);
+      finalLabels.push('[duckedmusic]');
+    } else {
+      regular.push(...dialogue, ...duckedMusic);
+    }
+    addMix(regular, 'regularbus');
+    if (finalLabels.length === 1) filter.push(`${finalLabels[0]}atrim=duration=${totalSeconds},alimiter=limit=0.95[aout]`);
+    else filter.push(`${finalLabels.join('')}amix=inputs=${finalLabels.length}:duration=longest:dropout_transition=0:normalize=0,atrim=duration=${totalSeconds},alimiter=limit=0.95[aout]`);
   }
 
   args.push('-filter_complex', filter.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', totalSeconds,

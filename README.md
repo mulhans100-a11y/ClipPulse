@@ -2,7 +2,7 @@
 
 OpenMontage AI is a local-first, open-source desktop video editor focused on gaming montages and music-synchronized edits. The current `0.1.0` development build implements the first usable editing slice: import local media, preview it, assemble clips on multiple tracks, trim and split clips, save a non-destructive project, and render an MP4 with FFmpeg.
 
-Phases A–D are implemented. Phase C provides local music analysis, audio/scene/motion/HUD-text cues, explicit game-event phrase rules, persisted event review/correction, and an independent-annotation evaluation workflow. Phase D builds scored, beat-anchored montage plans from those cues and creates separate editable project variants. Detector and edit scores remain heuristics: no trained gameplay model, calibrated highlight ranking, or real game benchmark is bundled. Effects, speed ramps, transitions, object masking, Medal cloud access, and MCP tools remain future work.
+Phases A–E are implemented. Phase C provides local music analysis, audio/scene/motion/HUD-text cues, explicit game-event phrase rules, persisted event review/correction, and an independent-annotation evaluation workflow. Phase D builds scored, beat-anchored montage plans from those cues and creates separate editable project variants. Phase E adds shared preview/export effects, keyframes, speed ramps, transitions, titles, transforms, LUTs, and track/clip audio automation. Detector and edit scores remain heuristics: no trained gameplay model, calibrated highlight ranking, or real game benchmark is bundled. Masking, tracking, Medal cloud access, REST, and MCP tools remain future work.
 
 ## Current capabilities
 
@@ -19,6 +19,8 @@ Phases A–D are implemented. Phase C provides local music analysis, audio/scene
 - Missing source files are marked in the media bin and can be relinked to a replacement file without breaking existing clip references.
 - Video and audio tracks; additional tracks can be added, muted, soloed, or locked. Clips can be inserted, duplicated, moved between tracks, trimmed, split, and removed.
 - Clip audio can be enabled, adjusted, and faded in or out; the settings are editable in the inspector and render through FFmpeg.
+- Video clips support keyframed opacity and color controls, constant playback speed and linear speed ramps, dissolves and directional wipes, title overlays, scale/position/rotation, brightness/contrast/saturation, and external `.cube` 3D LUTs. Still preview and export share the same filter semantics.
+- Track and clip audio support gain automation, fades, loudness normalization, and dialogue-triggered music ducking. Audio tracks expose standard/dialogue/music roles, gain keyframes, normalization and ducking controls; gain envelopes appear over cached waveforms.
 - Drag clip edges for frame-snapped source trimming while preserving the opposite edit point.
 - Preview of imported source video, timeline playhead, persistent undo/redo, and keyboard shortcuts for save/undo/redo/delete/playback.
 - Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback. The timeline can render a revision-cached MP4 using the same FFmpeg pipeline as export; that preview supports playback, audio, seeking, and frame stepping.
@@ -97,13 +99,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](ROADMAP.md), [INSTALLATION.
 
 - Timeline editing currently uses rational seconds; the inspector also shows project-frame positions. UI fields are rounded to microsecond precision when they call the editor core.
 - Timeline zoom is an editor view setting and resets to 100% when the app starts. Waveform output is capped at 16,384 pixels per clip; extremely long clips therefore stop gaining resolution above that limit.
-- Scrubbing shows a still composite frame. Timeline playback first renders the full edit to a revision-cached MP4, then plays that file; edits invalidate the cached playback and require another render. This is not live playback during editing. Transitions, effect parity, and a full export/render queue are not implemented.
-- Rendering composites visible clips in track order over a black canvas. There is no color/effect pipeline or alpha-mask editor yet.
+- Scrubbing shows a still composite frame. Timeline playback first renders the full edit to a revision-cached MP4, then plays that file; edits invalidate the cached playback and require another render. This is not live playback during editing.
+- Rendering composites visible clips in track order over a black canvas. Polygon/Bézier masks, chroma key, blend modes, tracking, and model-backed segmentation are not implemented.
 - Media references are absolute file paths. Relinking keeps the existing media ID, requires the same media kind, and rejects a replacement that is too short for existing clip ranges. SQLite is a rebuildable cache adjacent to the project.
 - The `.bak` auto-backup is a single snapshot. Undo/redo snapshots are stored in a project-adjacent `.openmontage-history-<id>` folder, capped at 50 states; each timeline operation writes the project immediately.
 - The Medal integration currently means authorized local-folder import only. No cloud API integration is claimed.
 - Beat and meter estimates use local RMS/onset heuristics, not a trained music model. Meter confidence and tempo correlation scores remain raw heuristics; the evaluation runner reports their calibration diagnostics from independent annotations. A varied real-music benchmark still needs to be populated locally.
 - Beat snapping uses those estimated beat positions; it does not yet distinguish strong impacts or drops from regular beats.
-- The Phase D planner can only select detected event windows and includes a bounded amount of surrounding context. It reports insufficient highlight coverage instead of filling a long request with unscored footage. The Velocity preset changes cut pacing; playback-speed changes and speed ramps are not yet implemented.
-- Phase D creates cuts without transitions or visual effects. The plan records this limitation; those capabilities belong to the later effect pipeline.
+- The Phase D planner can only select detected event windows and includes a bounded amount of surrounding context. It reports insufficient highlight coverage instead of filling a long request with unscored footage. The Velocity preset changes cut pacing; actual playback speed and ramps are available through Phase E clip controls.
 - No GitHub remote is configured in this local checkout, so no public repository or release has been published.
