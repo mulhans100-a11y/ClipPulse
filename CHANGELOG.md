@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 — ClipPulse branding and documentation
+
+- Renamed the desktop application, installer, command-line interface, and automation identity to ClipPulse.
+- Rewrote the README as a user-facing project guide covering setup, editing, local media, montage generation, and known limitations.
+- Updated project, automation, and release documentation to use the ClipPulse name.
+
 ## 0.1.0 — Phase A–H draft release
 
 - Added electron-builder targets and native GitHub Actions release builds for Windows x64, Linux x64, macOS arm64, and macOS Intel.
