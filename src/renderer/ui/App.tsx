@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
+import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
 import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import { add as addTime, compare, decimal, parseDecimal, rational, seconds, toFrame } from '../../core/time';
+import { audioClipBeatOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 
 function secondsOf(value: { num: string; den: string }): number { return Number(value.num) / Number(value.den); }
 function formatTime(value: number): string {
@@ -33,6 +34,8 @@ export default function App() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [playhead, setPlayhead] = useState(0);
   const [timelineScale, setTimelineScale] = useState(96);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [audioAnalyses, setAudioAnalyses] = useState<Record<string, AudioAnalysis>>({});
   const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
   const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
@@ -106,6 +109,7 @@ export default function App() {
 
   const load = useCallback((result: { project: Project; path: string }) => {
     setProject(result.project); setProjectPath(result.path); projectPathRef.current = result.path; setSelectedClipId(null);
+    setAudioAnalyses({});
     void window.openmontage?.getImportRoots(result.path).then(setImportRoots).catch(() => setImportRoots([]));
     void refreshHistory(result.path);
     void refreshMissingMedia(result.path);
@@ -122,6 +126,9 @@ export default function App() {
       if (next) { setProject(next); await refreshHistory(projectPath); }
       setNotice(label);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+  function cacheAudioAnalysis(mediaId: string, analysis: AudioAnalysis) {
+    setAudioAnalyses((current) => ({ ...current, [mediaId]: analysis }));
   }
 
   async function createProject() {
@@ -149,10 +156,11 @@ export default function App() {
     const kind: TrackKind = asset.kind === 'audio' ? 'audio' : 'video';
     const track = project.tracks.find((item) => item.id === trackOverride) ?? project.tracks.find((item) => item.kind === kind);
     if (!track) { setError(`Create a ${kind} track first.`); return; }
+    const position = snapEnabled ? snapTimelineTime(project, start, timelineScale, audioAnalyses) : start;
     const previousIds = new Set(project.tracks.flatMap((item) => item.clips.map((clip) => clip.id)));
-    await run(() => window.openmontage.addClip(projectPath, asset.id, track.id, start), (next) => {
+    await run(() => window.openmontage.addClip(projectPath, asset.id, track.id, position), (next) => {
       const created = next.tracks.flatMap((item) => item.clips).find((clip) => !previousIds.has(clip.id));
-      if (created) { setSelectedClipId(created.id); setSelectedMediaId(asset.id); setPlayhead(start); }
+      if (created) { setSelectedClipId(created.id); setSelectedMediaId(asset.id); setPlayhead(position); }
       return next;
     }, `Added ${asset.name}`);
   }
@@ -278,7 +286,8 @@ export default function App() {
 
   function timelineClick(event: React.MouseEvent<HTMLDivElement>, track: TimelineTrack) {
     const rect = event.currentTarget.getBoundingClientRect();
-    const at = Math.max(0, (event.clientX - rect.left) / timelineScale);
+    const rawAt = Math.max(0, (event.clientX - rect.left) / timelineScale);
+    const at = snapEnabled && project ? snapTimelineTime(project, rawAt, timelineScale, audioAnalyses) : rawAt;
     setPlayhead(at);
     if (selectedMedia) void addMediaToTimeline(selectedMedia, at, track.id);
   }
@@ -344,7 +353,7 @@ export default function App() {
         </section>
 
         <section className="timeline-panel panel">
-          <div className="timeline-header"><div className="timeline-title"><span className="eyebrow">EDIT</span><h2>Timeline</h2><span className="timeline-duration"><Clock3 size={13} />{formatTime(duration)}</span></div><div className="timeline-actions"><button className="tool-chip" disabled={!currentClip} onClick={() => void splitSelected()} title="Split at playhead"><Scissors size={14} /> Split</button><button className="tool-chip" disabled={!currentClip} onClick={() => void duplicateSelected()} title="Duplicate selected clip"><Copy size={14} /> Duplicate</button><button className="tool-chip" disabled={!currentClip} onClick={() => void removeSelected()}><Trash2 size={14} /></button><span className="divider" /><button className="tool-chip" onClick={() => void addTrack('video')}><Plus size={14} /> Video</button><button className="tool-chip" onClick={() => void addTrack('audio')}><Plus size={14} /> Audio</button><button className="tool-chip" onClick={() => setTimelineScale((scale) => scale >= 384 ? 48 : scale * 2)} title={`Timeline zoom · ${timelineScale} pixels per second`}><Gauge size={14} />{Math.round(timelineScale / 96 * 100)}%</button></div></div>
+          <div className="timeline-header"><div className="timeline-title"><span className="eyebrow">EDIT</span><h2>Timeline</h2><span className="timeline-duration"><Clock3 size={13} />{formatTime(duration)}</span></div><div className="timeline-actions"><button className="tool-chip" disabled={!currentClip} onClick={() => void splitSelected()} title="Split at playhead"><Scissors size={14} /> Split</button><button className="tool-chip" disabled={!currentClip} onClick={() => void duplicateSelected()} title="Duplicate selected clip"><Copy size={14} /> Duplicate</button><button className="tool-chip" disabled={!currentClip} onClick={() => void removeSelected()}><Trash2 size={14} /></button><span className="divider" /><button className="tool-chip" onClick={() => void addTrack('video')}><Plus size={14} /> Video</button><button className="tool-chip" onClick={() => void addTrack('audio')}><Plus size={14} /> Audio</button><button className={`tool-chip snap-toggle ${snapEnabled ? "active" : ""}`} onClick={() => setSnapEnabled((enabled) => !enabled)} title={snapEnabled ? "Disable snapping to beats and clip edges" : "Enable snapping to beats and clip edges"}><Magnet size={14} />{snapEnabled ? "Snap" : "Snap off"}</button><button className="tool-chip" onClick={() => setTimelineScale((scale) => scale >= 384 ? 48 : scale * 2)} title={`Timeline zoom · ${timelineScale} pixels per second`}><Gauge size={14} />{Math.round(timelineScale / 96 * 100)}%</button></div></div>
           <div className="timeline-scroll" ref={timelineRef}>
             <div className="timeline-content" style={{ width: Math.max(920, duration * timelineScale + 50) }}>
               <div className="ruler"><div className="track-gutter ruler-gutter">TIME</div><div className="ruler-track">{Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <div key={i} className="ruler-tick" style={{ left: i * timelineScale }}><span>{formatTime(i).slice(3)}</span><i /></div>)}<div className="timeline-cursor" style={{ left: playhead * timelineScale }}><div /></div></div></div>
@@ -360,7 +369,7 @@ export default function App() {
                   </div>
                   <div className="track-lane" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
                     event.preventDefault(); const clipId = event.dataTransfer.getData('text/clip-id'); if (!clipId) return;
-                    const bounds = event.currentTarget.getBoundingClientRect(); const at = Math.max(0, (event.clientX - bounds.left + event.currentTarget.scrollLeft) / timelineScale);
+                    const bounds = event.currentTarget.getBoundingClientRect(); const rawAt = Math.max(0, (event.clientX - bounds.left + event.currentTarget.scrollLeft) / timelineScale); const at = snapEnabled ? snapTimelineTime(project, rawAt, timelineScale, audioAnalyses) : rawAt;
                     void run(() => window.openmontage.moveClip(projectPath, clipId, at, track.id), (next) => next, 'Clip moved');
                   }} onClick={(event) => timelineClick(event, track)}>
                     {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <span className="gridline" key={i} style={{ left: i * timelineScale }} />)}
@@ -373,8 +382,10 @@ export default function App() {
                         left: `${-secondsOf(clip.sourceIn) / secondsOf(clip.duration) * 100}%`,
                         objectFit: 'fill', opacity: 0.72
                       } : undefined;
+                      const beatOffsets = asset.kind === 'audio' ? audioClipBeatOffsets(clip, audioAnalyses[asset.id]) : [];
                       return <div key={clip.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/clip-id', clip.id)} onClick={(event) => { event.stopPropagation(); setSelectedClipId(clip.id); setSelectedMediaId(asset.id); setPlayhead(start); }} className={`timeline-clip ${track.kind} ${selectedClipId === clip.id ? 'active' : ''}`} style={{ left: start * timelineScale, width, '--clip-hue': `${(index * 61 + asset.name.length * 13) % 360}` } as React.CSSProperties}>
                         {asset.thumbnailPath && <img className="clip-filmstrip" style={clipArtworkStyle} src={window.openmontage.toFileUrl(asset.thumbnailPath)} />}
+                        {beatOffsets.length > 0 && <span className="timeline-beat-markers" aria-hidden="true">{beatOffsets.map((offset, beatIndex) => <i key={beatIndex} style={{ left: `${offset * 100}%` }} />)}</span>}
                         <div className="clip-content"><strong>{asset.name}</strong><span>{formatTime(clipDuration)}</span></div>
                         <span className="clip-edge left" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'left')} title="Drag to trim clip start" /><span className="clip-edge right" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'right')} title="Drag to trim clip end" />
                       </div>;
@@ -401,7 +412,7 @@ export default function App() {
             try { await window.openmontage.saveProject(projectPath, next); setProject(next); await refreshHistory(projectPath); setNotice('Clip volume updated'); } catch (cause) { setError(String(cause)); }
           }} /></section>
           <section className="inspector-section muted-section"><div className="section-label"><span>MORE CONTROLS</span><button><ChevronDown size={14} /></button></div><div className="disabled-row"><Sparkles size={14} /><span>Effects and keyframes</span><small>Planned</small></div><div className="disabled-row"><Activity size={14} /><span>Masking and tracking</span><small>Planned</small></div></section>
-        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
+        </> : selectedMedia ? <MediaInspector asset={selectedMedia} projectPath={projectPath} missing={missingMediaIds.includes(selectedMedia.id)} onRelink={() => void relinkAsset(selectedMedia.id)} onSave={(patch) => void run(() => window.openmontage.updateMediaMetadata(projectPath, selectedMedia.id, patch), (next) => next, 'Media details saved')} onAnalysis={cacheAudioAnalysis} /> : <div className="inspector-empty"><div className="inspector-empty-icon"><WandSparkles size={20} /></div><strong>No clip selected</strong><span>Select a timeline clip to edit its timing and audio.</span></div>}
         <div className="inspector-footer"><span>PROJECT</span><strong>{project.name}</strong><small>{project.width} × {project.height} · {Number(project.frameRate.num) / Number(project.frameRate.den)} fps</small></div>
       </aside>
     </div>
@@ -412,7 +423,7 @@ export default function App() {
   </div>;
 }
 
-function MediaInspector({ asset, projectPath, missing, onRelink, onSave }: { asset: MediaAsset; projectPath: string; missing: boolean; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null }) => void }) {
+function MediaInspector({ asset, projectPath, missing, onRelink, onSave, onAnalysis }: { asset: MediaAsset; projectPath: string; missing: boolean; onRelink: () => void; onSave: (patch: { tags: string[]; game: string | null }) => void; onAnalysis: (mediaId: string, analysis: AudioAnalysis) => void }) {
   const [tags, setTags] = useState((asset.tags ?? []).join(', '));
   const [game, setGame] = useState(asset.game ?? '');
   const [analysisResult, setAnalysisResult] = useState<{ assetId: string; data: AudioAnalysis } | null>(null);
@@ -423,7 +434,7 @@ function MediaInspector({ asset, projectPath, missing, onRelink, onSave }: { ass
   useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setAnalysisResult(null); setAnalysisFailure(null); }, [asset.id, asset.tags, asset.game]);
   async function runAnalysis() {
     setAnalyzing(true); setAnalysisFailure(null);
-    try { setAnalysisResult({ assetId: asset.id, data: await window.openmontage.analyzeAudio(projectPath, asset.id) }); }
+    try { const data = await window.openmontage.analyzeAudio(projectPath, asset.id); setAnalysisResult({ assetId: asset.id, data }); onAnalysis(asset.id, data); }
     catch (error) { setAnalysisFailure({ assetId: asset.id, message: error instanceof Error ? error.message : String(error) }); }
     finally { setAnalyzing(false); }
   }

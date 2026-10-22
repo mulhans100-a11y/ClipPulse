@@ -13,6 +13,8 @@ import { runCommand } from '../src/core/ffmpeg';
 import { libraryDatabasePath } from '../src/core/library';
 import { watchFolder } from '../src/core/folderWatcher';
 import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } from '../src/core/time';
+import { audioClipBeatOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
+import type { Project, TimelineClip } from '../src/core/types';
 
 const scratch: string[] = [];
 test.after(async () => { for (const directory of scratch) await rm(directory, { recursive: true, force: true }); });
@@ -25,6 +27,20 @@ test('rational time arithmetic stays exact across non-integer frame rates', () =
   assert.deepEqual(parseDecimal('5/2'), { num: '5', den: '2' });
   assert.equal(decimal(parseDecimal('12.500000')), '12.5');
   assert.equal(compare(rational(1, 3), rational(2, 5)), -1);
+});
+
+test('timeline snap points include clip edges and analyzed beats within an audio source range', () => {
+  const clip: TimelineClip = { id: 'music-clip', mediaId: 'music', start: rational(2), sourceIn: rational(1), duration: rational(2), audioEnabled: true, volume: 1 };
+  const project: Project = {
+    schemaVersion: 1, id: 'project', name: 'Beat test', createdAt: '', updatedAt: '', frameRate: rational(30), width: 640, height: 360,
+    media: [{ id: 'music', path: 'music.wav', name: 'music.wav', kind: 'audio', duration: rational(5), hasAudio: true, sizeBytes: 1, modifiedAt: '', contentHash: 'music-hash', importedAt: '' }],
+    tracks: [{ id: 'audio-track', name: 'A1', kind: 'audio', muted: false, locked: false, clips: [clip] }]
+  };
+  const analysis = { method: 'rms-onset-autocorrelation-v1' as const, sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 5, beats: [0.5, 1, 1.5, 2, 2.5, 3], onsets: [], bpmHypotheses: [] };
+  assert.deepEqual(audioClipBeatOffsets(clip, analysis), [0, 0.25, 0.5, 0.75]);
+  assert.deepEqual(collectTimelineSnapPoints(project, { music: analysis }), [2, 2.5, 3, 3.5, 4]);
+  assert.equal(snapTimelineTime(project, 3.53, 96, { music: analysis }), 3.5);
+  assert.equal(snapTimelineTime(project, 3.8, 96, { music: analysis }), 3.8, 'snap only catches positions near a beat or clip edge');
 });
 
 test('project undo and redo survive reloads, skip no-op saves, and clear a redo branch after edits', async () => {

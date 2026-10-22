@@ -19,6 +19,7 @@ Status reflects the repository at `0.1.0`.
 - [x] Direct clip-edge drag handles with frame-snapped source and timeline trimming.
 - [x] Project profile dialog for output dimensions and rational frame rate; profile changes are undoable.
 - [x] Adjustable timeline zoom from 50% to 400%.
+- [x] Optional magnetic snapping to clip edges and analyzed music beats.
 - [ ] Windows installer validation on a clean machine and dependency diagnosis UI.
 
 ## Phase B — Media library (in progress)
@@ -35,6 +36,7 @@ Status reflects the repository at `0.1.0`.
 ## Phase C — Music and highlight analysis
 
 - [x] Initial local audio analysis: BPM hypotheses, beat positions, and amplitude-transient timestamps, with cached JSON results.
+- [x] Show analyzed beat positions on audio timeline clips and snap editing positions to them.
 - [ ] Improve audio analysis with downbeats, meter, energy sections/drops, confidence calibration, and varied real-music evaluation.
 - [ ] Plugin interface and initial game-specific detector evaluation set.
 - [ ] Scene, motion, audio-transient and OCR detector provenance with timestamped event results.
