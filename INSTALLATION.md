@@ -4,7 +4,7 @@
 
 - Windows 10/11 (current supported development platform).
 - Node.js 24+ and npm 10+.
-- FFmpeg/FFprobe 6+ on `PATH`; confirm with `ffmpeg -version` and `ffprobe -version`.
+- FFmpeg/FFprobe 6+ on `PATH`, with the `drawtext` filter and `libx264` encoder; confirm with `ffmpeg -filters` and `ffmpeg -encoders`.
 - Git for source checkout.
 
 The app and CLI use Node's built-in SQLite support, so Node.js 24+ is required for development and headless CLI use. Electron 45 embeds Node 24 for the desktop app.

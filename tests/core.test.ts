@@ -529,7 +529,11 @@ test('recursive folder watcher reports new nested media files and closes cleanly
     await Promise.race([changed, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('No file-system change notification arrived.')), 5000); })]);
     if (timeout) clearTimeout(timeout);
     assert.equal(changeCount, 1);
-  } finally { watcher.close(); }
+  } finally {
+    const closed = new Promise<void>((resolve) => watcher.once('close', resolve));
+    watcher.close();
+    await closed;
+  }
 });
 
 test('local audio analysis finds a synthetic 120 BPM click track and reuses its cache', async () => {

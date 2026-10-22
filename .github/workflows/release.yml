@@ -67,8 +67,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes ffmpeg
       - name: Install FFmpeg on macOS
         if: matrix.ffmpeg == 'macos'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - run: npm ci
+      - name: Verify FFmpeg features used by the editor
+        run: node scripts/verify-ffmpeg-ci.cjs
       - name: Audit production dependencies
         run: npm audit --omit=dev
       - run: npm run build
