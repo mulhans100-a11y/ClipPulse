@@ -6,7 +6,7 @@
 - Added a Windows fresh-runner installer/start smoke test, production dependency audit, CycloneDX SBOM, SHA-256 checksums, and draft-only GitHub release assembly.
 - Added signing-secret setup and manual artifact review instructions; no application release has been published.
 - Added per-platform production dependency license manifests and license text files to packaged application resources, including native `sharp`/libvips, version-matched ONNX Runtime, and `guid-typescript` notices.
-- Replaced platform-dependent recursive filesystem watching with Chokidar and made its readiness and shutdown explicit for stable cross-platform media-folder imports.
+- Replaced platform-dependent recursive filesystem watching with explicitly managed per-directory watches and made readiness and shutdown explicit for stable cross-platform media-folder imports.
 - Made optional OCR evaluation checks follow the detector's actual availability on each CI runner.
 - Corrected FFT-window onset timestamp bias and meter estimation so the local music-analysis regression tests pass.
 
