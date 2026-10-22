@@ -2,7 +2,6 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { FSWatcher } from 'node:fs';
 import { analyzeAudio, readCachedAudioAnalysis } from '../core/audioAnalysis';
 import { analyzeHighlightCues } from '../core/highlightAnalysis';
 import { getPublicAnalysisRuntimeStatuses } from '../core/analysisRuntimes';
@@ -13,6 +12,7 @@ import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
 import { frameTime } from '../core/time';
 import { watchFolder } from '../core/folderWatcher';
+import type { FSWatcher } from 'chokidar';
 import { medalCaptureFolderPreset } from '../core/medal';
 import { renderTimelineFrame } from '../core/timelinePreview';
 import { generateClipModelMask } from '../core/modelSegmentation';
@@ -91,14 +91,15 @@ async function withProjectLock<T>(filePath: string, operation: () => Promise<T>)
   finally { release(); if (projectLocks.get(key) === current) projectLocks.delete(key); }
 }
 
-function stopFolderWatchers(): void {
-  for (const watcher of folderWatchers.values()) watcher.close();
+async function stopFolderWatchers(): Promise<void> {
+  const closing = [...folderWatchers.values()];
   folderWatchers = new Map();
   watchedProjectPath = null;
+  await Promise.all(closing.map((watcher) => watcher.close()));
 }
 
 async function activateFolderWatchers(filePath: string): Promise<void> {
-  stopFolderWatchers();
+  await stopFolderWatchers();
   const absoluteProjectPath = path.resolve(filePath);
   watchedProjectPath = absoluteProjectPath;
   const roots = await getImportRoots(absoluteProjectPath);
@@ -162,14 +163,14 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('will-quit', stopFolderWatchers);
+app.on('will-quit', () => { void stopFolderWatchers().catch((error) => console.error('Could not close folder watchers:', error)); });
 
 ipcMain.handle('app:version', async () => ({ appVersion: app.getVersion(), ...await ffmpegAvailable() }));
 ipcMain.handle('project:create', async () => {
   const response = await dialog.showSaveDialog(mainWindow!, { title: 'New OpenMontage project', defaultPath: 'Untitled.omproj', filters: [{ name: 'OpenMontage project', extensions: ['omproj'] }] });
   if (response.canceled || !response.filePath) return null;
   const filePath = response.filePath.endsWith('.omproj') ? response.filePath : `${response.filePath}.omproj`;
-  stopFolderWatchers();
+  await stopFolderWatchers();
   return { project: await createProject(filePath), path: filePath };
 });
 ipcMain.handle('project:open', async () => {

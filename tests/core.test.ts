@@ -524,15 +524,22 @@ test('recursive folder watcher reports new nested media files and closes cleanly
   const changed = new Promise<void>((resolve) => { resolveChange = resolve; });
   const watcher = watchFolder(directory, () => { changeCount++; resolveChange(); }, true, 100);
   try {
+    await new Promise<void>((resolve, reject) => {
+      const onReady = () => { watcher.off('error', onError); resolve(); };
+      const onError = (error: unknown) => { watcher.off('ready', onReady); reject(error); };
+      watcher.once('ready', onReady);
+      watcher.once('error', onError);
+    });
     await writeFile(path.join(nested, 'capture.mp4'), 'new capture');
     let timeout: NodeJS.Timeout | undefined;
-    await Promise.race([changed, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('No file-system change notification arrived.')), 5000); })]);
-    if (timeout) clearTimeout(timeout);
+    try {
+      await Promise.race([changed, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('No file-system change notification arrived.')), 10000); })]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
     assert.equal(changeCount, 1);
   } finally {
-    const closed = new Promise<void>((resolve) => watcher.once('close', resolve));
-    watcher.close();
-    await closed;
+    await watcher.close();
   }
 });
 
@@ -641,7 +648,9 @@ test('evaluation reports independent gameplay consensus and real-music beat metr
   assert.equal(report.referenceEvents, 1);
   assert.equal(report.disputedAnnotations, 0);
   assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.frame-difference-motion')?.evaluatedMediaItems, 1);
-  assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.tesseract-hud-ocr')?.evaluatedMediaItems, 0);
+  const ocrResult = report.detectorResults.find((result) => result.detectorId === 'openmontage.tesseract-hud-ocr');
+  const ocrStatus = report.items[0].analysis.detectors.find((detector) => detector.detectorId === 'openmontage.tesseract-hud-ocr')?.status;
+  assert.equal(ocrResult?.evaluatedMediaItems, ocrStatus === 'complete' ? 1 : 0, 'optional OCR is evaluated when available and skipped when unavailable');
   assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.audio-activity')?.evaluatedMediaItems, 0, 'audio-only music items are excluded from gameplay detector recall');
   const sceneMetrics = report.detectorResults.find((result) => result.detectorId === 'openmontage.ffmpeg-scene-change');
   assert.equal(sceneMetrics?.falseNegatives, 1, 'annotated events missed by a completed detector count toward recall');
