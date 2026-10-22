@@ -1,5 +1,16 @@
 export type Rational = { num: string; den: string };
 export type TrackKind = 'video' | 'audio';
+export type BlendMode = 'normal' | 'multiply' | 'screen' | 'add' | 'difference';
+
+export interface ClipMaskKeyframe { time: Rational; path: string; }
+export interface ClipMask {
+  /** Closed SVG path in normalized frame coordinates (0–1). Supports M, L, Q, C, Z. */
+  path: string;
+  featherPx: number;
+  expansionPx: number;
+  keyframes?: ClipMaskKeyframe[];
+}
+export interface ClipChromaKey { color: string; similarity: number; blend: number; }
 
 export type MediaJobKind = 'proxy' | 'clip-waveform';
 export type MediaJobState = 'queued' | 'running' | 'complete' | 'failed' | 'cancelled';
@@ -180,6 +191,10 @@ export interface TimelineClip {
   transitionIn?: { type: 'dissolve' | 'wipe-left' | 'wipe-right'; duration: Rational };
   title?: { text: string; fontSize: number; color: string; x: number; y: number; start: Rational; duration: Rational; box?: boolean; fontFile?: string };
   normalizeAudio?: boolean;
+  /** Optional non-destructive foreground isolation and compositing settings. */
+  blendMode?: BlendMode;
+  chromaKey?: ClipChromaKey;
+  mask?: ClipMask;
 }
 
 export interface TimelineTrack {

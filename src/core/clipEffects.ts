@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { add, compare, decimal, parseDecimal, rational, sub } from './time';
+import { maskPathPoints } from './maskPath';
 import type { Project, Rational, TimelineClip } from './types';
 
 export const DEFAULT_PLAYBACK_RATE = rational(1);
@@ -237,6 +238,53 @@ function defaultTitleFont(): string | undefined {
   return candidates.find((candidate) => existsSync(candidate));
 }
 
+function maskCoordinateExpression(base: number, keyframes: NonNullable<NonNullable<TimelineClip['mask']>['keyframes']>, pointIndex: number, axis: 0 | 1, frameRate: Rational): string {
+  const entries = [{ time: rational(0), value: base }, ...keyframes.map((frame) => ({ time: frame.time, value: maskPathPoints(frame.path)[pointIndex][axis] }))]
+    .sort((a, b) => compare(a.time, b.time));
+  const unique: typeof entries = [];
+  for (const entry of entries) {
+    if (unique.length && compare(unique[unique.length - 1].time, entry.time) === 0) unique[unique.length - 1] = entry;
+    else unique.push(entry);
+  }
+  if (unique.length === 1) return safeNumber(unique[0].value);
+  const times = unique.map((entry) => timeValue(entry.time));
+  let expression = safeNumber(unique[unique.length - 1].value);
+  for (let index = unique.length - 2; index >= 0; index--) {
+    const start = times[index], end = times[index + 1];
+    const span = Math.max(1 / Math.max(1, timeValue(frameRate)), end - start);
+    const value = `${safeNumber(unique[index].value)}+(${safeNumber(unique[index + 1].value - unique[index].value)})*(T-${safeNumber(start)})/${safeNumber(span)}`;
+    expression = `if(lt(T,${safeNumber(end)}),${value},${expression})`;
+  }
+  return expression;
+}
+
+function maskAlphaExpression(clip: TimelineClip, project: Project): string {
+  const mask = clip.mask!;
+  const points = maskPathPoints(mask.path);
+  const keyframes = mask.keyframes ?? [];
+  const dynamicPoints = points.map((point, index) => [
+    `(${maskCoordinateExpression(point[0], keyframes, index, 0, project.frameRate)})*W`,
+    `(${maskCoordinateExpression(point[1], keyframes, index, 1, project.frameRate)})*H`
+  ] as const);
+  const crossings: string[] = [];
+  const distances: string[] = [];
+  for (let index = 0; index < dynamicPoints.length; index++) {
+    const [x1, y1] = dynamicPoints[index];
+    const [x2, y2] = dynamicPoints[(index + 1) % dynamicPoints.length];
+    const dy = `((${y2})-(${y1}))`, dx = `((${x2})-(${x1}))`;
+    const xCross = `((${x1})+(Y-(${y1}))*(${dx})/if(eq(${dy},0),1,${dy}))`;
+    crossings.push(`if(gt(${y1},Y),if(lt(${y2},Y),lt(X,${xCross}),0),if(gt(${y2},Y),lt(X,${xCross}),0))`);
+    const lengthSquared = `((${dx})*(${dx})+(${dy})*(${dy}))`;
+    const projection = `clip(((X-(${x1}))*(${dx})+(Y-(${y1}))*(${dy}))/if(eq(${lengthSquared},0),1,${lengthSquared}),0,1)`;
+    distances.push(`sqrt((X-((${x1})+${projection}*(${dx})))^2+(Y-((${y1})+${projection}*(${dy})))^2)`);
+  }
+  const inside = `mod(${crossings.join('+')},2)`;
+  if (mask.expansionPx === 0) return `if(gt(${inside},0.5),255,0)`;
+  const edgeDistance = distances.reduce((left, right) => `min(${left},${right})`);
+  const signedDistance = `if(gt(${inside},0.5),${edgeDistance},-${edgeDistance})`;
+  return `if(gt(${signedDistance}+${safeNumber(mask.expansionPx)},0),255,0)`;
+}
+
 /** Video filter chain shared by the timeline frame monitor and full export. Input PTS must be local clip time. */
 export function buildClipVideoFilters(clip: TimelineClip, project: Project): string[] {
   const transform = clip.transform ?? { scale: 1, x: 0, y: 0, rotationDegrees: 0 };
@@ -256,12 +304,21 @@ export function buildClipVideoFilters(clip: TimelineClip, project: Project): str
   if (color.brightness !== 0 || color.contrast !== 1 || color.saturation !== 1 || clip.keyframes?.some((frame) => ['brightness', 'contrast', 'saturation'].includes(frame.property))) {
     filters.push(`eq=brightness='${brightness}':contrast='${contrast}':saturation='${saturation}':eval=frame`);
   }
+  if (clip.chromaKey) {
+    const { color: keyColor, similarity, blend } = clip.chromaKey;
+    filters.push(`format=yuva444p,chromakey=0x${keyColor.slice(1)}:${safeNumber(similarity)}:${safeNumber(blend)},format=rgba`);
+  }
+  if (clip.mask) {
+    const alpha = maskAlphaExpression(clip, project);
+    filters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':alpha_expr='alpha(X,Y)*(${alpha})/255'`);
+    if (clip.mask.featherPx > 0) filters.push(`gblur=sigma=${safeNumber(clip.mask.featherPx)}:planes=8`);
+  }
   const opacity = keyframeExpression(clip, 'opacity', 1);
-  if (opacity !== '1') filters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*(${opacity.replace(/\bt\b/g, 'T')})'`);
+  if (opacity !== '1') filters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':alpha_expr='alpha(X,Y)*(${opacity.replace(/\bt\b/g, 'T')})'`);
   if (clip.transitionIn && compare(clip.transitionIn.duration, rational(0)) > 0) {
     const transition = timeValue(clip.transitionIn.duration);
-    if (clip.transitionIn.type === 'wipe-left') filters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*if(lt(X/W,T/${safeNumber(transition)}),1,0)'`);
-    else if (clip.transitionIn.type === 'wipe-right') filters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*if(gt(X/W,1-T/${safeNumber(transition)}),1,0)'`);
+    if (clip.transitionIn.type === 'wipe-left') filters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':alpha_expr='alpha(X,Y)*if(lt(X/W,T/${safeNumber(transition)}),1,0)'`);
+    else if (clip.transitionIn.type === 'wipe-right') filters.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':alpha_expr='alpha(X,Y)*if(gt(X/W,1-T/${safeNumber(transition)}),1,0)'`);
     else filters.push(`fade=t=in:st=0:d=${safeNumber(transition)}:alpha=1`);
   }
   if (clip.title?.text) {

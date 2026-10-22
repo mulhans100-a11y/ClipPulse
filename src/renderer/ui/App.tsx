@@ -4,6 +4,7 @@ import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMon
 import { add as addTime, compare, decimal, frameTime, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
+import { maskPathAt } from '../../core/maskPath';
 
 const MEDIA_CARD_HEIGHT = 64;
 type AudioAnalysisStatus = 'running' | 'complete' | 'failed';
@@ -442,7 +443,7 @@ export default function App() {
     if (!project || !currentClip) return;
     await run(() => window.openmontage.setClipAudio(projectPath, currentClip.clip.id, patch), (next) => next, 'Clip audio updated');
   }
-  async function patchClipEffects(patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>) {
+  async function patchClipEffects(patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>) {
     if (!project || !currentClip) return;
     await run(() => window.openmontage.setClipEffects(projectPath, currentClip.clip.id, patch), (next) => next, 'Clip effects updated');
   }
@@ -688,9 +689,10 @@ export default function App() {
   </div>;
 }
 
-type ClipEffectPatch = Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>;
+type ClipEffectPatch = Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>;
 
 function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: TimelineClip; project: Project; playhead: number; onPatch: (patch: ClipEffectPatch) => void }) {
+  const canComposite = project.media.find((asset) => asset.id === clip.mediaId)?.kind === 'video';
   const transform = clip.transform ?? { scale: 1, x: 0, y: 0, rotationDegrees: 0 };
   const color = clip.color ?? { brightness: 0, contrast: 1, saturation: 1 };
   const local = Math.max(0, Math.min(secondsOf(clip.duration), playhead - secondsOf(clip.start)));
@@ -699,11 +701,28 @@ function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: Time
   const [value, setValue] = useState('1');
   const [speedValue, setSpeedValue] = useState(String(secondsOf(clip.playbackRate ?? rational(1))));
   const [titleText, setTitleText] = useState(clip.title?.text ?? '');
+  const [maskPathDraft, setMaskPathDraft] = useState(clip.mask ? maskPathAt(clip.mask, localTime) : '');
   useEffect(() => { setSpeedValue(String(secondsOf(clip.playbackRate ?? rational(1)))); }, [clip.playbackRate]);
   useEffect(() => { setTitleText(clip.title?.text ?? ''); }, [clip.title?.text]);
+  useEffect(() => { setMaskPathDraft(clip.mask ? maskPathAt(clip.mask, localTime) : ''); }, [clip.mask, localTime]);
 
   function updateTransform(patch: Partial<NonNullable<TimelineClip['transform']>>) { onPatch({ transform: { ...transform, ...patch } }); }
   function updateColor(patch: Partial<NonNullable<TimelineClip['color']>>) { onPatch({ color: { ...color, ...patch } }); }
+  function updateMask(patch: Partial<NonNullable<TimelineClip['mask']>>) {
+    const mask = clip.mask ?? { path: maskPathDraft || 'M 0.2 0.2 L 0.8 0.2 L 0.8 0.8 L 0.2 0.8 Z', featherPx: 0, expansionPx: 0, keyframes: [] };
+    onPatch({ mask: { ...mask, ...patch } });
+  }
+  function saveMaskPath() {
+    if (!clip.mask || !maskPathDraft.trim()) return;
+    if (compare(localTime, rational(0)) === 0) updateMask({ path: maskPathDraft.trim() });
+    else addMaskTrackingKeyframe();
+  }
+  function addMaskTrackingKeyframe() {
+    const path = maskPathDraft.trim();
+    if (!path) return;
+    const keyframes = (clip.mask?.keyframes ?? []).filter((frame) => compare(frame.time, localTime) !== 0);
+    updateMask({ keyframes: [...keyframes, { time: localTime, path }].sort((a, b) => compare(a.time, b.time)) });
+  }
   function addKeyframe() {
     const number = Number(value);
     if (!Number.isFinite(number)) return;
@@ -736,6 +755,24 @@ function ClipEffectsInspector({ clip, project, playhead, onPatch }: { clip: Time
       <NumberField label="Saturation" unit="×" value={color.saturation} min={0} max={4} step={0.05} onCommit={(saturation) => updateColor({ saturation })} />
       <TextField label="3D LUT file" value={color.lutPath ?? ''} placeholder="Optional .cube path" onCommit={(lutPath) => updateColor({ lutPath: lutPath.trim() || undefined })} />
     </section>
+    {canComposite && <section className="inspector-section"><div className="section-label"><span>COMPOSITING · PHASE F</span><ChevronDown size={14} /></div>
+      <label className="text-field"><span>Blend mode</span><select value={clip.blendMode ?? 'normal'} onChange={(event) => onPatch({ blendMode: event.target.value as NonNullable<TimelineClip['blendMode']> })}><option value="normal">Normal alpha</option><option value="multiply">Multiply</option><option value="screen">Screen</option><option value="add">Add</option><option value="difference">Difference</option></select></label>
+      {!clip.mask ? <button className="small-action" onClick={() => { const path = 'M 0.2 0.2 L 0.8 0.2 L 0.8 0.8 L 0.2 0.8 Z'; setMaskPathDraft(path); onPatch({ mask: { path, featherPx: 0, expansionPx: 0, keyframes: [] } }); }}>Create polygon mask</button> : <>
+        <label className="text-field mask-path-field"><span>Closed polygon / Bézier path · normalized 0–1</span><textarea aria-label="Mask path" value={maskPathDraft} spellCheck={false} onChange={(event) => setMaskPathDraft(event.target.value)} onBlur={saveMaskPath} /></label>
+        <div className="compositing-help">SVG path commands M, L, Q, C and Z. Coordinates are relative to the frame. Keep the same number of path points when adding tracking corrections.</div>
+        <NumberField label="Feather" unit="px" value={clip.mask.featherPx} max={256} step={1} onCommit={(featherPx) => updateMask({ featherPx })} />
+        <NumberField label="Expansion" unit="px" value={clip.mask.expansionPx} min={-256} max={256} step={1} onCommit={(expansionPx) => updateMask({ expansionPx })} />
+        <div className="keyframe-add-row"><button onClick={addMaskTrackingKeyframe}>Add tracking correction at {formatTime(local)}</button><small>{clip.mask.keyframes?.length ?? 0} points</small></div>
+        {!!clip.mask.keyframes?.length && <div className="keyframe-list">{clip.mask.keyframes.map((frame, index) => <div key={`mask-${index}`}><span>{formatTime(secondsOf(frame.time))} · mask correction</span><button title="Remove tracking correction" onClick={() => updateMask({ keyframes: clip.mask!.keyframes!.filter((_, frameIndex) => frameIndex !== index) })}>×</button></div>)}</div>}
+        <button className="text-action" onClick={() => { setMaskPathDraft(''); onPatch({ mask: undefined }); }}>Remove mask</button>
+      </>}
+      {!clip.chromaKey ? <button className="small-action" onClick={() => onPatch({ chromaKey: { color: '#00ff00', similarity: 0.18, blend: 0.04 } })}>Add chroma key</button> : <>
+        <div className="title-style-row"><label>Key color<input aria-label="Chroma key color" type="color" value={clip.chromaKey.color} onChange={(event) => onPatch({ chromaKey: { ...clip.chromaKey!, color: event.target.value } })} /></label><button onClick={() => onPatch({ chromaKey: undefined })}>Remove key</button></div>
+        <NumberField label="Similarity" unit="" value={clip.chromaKey.similarity} max={1} step={0.01} onCommit={(similarity) => onPatch({ chromaKey: { ...clip.chromaKey!, similarity } })} />
+        <NumberField label="Edge blend" unit="" value={clip.chromaKey.blend} max={1} step={0.01} onCommit={(blend) => onPatch({ chromaKey: { ...clip.chromaKey!, blend } })} />
+      </>}
+      <small className="compositing-help">Masks and keys are applied in both monitor preview and export. Model-based segmentation is not configured.</small>
+    </section>}
     <section className="inspector-section"><div className="section-label"><span>SPEED & TRANSITION</span><ChevronDown size={14} /></div>
       <NumberField label="Playback rate" unit="×" value={secondsOf(clip.playbackRate ?? rational(1))} min={0.25} max={4} step={0.05} onCommit={(rate) => onPatch({ playbackRate: parseDecimal(rate) })} />
       <label className="text-field"><span>Transition in</span><select value={clip.transitionIn?.type ?? 'none'} onChange={(event) => updateTransition(event.target.value)}><option value="none">None</option><option value="dissolve">Dissolve</option><option value="wipe-left">Wipe left</option><option value="wipe-right">Wipe right</option></select></label>

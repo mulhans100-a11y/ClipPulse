@@ -36,7 +36,7 @@ export interface OpenMontageApi {
   addClip(path: string, mediaId: string, trackId: string, start: number): Promise<Project>;
   duplicateClip(path: string, clipId: string, start?: number): Promise<Project>;
   setClipAudio(path: string, clipId: string, patch: { audioEnabled?: boolean; volume?: number; fadeIn?: number; fadeOut?: number }): Promise<Project>;
-  setClipEffects(path: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>): Promise<Project>;
+  setClipEffects(path: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>): Promise<Project>;
   trimClip(path: string, clipId: string, patch: { start?: number; sourceIn?: number; duration?: number }): Promise<Project>;
   moveClip(path: string, clipId: string, start: number, trackId?: string): Promise<Project>;
   splitClip(path: string, clipId: string, at: number): Promise<Project>;

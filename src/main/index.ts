@@ -320,7 +320,7 @@ ipcMain.handle('timeline:setClipAudio', async (_event, filePath: string, clipId:
   const converted = { ...patch, fadeIn: patch.fadeIn === undefined ? undefined : await uiFrameTime(filePath, patch.fadeIn), fadeOut: patch.fadeOut === undefined ? undefined : await uiFrameTime(filePath, patch.fadeOut) };
   return withProjectLock(filePath, () => setClipAudio(filePath, clipId, converted));
 });
-ipcMain.handle('timeline:setClipEffects', (_event, filePath: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>) => withProjectLock(filePath, () => setClipEffects(filePath, clipId, patch)));
+ipcMain.handle('timeline:setClipEffects', (_event, filePath: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>) => withProjectLock(filePath, () => setClipEffects(filePath, clipId, patch)));
 ipcMain.handle('timeline:trimClip', async (_event, filePath: string, clipId: string, patch: { start?: number; sourceIn?: number; duration?: number }) => {
   const converted = Object.fromEntries(await Promise.all(Object.entries(patch).map(async ([key, value]) => [key, value === undefined ? undefined : await uiFrameTime(filePath, value)])));
   return withProjectLock(filePath, () => trimClip(filePath, clipId, converted));

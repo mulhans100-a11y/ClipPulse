@@ -71,10 +71,12 @@ Phase D scores use detector and music heuristics; they are not calibrated gamepl
 
 ## Phase F — Compositing
 
-- [ ] Manual polygon and Bézier masks, feather and expansion.
-- [ ] Chroma key, blend modes, alpha-aware preview and export.
-- [ ] Tracking data and manual corrections.
+- [x] Manual closed polygon and Bézier-path masks, feather and expansion.
+- [x] Chroma key, multiply/screen/add/difference blend modes, and alpha-aware preview and export.
+- [x] Time-keyed mask paths interpolate between manual corrections and split/trim with clip timing.
 - [ ] Optional model-backed segmentation and temporal consistency.
+
+Phase F manual compositing is available in the clip inspector and `clip-effects` CLI. Tracking here means user-authored path corrections interpolated over time; an automatic optical-flow or model-driven segmenter is not configured.
 
 ## Phase G — Agent control
 

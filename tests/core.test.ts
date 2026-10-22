@@ -23,6 +23,7 @@ import { add, compare, decimal, frameTime, parseDecimal, rational, toFrame } fro
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, collectTimelineSnapPoints, snapTimelineTime } from '../src/core/timelineSnapping';
 import { mediaVirtualWindow } from '../src/renderer/ui/mediaVirtualization';
 import { clipAudioSpeedChunks, clipSetptsExpression, clipSourceDuration, clipSourceOffsetAt } from '../src/core/clipEffects';
+import { maskPathPoints } from '../src/core/maskPath';
 import type { AudioAnalysis, HighlightAnalysis, MediaAsset, Project, TimelineClip } from '../src/core/types';
 
 const scratch: string[] = [];
@@ -36,6 +37,14 @@ test('rational time arithmetic stays exact across non-integer frame rates', () =
   assert.deepEqual(parseDecimal('5/2'), { num: '5', den: '2' });
   assert.equal(decimal(parseDecimal('12.500000')), '12.5');
   assert.equal(compare(rational(1, 3), rational(2, 5)), -1);
+});
+
+test('mask paths flatten cubic and quadratic Bezier segments into stable tracking points', () => {
+  const points = maskPathPoints('M 0.1 0.1 C 0.1 0 0.5 0 0.5 0.1 Q 0.8 0.2 0.5 0.5 L 0.1 0.5 Z');
+  assert.equal(points.length, 14);
+  assert.deepEqual(points[0], [0.1, 0.1]);
+  assert.deepEqual(points.at(-1), [0.1, 0.5]);
+  assert.throws(() => maskPathPoints('M 0 0 L 1 1 L 1 0'), /closed shape/i);
 });
 
 test('Medal capture preset follows the Windows system drive and stays opt-in elsewhere', () => {
@@ -679,6 +688,64 @@ test('timeline preview composites active video tracks in track order and renders
   assert.ok(soloExportPixel[0] > soloExportPixel[2] * 4, `solo export should match its preview, got ${soloExportPixel.join(',')}`);
 });
 
+test('Phase F masks interpolate tracking corrections and match export, chroma key, and blend modes', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-compositing-'));
+  scratch.push(directory);
+  const red = path.join(directory, 'red.mp4'), blue = path.join(directory, 'blue.mp4');
+  const projectFile = path.join(directory, 'compositing.omproj');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=24:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', red]);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=24:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', blue]);
+  await createProject(projectFile, { frameRate: rational(24), width: 320, height: 180 });
+  const imported = await importMedia(projectFile, [red, blue]);
+  let project = await addTrack(projectFile, 'video', 'V2');
+  const [baseTrack, foregroundTrack] = project.tracks.filter((track) => track.kind === 'video');
+  const redAsset = imported.added.find((asset) => asset.path === red)!;
+  const blueAsset = imported.added.find((asset) => asset.path === blue)!;
+  await addClip(projectFile, redAsset.id, baseTrack.id, rational(0), rational(0), rational(2));
+  project = await addClip(projectFile, blueAsset.id, foregroundTrack.id, rational(0), rational(0), rational(2));
+  const foreground = project.tracks.find((track) => track.id === foregroundTrack.id)!.clips[0];
+  const left = 'M 0.05 0.25 L 0.3 0.25 L 0.3 0.75 L 0.05 0.75 Z';
+  const right = 'M 0.7 0.25 L 0.95 0.25 L 0.95 0.75 L 0.7 0.75 Z';
+  project = await setClipEffects(projectFile, foreground.id, { mask: { path: left, featherPx: 2, expansionPx: 0, keyframes: [{ time: rational(1), path: right }] } });
+
+  const leftFrame = path.join(directory, 'mask-left.png'), rightFrame = path.join(directory, 'mask-right.png');
+  await renderTimelineFrame(project, rational(1, 24), leftFrame);
+  await renderTimelineFrame(project, rational(3, 2), rightFrame);
+  const leftBlue = await pixelAt(leftFrame, directory, 'mask-left-blue.rgb', 50, 90);
+  const leftRed = await pixelAt(leftFrame, directory, 'mask-left-red.rgb', 270, 90);
+  const rightRed = await pixelAt(rightFrame, directory, 'mask-right-red.rgb', 50, 90);
+  const rightBlue = await pixelAt(rightFrame, directory, 'mask-right-blue.rgb', 270, 90);
+  assert.ok(leftBlue[2] > leftBlue[0] * 4, `left tracking position should reveal the blue foreground, got ${leftBlue}`);
+  assert.ok(leftRed[0] > leftRed[2] * 4, `outside the mask should show the red background, got ${leftRed}`);
+  assert.ok(rightRed[0] > rightRed[2] * 4, `the corrected mask should leave its old position, got ${rightRed}`);
+  assert.ok(rightBlue[2] > rightBlue[0] * 4, `the corrected mask should reveal the new position, got ${rightBlue}`);
+
+  const output = path.join(directory, 'compositing.mp4');
+  await exportVideo(project, { outputPath: output });
+  const exportedFrame = path.join(directory, 'exported-mask.png');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', '1.5', '-i', output, '-frames:v', '1', exportedFrame]);
+  const exportedBlue = await pixelAt(exportedFrame, directory, 'exported-mask-blue.rgb', 270, 90);
+  assert.ok(exportedBlue[2] > exportedBlue[0] * 4, `export should preserve the corrected mask, got ${exportedBlue}`);
+
+  project = await setClipEffects(projectFile, foreground.id, { mask: undefined, chromaKey: { color: '#0000ff', similarity: 0.2, blend: 0.05 } });
+  const keyedFrame = path.join(directory, 'keyed.png');
+  await renderTimelineFrame(project, rational(1, 2), keyedFrame);
+  const keyedPixel = await pixelAt(keyedFrame, directory, 'keyed.rgb', 160, 90);
+  assert.ok(keyedPixel[0] > keyedPixel[2] * 4, `the keyed blue foreground should reveal red, got ${keyedPixel}`);
+
+  project = await setClipEffects(projectFile, foreground.id, { chromaKey: undefined, blendMode: 'multiply' });
+  const blendedFrame = path.join(directory, 'multiply.png');
+  await renderTimelineFrame(project, rational(1, 2), blendedFrame);
+  const blendedPixel = await pixelAt(blendedFrame, directory, 'multiply.rgb', 160, 90);
+  assert.ok(blendedPixel.every((value) => value < 20), `red multiplied by blue should be near black, got ${blendedPixel}`);
+
+  project = await setClipEffects(projectFile, foreground.id, { blendMode: 'normal', mask: { path: left, featherPx: 0, expansionPx: 4 } });
+  const expandedFrame = path.join(directory, 'expanded.png');
+  await renderTimelineFrame(project, rational(1, 2), expandedFrame);
+  const expandedEdge = await pixelAt(expandedFrame, directory, 'expanded-edge.rgb', 13, 90);
+  assert.ok(expandedEdge[2] > expandedEdge[0] * 3, `mask expansion should include pixels outside the original path, got ${expandedEdge}`);
+});
+
 test('headless CLI creates a project, imports media, assembles a timeline and exports MP4', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-cli-'));
   scratch.push(directory);
@@ -721,6 +788,16 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   assert.deepEqual(audioSettings.data.fadeIn, rational(1, 5));
   assert.deepEqual(audioSettings.data.fadeOut, rational(1, 4));
   assert.equal(audioSettings.data.volume, 0.8);
+  const effectsFile = path.join(directory, 'cli-effects.json');
+  const maskPath = 'M 0.1 0.1 L 0.5 0.1 L 0.5 0.9 L 0.1 0.9 Z';
+  await writeFile(effectsFile, JSON.stringify({
+    blendMode: 'screen', chromaKey: { color: '#00ff00', similarity: 0.2, blend: 0.05 },
+    mask: { path: maskPath, featherPx: 2, expansionPx: 1, keyframes: [{ time: rational(1, 2), path: 'M 0.2 0.1 L 0.6 0.1 L 0.6 0.9 L 0.2 0.9 Z' }] }
+  }));
+  const compositeSettings = await invoke('clip-effects', '--project', projectPath, '--clip', inserted.data.id, '--effects', effectsFile);
+  assert.equal(compositeSettings.data.blendMode, 'screen');
+  assert.equal(compositeSettings.data.chromaKey.color, '#00ff00');
+  assert.equal(compositeSettings.data.mask.keyframes.length, 1);
   const duplicate = await invoke('clip-duplicate', '--project', projectPath, '--clip', inserted.data.id);
   assert.notEqual(duplicate.data.id, inserted.data.id);
   assert.deepEqual(duplicate.data.sourceIn, inserted.data.sourceIn);

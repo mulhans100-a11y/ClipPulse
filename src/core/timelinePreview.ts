@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
-import { buildClipPreviewFilters, clipSourceOffsetAt, clipVideoOverlayPosition } from './clipEffects';
+import { buildClipPreviewFilters, clipSourceOffsetAt } from './clipEffects';
+import { appendCompositeLayer } from './compositing';
 import { runCommand, tail } from './ffmpeg';
 import { add, compare, decimal, rational, sub } from './time';
 import { isTrackEnabled, validateProject } from './project';
@@ -44,9 +45,8 @@ export async function renderTimelineFrame(project: Project, timelineTime: Ration
     const item = active[i];
     const clip = `preview${i}`;
     const next = `vbase${i + 1}`;
-    const position = clipVideoOverlayPosition(item.clip, project);
     filter.push(`[${i}:v:0]setpts=PTS-STARTPTS+(${decimal(item.localTime, 9)})/TB,${buildClipPreviewFilters(item.clip, project, item.localTime).join(',')},fps=${fps},setpts=PTS-STARTPTS[${clip}]`);
-    filter.push(`[${base}][${clip}]overlay=x='${position.x}':y='${position.y}':shortest=1:eof_action=pass:repeatlast=0[${next}]`);
+    appendCompositeLayer(filter, base, clip, next, item.clip, project, fps, '1', i, true);
     base = next;
   }
   filter.push(`[${base}]trim=end_frame=1,format=rgb24[vout]`);

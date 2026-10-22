@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
-import { atempoFilters, buildClipVideoFilters, clipAudioSpeedChunks, clipSetptsExpression, clipSourceDuration, clipVideoOverlayPosition, clipAudioVolumeExpression, trackVolumeExpression } from './clipEffects';
+import { atempoFilters, buildClipVideoFilters, clipAudioSpeedChunks, clipSetptsExpression, clipSourceDuration, clipAudioVolumeExpression, trackVolumeExpression } from './clipEffects';
+import { appendCompositeLayer } from './compositing';
 import { runCommand, tail } from './ffmpeg';
 import { add, compare, decimal, rational, sub } from './time';
 import { isTrackEnabled, timelineDuration, validateProject } from './project';
@@ -45,9 +46,8 @@ export async function exportVideo(project: Project, options: ExportOptions): Pro
     const start = decimal(item.clip.start, 9);
     const clipLabel = `vclip${i}`;
     const next = `vbase${i + 1}`;
-    const position = clipVideoOverlayPosition(item.clip, project);
     filter.push(`[${item.input}:v:0]trim=start=${source}:duration=${clipDuration},${clipSetptsExpression(item.clip)},fps=${fps},${buildClipVideoFilters(item.clip, project).join(',')},setpts=PTS-STARTPTS+(${start})/TB[${clipLabel}]`);
-    filter.push(`[${base}][${clipLabel}]overlay=x='${position.x}':y='${position.y}':shortest=0:eof_action=pass:repeatlast=0[${next}]`);
+    appendCompositeLayer(filter, base, clipLabel, next, item.clip, project, fps, totalSeconds, i, false);
     base = next;
   }
   filter.push(`[${base}]trim=duration=${totalSeconds},setpts=PTS-STARTPTS[vout]`);

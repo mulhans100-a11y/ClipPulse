@@ -3,6 +3,7 @@ import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
 import { clipPlaybackRateAt, clipSourceDuration, clipSourceOffsetAt, extendClipAnimation, splitClipAnimation } from './clipEffects';
+import { extendMaskAnimation, maskPathPoints, splitMaskAnimation } from './maskPath';
 import { runCommand } from './ffmpeg';
 import { newId } from './ids';
 import { libraryDatabasePath, MediaLibrary, type LibraryAsset } from './library';
@@ -226,6 +227,7 @@ export function validateProject(project: Project): void {
     for (const clip of track.clips) {
       if (!clip.id || clipIds.has(clip.id) || !mediaIds.has(clip.mediaId)) throw new AppError('INVALID_PROJECT', `Clip ${clip.id || '(without ID)'} references an invalid or missing media asset.`);
       clipIds.add(clip.id);
+      const asset = project.media.find((item) => item.id === clip.mediaId)!;
       if (!validTime(clip.start) || !validTime(clip.sourceIn) || !validTime(clip.duration)) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid rational time value.`);
       if (BigInt(clip.duration.num) <= 0n || BigInt(clip.duration.den) <= 0n) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} must have a positive duration.`);
       for (const [label, fade] of [['fade-in', clip.fadeIn], ['fade-out', clip.fadeOut]] as const) {
@@ -251,6 +253,29 @@ export function validateProject(project: Project): void {
           throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid transform values.`);
         if (clip.color !== undefined && (!Number.isFinite(clip.color.brightness) || clip.color.brightness < -1 || clip.color.brightness > 1 || !Number.isFinite(clip.color.contrast) || clip.color.contrast < 0 || clip.color.contrast > 4 || !Number.isFinite(clip.color.saturation) || clip.color.saturation < 0 || clip.color.saturation > 4 || (clip.color.lutPath !== undefined && (typeof clip.color.lutPath !== 'string' || clip.color.lutPath.length > 4096))))
           throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid color settings.`);
+        if (clip.blendMode !== undefined && !['normal', 'multiply', 'screen', 'add', 'difference'].includes(clip.blendMode))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid blend mode.`);
+        if (clip.chromaKey !== undefined && (!/^#[0-9a-fA-F]{6}$/.test(clip.chromaKey.color) || !Number.isFinite(clip.chromaKey.similarity) || clip.chromaKey.similarity < 0 || clip.chromaKey.similarity > 1 || !Number.isFinite(clip.chromaKey.blend) || clip.chromaKey.blend < 0 || clip.chromaKey.blend > 1))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid chroma-key settings.`);
+        if (clip.mask !== undefined) {
+          if (!Number.isFinite(clip.mask.featherPx) || clip.mask.featherPx < 0 || clip.mask.featherPx > 256 || !Number.isFinite(clip.mask.expansionPx) || clip.mask.expansionPx < -256 || clip.mask.expansionPx > 256 || (clip.mask.keyframes !== undefined && (!Array.isArray(clip.mask.keyframes) || clip.mask.keyframes.length > 256)))
+            throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid mask feather, expansion, or tracking data.`);
+          let maskPoints: ReturnType<typeof maskPathPoints>;
+          try { maskPoints = maskPathPoints(clip.mask.path); }
+          catch (error) { throw new AppError('INVALID_PROJECT', `Clip ${clip.id} mask path is invalid: ${error instanceof Error ? error.message : String(error)}`); }
+          let previousMaskTime: Rational | undefined;
+          for (const frame of clip.mask.keyframes ?? []) {
+            if (!validTime(frame.time) || BigInt(frame.time.num) < 0n || compare(frame.time, clip.duration) > 0 || (previousMaskTime && compare(previousMaskTime, frame.time) >= 0))
+              throw new AppError('INVALID_PROJECT', `Clip ${clip.id} mask tracking times must be ordered and inside the clip.`);
+            try {
+              if (maskPathPoints(frame.path).length !== maskPoints.length) throw new Error('Tracking corrections must preserve the mask path point count.');
+            } catch (error) { throw new AppError('INVALID_PROJECT', `Clip ${clip.id} mask tracking path is invalid: ${error instanceof Error ? error.message : String(error)}`); }
+            previousMaskTime = frame.time;
+          }
+          if (asset.kind !== 'video') throw new AppError('INVALID_PROJECT', `Clip ${clip.id} compositing settings require video media.`);
+        }
+        if (clip.chromaKey !== undefined && asset.kind !== 'video') throw new AppError('INVALID_PROJECT', `Clip ${clip.id} chroma key requires video media.`);
+        if (clip.blendMode !== undefined && clip.blendMode !== 'normal' && asset.kind !== 'video') throw new AppError('INVALID_PROJECT', `Clip ${clip.id} blend modes require video media.`);
         if (clip.keyframes !== undefined) {
           if (!Array.isArray(clip.keyframes) || clip.keyframes.length > 1024) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has too many effect keyframes.`);
           const seen = new Set<string>();
@@ -270,7 +295,6 @@ export function validateProject(project: Project): void {
         if (clip.title !== undefined && (typeof clip.title.text !== 'string' || clip.title.text.length > 500 || !Number.isFinite(clip.title.fontSize) || clip.title.fontSize < 8 || clip.title.fontSize > 256 || !/^#[0-9a-fA-F]{6}$/.test(clip.title.color) || !Number.isFinite(clip.title.x) || clip.title.x < 0 || clip.title.x > 1 || !Number.isFinite(clip.title.y) || clip.title.y < 0 || clip.title.y > 1 || !validTime(clip.title.start) || !validTime(clip.title.duration) || BigInt(clip.title.start.num) < 0n || BigInt(clip.title.duration.num) <= 0n || compare(add(clip.title.start, clip.title.duration), clip.duration) > 0 || (clip.title.fontFile !== undefined && (typeof clip.title.fontFile !== 'string' || clip.title.fontFile.length > 4096))))
           throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid title settings.`);
         if (clip.normalizeAudio !== undefined && typeof clip.normalizeAudio !== 'boolean') throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid audio normalization settings.`);
-        const asset = project.media.find((item) => item.id === clip.mediaId)!;
         if (validTime(asset.duration) && compare(add(clip.sourceIn, clipSourceDuration(clip)), asset.duration) > 0)
           throw new AppError('INVALID_PROJECT', `Clip ${clip.id} playback exceeds the available source media range.`);
     }
@@ -603,6 +627,7 @@ export async function trimClip(filePath: string, clipId: string, patch: { start?
     next.playbackRate = animation.rightPlaybackRate;
     next.speedKeyframes = animation.rightSpeedKeyframes;
     next.keyframes = animation.rightKeyframes;
+    if (clip.mask) next.mask = splitMaskAnimation(clip.mask, offset).right;
     if (clip.title) {
       const titleEnd = add(clip.title.start, clip.title.duration);
       const start = compare(clip.title.start, offset) < 0 ? offset : clip.title.start;
@@ -616,11 +641,13 @@ export async function trimClip(filePath: string, clipId: string, patch: { start?
     next.playbackRate = animation.playbackRate;
     next.speedKeyframes = animation.speedKeyframes;
     next.keyframes = animation.keyframes;
+    if (clip.mask) next.mask = extendMaskAnimation(clip.mask, extension);
     if (clip.title) next.title = { ...clip.title, start: add(clip.title.start, extension) };
   } else if (patch.duration !== undefined && compare(patch.duration, clip.duration) < 0) {
     const animation = splitClipAnimation(clip, patch.duration);
     next.speedKeyframes = animation.leftSpeedKeyframes;
     next.keyframes = animation.leftKeyframes;
+    if (clip.mask) next.mask = splitMaskAnimation(clip.mask, patch.duration).left;
     if (next.transitionIn && compare(next.transitionIn.duration, patch.duration) > 0) next.transitionIn = { ...next.transitionIn, duration: patch.duration };
     if (next.title) {
       if (compare(next.title.start, patch.duration) >= 0) next.title = undefined;
@@ -652,7 +679,7 @@ export async function setClipAudio(filePath: string, clipId: string, patch: { au
   return project;
 }
 
-export async function setClipEffects(filePath: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio'>>): Promise<Project> {
+export async function setClipEffects(filePath: string, clipId: string, patch: Partial<Pick<TimelineClip, 'playbackRate' | 'speedKeyframes' | 'transform' | 'color' | 'keyframes' | 'transitionIn' | 'title' | 'normalizeAudio' | 'blendMode' | 'chromaKey' | 'mask'>>): Promise<Project> {
   const project = await loadProject(filePath);
   const { clip, track } = findClip(project, clipId);
   if (track.locked) throw new AppError('TRACK_LOCKED', `Track ${track.name} is locked.`);

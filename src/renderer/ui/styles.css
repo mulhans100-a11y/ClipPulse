@@ -3,3 +3,4 @@
 .monitor-stage img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain}
 .panel-actions{display:flex;gap:6px}
 .rating-field{display:flex;flex-direction:column;gap:7px;margin:2px 0 10px;color:#b6b7be;font-size:10px}.rating-field>div{display:flex;align-items:center;gap:4px}.rating-field button{display:grid;place-items:center;padding:3px;background:transparent;color:#696b73}.rating-field button.rated{color:#e7bd56}.rating-field .rating-clear{display:inline-flex;margin-left:auto;color:#8c8e96;font-size:9px}.rating-field .rating-clear:disabled{opacity:.45;cursor:default}
+.mask-path-field textarea{width:100%;min-height:70px;resize:vertical;padding:7px;border:1px solid #303137;background:#111215;border-radius:4px;color:#dfe0e5;font:9px var(--mono);line-height:1.5}.compositing-help{display:block;margin:5px 0 8px;color:#747780;font-size:8px;line-height:1.5}.keyframe-add-row small{color:#777982;font:8px var(--mono);white-space:nowrap}
