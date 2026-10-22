@@ -9,7 +9,7 @@ export function watchFolder(rootPath: string, onChange: () => void, recursive = 
   try {
     // Canonicalize Windows 8.3 paths before watching. libuv can abort if the
     // watched path uses a short alias but Windows reports events with its long path.
-    const canonicalRoot = realpathSync(rootPath);
+    const canonicalRoot = realpathSync.native(rootPath);
     watcher = chokidar.watch(canonicalRoot, { ignoreInitial: true, ...(recursive ? {} : { depth: 0 }) });
     watcher.on('all', () => {
       if (timer) clearTimeout(timer);
