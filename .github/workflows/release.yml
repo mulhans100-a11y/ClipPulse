@@ -78,7 +78,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - name: Build native package
-        run: npx electron-builder ${{ matrix.builderArgs }} --publish never
+        run: node scripts/build-native-package.cjs ${{ matrix.builderArgs }} --publish never
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
