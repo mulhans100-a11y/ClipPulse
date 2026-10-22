@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, getImportRoots, importMedia, loadProject, removeClip, searchMedia, setImportRootWatching, splitClip, updateMediaMetadata } from '../src/core/project';
+import { addClip, addTrack, createProject, getImportRoots, importMedia, loadProject, removeClip, searchMedia, setImportRootWatching, splitClip, trimClip, updateMediaMetadata } from '../src/core/project';
 import { analyzeAudio } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
@@ -53,11 +53,14 @@ test('imports, backs up, trims, splits and exports real media without modifying 
   const project = await loadProject(projectFile);
   const videoTrack = project.tracks.find((track) => track.kind === 'video')!;
   const inserted = await addClip(projectFile, imported.added[0].id, videoTrack.id, rational(1, 2), rational(1), rational(2));
-  const originalClip = inserted.tracks.find((track) => track.id === videoTrack.id)!.clips[0];
+  const insertedClip = inserted.tracks.find((track) => track.id === videoTrack.id)!.clips[0];
+  const trimmed = await trimClip(projectFile, insertedClip.id, { sourceIn: rational(1, 2), duration: rational(5, 2) });
+  const originalClip = trimmed.tracks.find((track) => track.id === videoTrack.id)!.clips[0];
+  assert.deepEqual(originalClip.sourceIn, rational(1, 2));
   const split = await splitClip(projectFile, originalClip.id, rational(3, 2));
   const splitClips = split.tracks.find((track) => track.id === videoTrack.id)!.clips;
   assert.equal(splitClips.length, 2);
-  assert.deepEqual(splitClips.map((clip) => clip.duration), [rational(1), rational(1)]);
+  assert.deepEqual(splitClips.map((clip) => clip.duration), [rational(1), rational(3, 2)]);
   await removeClip(projectFile, splitClips[1].id);
 
   const multiTrackProject = await addTrack(projectFile, 'video', 'V2');
@@ -219,6 +222,8 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   const imported = await invoke('import', '--project', projectPath, source, music);
   assert.equal(imported.data.added.length, 2);
   const musicAsset = imported.data.added.find((asset: any) => asset.kind === 'audio');
+  assert.ok(musicAsset.thumbnailPath, 'audio import includes a cached waveform image');
+  assert.ok((await stat(musicAsset.thumbnailPath)).size > 100);
   const analysis = await invoke('analyze-audio', '--project', projectPath, '--media', musicAsset.id);
   assert.ok(Math.abs(analysis.data.estimatedBpm - 120) <= 4);
   assert.ok(analysis.data.beats.length > 0);

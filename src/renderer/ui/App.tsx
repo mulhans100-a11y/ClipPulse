@@ -37,6 +37,7 @@ export default function App() {
   const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
   const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
   const [timelinePreviewBusy, setTimelinePreviewBusy] = useState(false);
+  const [trimDraft, setTrimDraft] = useState<{ clipId: string; start: number; sourceIn: number; duration: number } | null>(null);
   const [notice, setNotice] = useState('Ready');
   const [error, setError] = useState('');
   const [ffmpeg, setFfmpeg] = useState(false);
@@ -178,6 +179,42 @@ export default function App() {
     if (!project || !currentClip) return;
     await run(() => window.openmontage.trimClip(projectPath, currentClip.clip.id, patch), (next) => next, 'Clip updated');
   }
+  function beginClipTrim(event: React.PointerEvent<HTMLSpanElement>, clip: TimelineClip, asset: MediaAsset, edge: 'left' | 'right') {
+    if (!project) return;
+    event.preventDefault(); event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const originX = event.clientX;
+    const frameStep = Number(project.frameRate.den) / Number(project.frameRate.num);
+    const start = secondsOf(clip.start), sourceIn = secondsOf(clip.sourceIn), duration = secondsOf(clip.duration);
+    let latest = { clipId: clip.id, start, sourceIn, duration };
+    setTrimDraft(latest);
+    const move = (pointer: PointerEvent) => {
+      const deltaFrames = Math.round((pointer.clientX - originX) / PX_PER_SECOND / frameStep);
+      const rawDelta = deltaFrames * frameStep;
+      if (edge === 'left') {
+        const delta = Math.max(Math.max(-start, -sourceIn), Math.min(duration - frameStep, rawDelta));
+        latest = { clipId: clip.id, start: start + delta, sourceIn: sourceIn + delta, duration: duration - delta };
+      } else {
+        const maxDelta = secondsOf(asset.duration) - sourceIn - duration;
+        const delta = Math.max(frameStep - duration, Math.min(maxDelta, rawDelta));
+        latest = { clipId: clip.id, start, sourceIn, duration: duration + delta };
+      }
+      setTrimDraft(latest);
+    };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', cancel);
+    };
+    const finish = () => {
+      cleanup(); setTrimDraft(null);
+      void run(() => window.openmontage.trimClip(projectPath, clip.id, { start: latest.start, sourceIn: latest.sourceIn, duration: latest.duration }), (next) => next, 'Clip trimmed');
+    };
+    const cancel = () => { cleanup(); setTrimDraft(null); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish, { once: true });
+    window.addEventListener('pointercancel', cancel, { once: true });
+  }
   async function save() {
     if (!project) return;
     try { await window.openmontage.saveProject(projectPath, project); setNotice('Project saved'); }
@@ -210,7 +247,7 @@ export default function App() {
       <h1>OpenMontage <span>AI</span></h1>
       <p>Create, cut, and export music-driven video edits. Your source files stay where they are.</p>
       <div className="welcome-actions"><button className="primary" onClick={() => void createProject()}><Plus size={16} /> New project</button><button onClick={() => void openProject()}><FolderOpen size={16} /> Open project</button></div>
-      <div className="runtime"><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg not detected'} · Phase A development build</div>
+      <div className="runtime"><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg not detected'} · Editor development build</div>
       {error && <div className="error-box">{error}</div>}
     </div>
   </div>;
@@ -284,11 +321,17 @@ export default function App() {
                     {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => <span className="gridline" key={i} style={{ left: i * PX_PER_SECOND }} />)}
                     {track.clips.map((clip, index) => {
                       const asset = project.media.find((item) => item.id === clip.mediaId)!;
-                      const start = secondsOf(clip.start), width = Math.max(22, secondsOf(clip.duration) * PX_PER_SECOND);
+                      const trimmed = trimDraft?.clipId === clip.id ? trimDraft : null;
+                      const start = trimmed?.start ?? secondsOf(clip.start), clipDuration = trimmed?.duration ?? secondsOf(clip.duration), width = Math.max(22, clipDuration * PX_PER_SECOND);
+                      const clipArtworkStyle: React.CSSProperties | undefined = asset.kind === 'audio' && asset.thumbnailPath ? {
+                        width: `${secondsOf(asset.duration) / secondsOf(clip.duration) * 100}%`,
+                        left: `${-secondsOf(clip.sourceIn) / secondsOf(clip.duration) * 100}%`,
+                        objectFit: 'fill', opacity: 0.72
+                      } : undefined;
                       return <div key={clip.id} draggable onDragStart={(event) => event.dataTransfer.setData('text/clip-id', clip.id)} onClick={(event) => { event.stopPropagation(); setSelectedClipId(clip.id); setSelectedMediaId(asset.id); setPlayhead(start); }} className={`timeline-clip ${track.kind} ${selectedClipId === clip.id ? 'active' : ''}`} style={{ left: start * PX_PER_SECOND, width, '--clip-hue': `${(index * 61 + asset.name.length * 13) % 360}` } as React.CSSProperties}>
-                        {asset.thumbnailPath && <img className="clip-filmstrip" src={window.openmontage.toFileUrl(asset.thumbnailPath)} />}
-                        <div className="clip-content"><strong>{asset.name}</strong><span>{formatTime(secondsOf(clip.duration))}</span></div>
-                        <span className="clip-edge left" /><span className="clip-edge right" />
+                        {asset.thumbnailPath && <img className="clip-filmstrip" style={clipArtworkStyle} src={window.openmontage.toFileUrl(asset.thumbnailPath)} />}
+                        <div className="clip-content"><strong>{asset.name}</strong><span>{formatTime(clipDuration)}</span></div>
+                        <span className="clip-edge left" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'left')} title="Drag to trim clip start" /><span className="clip-edge right" onPointerDown={(event) => beginClipTrim(event, clip, asset, 'right')} title="Drag to trim clip end" />
                       </div>;
                     })}
                     <div className="lane-playhead" style={{ left: playhead * PX_PER_SECOND }} />
@@ -297,7 +340,7 @@ export default function App() {
               </div>
             </div>
           </div>
-          <div className="timeline-foot"><span>Drag clips between tracks · click an empty lane to add selected media</span><span>{project.tracks.length} tracks <i /> {project.tracks.reduce((sum, track) => sum + track.clips.length, 0)} clips</span></div>
+          <div className="timeline-foot"><span>Drag clips to move · drag edges to trim · click an empty lane to add selected media</span><span>{project.tracks.length} tracks <i /> {project.tracks.reduce((sum, track) => sum + track.clips.length, 0)} clips</span></div>
         </section>
       </main>
 

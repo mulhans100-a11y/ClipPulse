@@ -161,6 +161,10 @@ export async function importMedia(filePath: string, inputPaths: string[], recurs
         const thumb = path.join(thumbDir, `${asset.id}.jpg`);
         await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-ss', decimal(rational(BigInt(asset.duration.num), BigInt(asset.duration.den) * 2n)), '-i', mediaPath, '-frames:v', '1', '-vf', 'scale=480:-2', '-q:v', '4', thumb]);
         asset.thumbnailPath = thumb;
+      } else if (asset.kind === 'audio' && (!asset.thumbnailPath || !(await fileExists(asset.thumbnailPath)))) {
+        const waveform = path.join(thumbDir, `${asset.id}-waveform.png`);
+        await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', mediaPath, '-filter_complex', '[0:a:0]aformat=channel_layouts=mono,showwavespic=s=640x144:colors=0xa6e85f:scale=lin[wave]', '-map', '[wave]', '-frames:v', '1', '-update', '1', waveform]);
+        asset.thumbnailPath = waveform;
       }
       const existingProjectAsset = project.media.find((item) => item.id === asset!.id);
       if (existingProjectAsset) {

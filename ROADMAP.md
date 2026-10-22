@@ -12,9 +12,10 @@ Status reflects the repository at `0.1.0`.
 - [x] JSON CLI for project/media/timeline/export operations.
 - [x] Synthetic-media integration tests and Windows CI workflow.
 - [x] Frame-snapped still composite preview at the timeline playhead, with video tracks layered in export order.
-- [ ] Real-time timeline playback, preview/export effect parity, and audio waveform display.
+- [x] Audio waveform images are created locally on import and shown on audio timeline clips.
+- [ ] Real-time timeline playback, zoom-aware waveform rendering, and preview/export effect parity.
 - [ ] Robust undo history persisted in project transactions; current UI history is session-only.
-- [ ] Drag handles for direct edge trimming; numeric trim is available now.
+- [x] Direct clip-edge drag handles with frame-snapped source and timeline trimming.
 - [ ] Windows installer validation on a clean machine and dependency diagnosis UI.
 
 ## Phase B — Media library (in progress)
