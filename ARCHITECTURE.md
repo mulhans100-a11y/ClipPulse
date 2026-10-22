@@ -24,7 +24,7 @@ Edits are non-destructive: clips refer to media and record a timeline start, sou
 
 The renderer builds one FFmpeg filter graph from project state. A generated black canvas establishes the output profile. Video clips are trimmed, timestamped into timeline position, scaled with aspect ratio preserved, padded, and overlaid in track order. Clip audio is trimmed, timestamped, mixed, and limited. FFmpeg encodes H.264/AAC into a temporary MP4; FFprobe checks that the result has a video stream before the file is installed at the requested path. Source overwrite is rejected.
 
-Preview currently plays original source media in the browser video element. It is not yet a preview of the composited timeline. A future shared effect graph and preview renderer must close that parity gap before effects are considered complete.
+The Timeline monitor requests a frame-snapped still image from `renderTimelineFrame` when the playhead moves. It composites active, unmuted video clips over black in the same track order as export and caches frames under the project cache. The Source monitor plays original source media in the browser video element. Timeline playback is not real time yet; effects, transitions, waveform display, and full preview/export parity remain future work.
 
 ## Security and reliability boundaries
 
@@ -38,6 +38,6 @@ Preview currently plays original source media in the browser video element. It i
 
 ## Planned expansion
 
-The extension points are the `MediaAsset`, `TimelineTrack`, `TimelineClip`, and typed core operations. The next architecture increments should add background jobs and a SQLite media index, then analysis records (with detector provenance), then an edit planner that creates ordinary editable timeline clips. Effects should be serialized as typed clip properties and compiled by a renderer used by both preview and export. Masks and tracking should likewise produce persisted frame/time data and use that same compositor. API/MCP should be thin validated adapters around core operations rather than a second editor implementation.
+The extension points are the `MediaAsset`, `TimelineTrack`, `TimelineClip`, and typed core operations. Next increments should add real-time preview and export parity, richer audio analysis and detector records with provenance, then an edit planner that creates ordinary editable timeline clips. Effects should be serialized as typed clip properties and compiled by a renderer used by both preview and export. Masks and tracking should likewise produce persisted frame/time data and use that same compositor. API/MCP should be thin validated adapters around core operations rather than a second editor implementation.
 
 OpenTimelineIO may be added for interchange, but it will not replace the FFmpeg rendering engine.

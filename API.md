@@ -21,11 +21,14 @@ clip-move --project FILE --clip ID --start TIME [--track ID]
 clip-split --project FILE --clip ID --at TIME
 clip-remove --project FILE --clip ID
 frame --project FILE --media ID --time TIME [--output IMAGE]
+timeline-frame --project FILE --time TIME [--output IMAGE] [--overwrite]
 export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]
 doctor
 ```
 
 `media-search --project FILE [--query TEXT] [--favorites]` searches indexed names, paths, games, and tags. `media-update --project FILE --media ID [--favorite true|false] [--tag TAG] [--game NAME]` writes library metadata. `analyze-audio --project FILE --media ID` decodes a media asset's audio locally and returns estimated BPM hypotheses, beat positions, and transient timestamps. Results are cached beside the project using file size and modification time. Autocorrelation scores are comparative matches, not calibrated probabilities.
+
+`timeline-frame --project FILE --time TIME` renders one frame-snapped composite from the active, unmuted video tracks. The desktop Timeline monitor uses this command's shared core operation for its still preview; source video playback remains available in the Source monitor.
 
 `TIME` is a nonnegative rational number of seconds, entered either as a decimal (`2.5`) or a fraction (`5/2`). An omitted clip duration extends from `source-in` to the end of the source. Video-only media cannot be placed on an audio track's video output; audio-only media cannot be placed on a video track.
 

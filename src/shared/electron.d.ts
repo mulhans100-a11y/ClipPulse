@@ -1,4 +1,4 @@
-import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, TimelineClip, TrackKind } from '../core/types';
+import type { AudioAnalysis, ImportResult, ImportRoot, MediaAsset, Project, Rational, TimelineClip, TrackKind } from '../core/types';
 
 export interface OpenMontageApi {
   version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; message?: string }>;
@@ -17,6 +17,7 @@ export interface OpenMontageApi {
   moveClip(path: string, clipId: string, start: number, trackId?: string): Promise<Project>;
   splitClip(path: string, clipId: string, at: number): Promise<Project>;
   removeClip(path: string, clipId: string): Promise<Project>;
+  renderTimelineFrame(path: string, time: number): Promise<{ frame: number; time: Rational; path: string }>;
   exportVideo(path: string): Promise<{ outputPath: string } | null>;
   onExportProgress(callback: (progress: number) => void): () => void;
   onMediaUpdated(callback: (result: { project: Project; result: ImportResult }) => void): () => void;

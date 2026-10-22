@@ -7,6 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { addClip, addTrack, createProject, getImportRoots, importMedia, loadProject, removeClip, searchMedia, setImportRootWatching, splitClip, updateMediaMetadata } from '../src/core/project';
 import { analyzeAudio } from '../src/core/audioAnalysis';
+import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
 import { runCommand } from '../src/core/ffmpeg';
 import { libraryDatabasePath } from '../src/core/library';
@@ -153,6 +154,43 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
   assert.ok(result.beatPhaseSeconds !== undefined && result.beatPhaseSeconds < 0.1);
   assert.ok((await stat(cache)).size > 100);
   assert.deepEqual(await analyzeAudio(source, cache), result, 'a matching source size and mtime reuse the saved result');
+  for (const bpm of [90, 150]) {
+    const variant = path.join(directory, `clicks-${bpm}.wav`);
+    await writeClickTrack(variant, bpm, 16);
+    const detected = await analyzeAudio(variant);
+    assert.ok(detected.estimatedBpm, `a tempo hypothesis was found for ${bpm} BPM`);
+    assert.ok(Math.abs(detected.estimatedBpm - bpm) <= 5, `expected about ${bpm} BPM, got ${detected.estimatedBpm}`);
+  }
+});
+
+test('timeline preview composites active video tracks in track order and renders black across gaps', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-preview-'));
+  scratch.push(directory);
+  const red = path.join(directory, 'red.mp4'), blue = path.join(directory, 'blue.mp4');
+  const projectFile = path.join(directory, 'preview.omproj');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=24:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', red]);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=320x180:r=24:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', blue]);
+  await createProject(projectFile, { frameRate: rational(24), width: 320, height: 180 });
+  const imported = await importMedia(projectFile, [red, blue]);
+  const project = await addTrack(projectFile, 'video', 'V2');
+  const videoTracks = project.tracks.filter((track) => track.kind === 'video');
+  const redAsset = imported.added.find((asset) => asset.path === red)!;
+  const blueAsset = imported.added.find((asset) => asset.path === blue)!;
+  await addClip(projectFile, redAsset.id, videoTracks[0].id, rational(0), rational(0), rational(2));
+  await addClip(projectFile, blueAsset.id, videoTracks[1].id, rational(1, 2), rational(0), rational(3, 2));
+  const edited = await loadProject(projectFile);
+  const redFrame = path.join(directory, 'red-frame.png');
+  const blueFrame = path.join(directory, 'blue-frame.png');
+  const blackFrame = path.join(directory, 'black-frame.png');
+  await renderTimelineFrame(edited, rational(1, 4), redFrame);
+  await renderTimelineFrame(edited, rational(3, 4), blueFrame);
+  await renderTimelineFrame(edited, rational(2), blackFrame);
+  const redPixel = await firstRgb(redFrame, directory, 'red.rgb');
+  const bluePixel = await firstRgb(blueFrame, directory, 'blue.rgb');
+  const blackPixel = await firstRgb(blackFrame, directory, 'black.rgb');
+  assert.ok(redPixel[0] > redPixel[2] * 4, `expected red frame, got ${redPixel.join(',')}`);
+  assert.ok(bluePixel[2] > bluePixel[0] * 4, `expected upper blue track to overlay red, got ${bluePixel.join(',')}`);
+  assert.ok(blackPixel.every((value) => value < 8), `expected black gap, got ${blackPixel.join(',')}`);
 });
 
 test('headless CLI creates a project, imports media, assembles a timeline and exports MP4', async () => {
@@ -193,6 +231,9 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   const exported = await invoke('export', '--project', projectPath, '--output', output);
   assert.equal(exported.data.outputPath, output);
   assert.ok((await stat(output)).size > 5000);
+  const preview = await invoke('timeline-frame', '--project', projectPath, '--time', '1');
+  assert.equal(preview.data.frame, 24);
+  assert.ok((await stat(preview.data.outputPath)).size > 100);
 });
 
 async function writeClickTrack(filePath: string, bpm: number, durationSeconds: number): Promise<void> {
@@ -219,4 +260,10 @@ async function writeClickTrack(filePath: string, bpm: number, durationSeconds: n
     wave.writeInt16LE(Math.round(value * 32767), 44 + sample * 2);
   }
   await writeFile(filePath, wave);
+}
+
+async function firstRgb(imagePath: string, directory: string, fileName: string): Promise<Buffer> {
+  const rawPath = path.join(directory, fileName);
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', imagePath, '-vf', 'scale=1:1:flags=neighbor', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', rawPath]);
+  return readFile(rawPath);
 }

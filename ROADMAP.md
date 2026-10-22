@@ -11,7 +11,8 @@ Status reflects the repository at `0.1.0`.
 - [x] Source preview and basic FFmpeg MP4 export with video compositing and audio mix.
 - [x] JSON CLI for project/media/timeline/export operations.
 - [x] Synthetic-media integration tests and Windows CI workflow.
-- [ ] True timeline composite preview and waveform display.
+- [x] Frame-snapped still composite preview at the timeline playhead, with video tracks layered in export order.
+- [ ] Real-time timeline playback, preview/export effect parity, and audio waveform display.
 - [ ] Robust undo history persisted in project transactions; current UI history is session-only.
 - [ ] Drag handles for direct edge trimming; numeric trim is available now.
 - [ ] Windows installer validation on a clean machine and dependency diagnosis UI.

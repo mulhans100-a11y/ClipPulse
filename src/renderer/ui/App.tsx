@@ -34,6 +34,9 @@ export default function App() {
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [playhead, setPlayhead] = useState(0);
+  const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
+  const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
+  const [timelinePreviewBusy, setTimelinePreviewBusy] = useState(false);
   const [notice, setNotice] = useState('Ready');
   const [error, setError] = useState('');
   const [ffmpeg, setFfmpeg] = useState(false);
@@ -44,6 +47,7 @@ export default function App() {
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [importRoots, setImportRoots] = useState<ImportRoot[]>([]);
   const mediaRef = useRef<HTMLVideoElement>(null);
+  const previewRequest = useRef(0);
   const timelineRef = useRef<HTMLDivElement>(null);
   const past = useRef<Project[]>([]), future = useRef<Project[]>([]);
   const currentClip = getClip(project, selectedClipId);
@@ -59,6 +63,21 @@ export default function App() {
     if (!window.openmontage) { setError('Desktop bridge unavailable. Start the editor with npm run dev or npm start.'); return; }
     void window.openmontage.version().then((info) => setFfmpeg(info.ffmpeg && info.ffprobe)).catch((cause) => setError(String(cause)));
   }, []);
+  useEffect(() => {
+    if (!project || !projectPath || previewMode !== 'timeline') return;
+    const requestId = ++previewRequest.current;
+    const timer = setTimeout(() => {
+      setTimelinePreviewBusy(true);
+      void window.openmontage.renderTimelineFrame(projectPath, playhead).then((result) => {
+        if (requestId === previewRequest.current) setTimelineFramePath(result.path);
+      }).catch((cause) => {
+        if (requestId === previewRequest.current) setError(cause instanceof Error ? cause.message : String(cause));
+      }).finally(() => {
+        if (requestId === previewRequest.current) setTimelinePreviewBusy(false);
+      });
+    }, 180);
+    return () => { clearTimeout(timer); previewRequest.current++; };
+  }, [project, projectPath, playhead, previewMode]);
   useEffect(() => {
     const removeProgress = window.openmontage?.onExportProgress((progress) => setExportProgress(progress));
     const removeMediaUpdate = window.openmontage?.onMediaUpdated(({ project: next, result }) => {
@@ -172,7 +191,7 @@ export default function App() {
       else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); void openProject(); }
       else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); void createProject(); }
       else if (event.key === 'Delete' && currentClip) { event.preventDefault(); void removeSelected(); }
-      else if (event.code === 'Space' && mediaRef.current && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); mediaRef.current.paused ? void mediaRef.current.play() : mediaRef.current.pause(); }
+      else if (event.code === 'Space' && previewMode === 'source' && mediaRef.current && document.activeElement?.tagName !== 'INPUT') { event.preventDefault(); mediaRef.current.paused ? void mediaRef.current.play() : mediaRef.current.pause(); }
     }
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
   });
@@ -230,17 +249,17 @@ export default function App() {
 
       <main className="center-panel">
         <section className="monitor panel">
-          <div className="monitor-toolbar"><div className="monitor-tabs"><span className="active-tab"><Video size={14} /> Preview</span><span><Layers2 size={14} /> Source</span></div><div className="monitor-meta"><span>{project.width} × {project.height}</span><span>{Number(project.frameRate.num) / Number(project.frameRate.den)} FPS</span><button className="square-button small-square" title="Project settings"><Settings2 size={14} /></button></div></div>
+          <div className="monitor-toolbar"><div className="monitor-tabs"><button className={previewMode === 'timeline' ? 'active-tab' : ''} onClick={() => setPreviewMode('timeline')}><Layers2 size={14} /> Timeline</button><button className={previewMode === 'source' ? 'active-tab' : ''} onClick={() => setPreviewMode('source')}><Video size={14} /> Source</button></div><div className="monitor-meta"><span>{project.width} × {project.height}</span><span>{Number(project.frameRate.num) / Number(project.frameRate.den)} FPS</span><button className="square-button small-square" title="Project settings"><Settings2 size={14} /></button></div></div>
           <div className="monitor-stage">
-            {activeMedia?.kind === 'video' ? <video ref={mediaRef} key={activeMedia.id} src={window.openmontage.toFileUrl(activeMedia.path)} controls onTimeUpdate={(event) => {
+            {previewMode === 'timeline' ? <>{timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{timelinePreviewBusy && <span className="preview-busy">Rendering frame…</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={activeMedia.id} src={window.openmontage.toFileUrl(activeMedia.path)} controls onTimeUpdate={(event) => {
               const videoTime = event.currentTarget.currentTime;
               if (currentClip) setPlayhead(secondsOf(currentClip.clip.start) + Math.max(0, videoTime - secondsOf(currentClip.clip.sourceIn)));
               else setPlayhead(videoTime);
             }} onLoadedMetadata={(event) => {
               if (currentClip) { event.currentTarget.currentTime = secondsOf(currentClip.clip.sourceIn) + Math.max(0, playhead - secondsOf(currentClip.clip.start)); }
-            }} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon">{activeMedia ? <Music2 size={32} /> : <Clapperboard size={38} />}</div><strong>{activeMedia ? activeMedia.name : 'Preview monitor'}</strong><span>{activeMedia ? 'Audio asset selected' : 'Select a clip or import footage to begin'}</span><div className="playhead-time">{formatTime(playhead)}</div></div>}
+            }} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon">{activeMedia ? <Music2 size={32} /> : <Clapperboard size={38} />}</div><strong>{activeMedia ? activeMedia.name : 'Source monitor'}</strong><span>{activeMedia ? 'Audio asset selected' : 'Select a clip or import footage to begin'}</span><div className="playhead-time">{formatTime(playhead)}</div></div>}
           </div>
-          <div className="monitor-bottom"><div className="transport"><button className="transport-button" onClick={() => { if (mediaRef.current) mediaRef.current.currentTime = Math.max(0, mediaRef.current.currentTime - 1 / 60); }} title="Previous frame"><span>◀|</span></button><button className="play-button" onClick={() => { if (mediaRef.current) mediaRef.current.paused ? void mediaRef.current.play() : mediaRef.current.pause(); }}>{mediaRef.current?.paused === false ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}</button><button className="transport-button" onClick={() => { if (mediaRef.current) mediaRef.current.currentTime += 1 / 60; }} title="Next frame"><span>|▶</span></button></div><div className="time-readout">{formatTime(playhead)} <span>/ {formatTime(duration)}</span></div><div className="monitor-right"><Volume2 size={15} /><span>Fit</span><ChevronDown size={13} /></div></div>
+          <div className="monitor-bottom"><div className="transport"><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime = Math.max(0, mediaRef.current.currentTime - step); else setPlayhead((value) => Math.max(0, value - step)); }} title="Previous frame"><span>◀|</span></button><button className="play-button" disabled={previewMode !== 'source' || activeMedia?.kind !== 'video'} title={previewMode === 'source' ? 'Play source video' : 'Switch to Source to play video'} onClick={() => { if (mediaRef.current) mediaRef.current.paused ? void mediaRef.current.play() : mediaRef.current.pause(); }}>{mediaRef.current?.paused === false ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}</button><button className="transport-button" onClick={() => { const step = Number(project.frameRate.den) / Number(project.frameRate.num); if (previewMode === 'source' && mediaRef.current) mediaRef.current.currentTime += step; else setPlayhead((value) => Math.min(duration, value + step)); }} title="Next frame"><span>|▶</span></button></div><div className="time-readout">{formatTime(playhead)} <span>/ {formatTime(duration)}</span></div><div className="monitor-right"><Volume2 size={15} /><span>Fit</span><ChevronDown size={13} /></div></div>
         </section>
 
         <section className="timeline-panel panel">

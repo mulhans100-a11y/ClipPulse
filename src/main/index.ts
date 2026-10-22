@@ -1,20 +1,38 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { FSWatcher } from 'node:fs';
 import { analyzeAudio } from '../core/audioAnalysis';
 import { AppError } from '../core/errors';
-import { addTrack, addClip, createProject, importMedia, loadProject, moveClip, projectCachePath, removeClip, saveProject, splitClip, trimClip, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
+import { addTrack, addClip, createProject, fileExists, importMedia, loadProject, moveClip, projectCachePath, removeClip, saveProject, splitClip, trimClip, updateMediaMetadata, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
 import { frameTime } from '../core/time';
 import { watchFolder } from '../core/folderWatcher';
+import { renderTimelineFrame } from '../core/timelinePreview';
 import type { TrackKind } from '../core/types';
+import { toFrame } from '../core/time';
 
 const here = __dirname;
 let mainWindow: BrowserWindow | null = null;
 const projectLocks = new Map<string, Promise<void>>();
 let folderWatchers = new Map<string, FSWatcher>();
 let watchedProjectPath: string | null = null;
+const previewFrameCounts = new Map<string, number>();
+
+async function pruneTimelinePreviews(directory: string, keepPath: string): Promise<void> {
+  const files = await fs.readdir(directory).catch(() => [] as string[]);
+  if (files.length <= 120) return;
+  const ranked = await Promise.all(files.filter((file) => file.endsWith('.png')).map(async (file) => {
+    const fullPath = path.join(directory, file);
+    try { return { fullPath, modified: (await fs.stat(fullPath)).mtimeMs }; }
+    catch { return { fullPath, modified: 0 }; }
+  }));
+  ranked.sort((a, b) => b.modified - a.modified);
+  const keep = new Set([keepPath, ...ranked.slice(0, 120).map((file) => file.fullPath)]);
+  await Promise.all(ranked.filter((file) => !keep.has(file.fullPath)).map((file) => fs.rm(file.fullPath, { force: true })));
+}
 
 async function withProjectLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
   const key = path.resolve(filePath).toLocaleLowerCase();
@@ -149,6 +167,20 @@ ipcMain.handle('timeline:trimClip', async (_event, filePath: string, clipId: str
 ipcMain.handle('timeline:moveClip', (_event, filePath: string, clipId: string, start: number, trackId?: string) => withProjectLock(filePath, async () => moveClip(filePath, clipId, await uiFrameTime(filePath, start), trackId)));
 ipcMain.handle('timeline:splitClip', (_event, filePath: string, clipId: string, at: number) => withProjectLock(filePath, async () => splitClip(filePath, clipId, await uiFrameTime(filePath, at))));
 ipcMain.handle('timeline:removeClip', (_event, filePath: string, clipId: string) => withProjectLock(filePath, () => removeClip(filePath, clipId)));
+ipcMain.handle('timeline:previewFrame', (_event, filePath: string, requestedTime: number) => withProjectLock(filePath, async () => {
+  const project = await loadProject(filePath);
+  const time = await uiFrameTime(filePath, requestedTime);
+  const frame = toFrame(time, project.frameRate);
+  const revision = createHash('sha256').update(JSON.stringify(project)).digest('hex').slice(0, 16);
+  const outputPath = path.join(projectCachePath(filePath, project.id), 'timeline-preview', `${revision}-${frame}.png`);
+  if (!(await fileExists(outputPath))) {
+    await renderTimelineFrame(project, time, outputPath);
+    const count = (previewFrameCounts.get(path.resolve(filePath)) ?? 0) + 1;
+    previewFrameCounts.set(path.resolve(filePath), count);
+    if (count % 40 === 0) await pruneTimelinePreviews(path.dirname(outputPath), outputPath);
+  }
+  return { frame, time, path: outputPath };
+}));
 ipcMain.handle('video:export', async (_event, filePath: string) => {
   const response = await dialog.showSaveDialog(mainWindow!, { title: 'Export video', defaultPath: 'Montage.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
   if (response.canceled || !response.filePath) return null;
