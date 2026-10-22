@@ -223,6 +223,10 @@ export function validateProject(project: Project): void {
       clipIds.add(clip.id);
       if (!validTime(clip.start) || !validTime(clip.sourceIn) || !validTime(clip.duration)) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid rational time value.`);
       if (BigInt(clip.duration.num) <= 0n || BigInt(clip.duration.den) <= 0n) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} must have a positive duration.`);
+      for (const [label, fade] of [['fade-in', clip.fadeIn], ['fade-out', clip.fadeOut]] as const) {
+        if (fade !== undefined && (!validTime(fade) || BigInt(fade.num) < 0n || compare(fade, clip.duration) > 0))
+          throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has an invalid ${label} duration.`);
+      }
       clampNonNegative(clip.start, 'Clip start'); clampNonNegative(clip.sourceIn, 'Clip source in');
       if (!Number.isFinite(clip.volume) || clip.volume < 0 || clip.volume > 8) throw new AppError('INVALID_PROJECT', `Clip ${clip.id} has invalid volume.`);
     }
@@ -474,7 +478,7 @@ export async function addClip(filePath: string, mediaId: string, trackId: string
   const resolvedDuration = duration ?? subSafe(asset.duration, sourceIn);
   if (BigInt(resolvedDuration.num) <= 0n) throw new AppError('INVALID_DURATION', 'Clip duration must be positive.');
   if (compare(add(sourceIn, resolvedDuration), asset.duration) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', `The selected source range exceeds ${asset.name}'s duration (${decimal(asset.duration)} s).`);
-  const clip: TimelineClip = { id: newId(), mediaId, start, sourceIn, duration: resolvedDuration, audioEnabled: true, volume: 1 };
+  const clip: TimelineClip = { id: newId(), mediaId, start, sourceIn, duration: resolvedDuration, audioEnabled: true, volume: 1, fadeIn: rational(0), fadeOut: rational(0) };
   track.clips.push(clip);
   track.clips.sort((a, b) => compare(a.start, b.start));
   await saveProject(filePath, project);
@@ -508,7 +512,25 @@ export async function trimClip(filePath: string, clipId: string, patch: { start?
   clampNonNegative(next.start, 'Clip start'); clampNonNegative(next.sourceIn, 'Source in');
   if (BigInt(next.duration.num) <= 0n || compare(add(next.sourceIn, next.duration), asset.duration) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', 'The trimmed source range is invalid or exceeds the media duration.');
   Object.assign(clip, patch);
+  if (clip.fadeIn && compare(clip.fadeIn, clip.duration) > 0) clip.fadeIn = clip.duration;
+  if (clip.fadeOut && compare(clip.fadeOut, clip.duration) > 0) clip.fadeOut = clip.duration;
   track.clips.sort((a, b) => compare(a.start, b.start));
+  await saveProject(filePath, project);
+  return project;
+}
+
+export async function setClipAudio(filePath: string, clipId: string, patch: { audioEnabled?: boolean; volume?: number; fadeIn?: Rational; fadeOut?: Rational }): Promise<Project> {
+  const project = await loadProject(filePath);
+  const { clip, track } = findClip(project, clipId);
+  if (track.locked) throw new AppError('TRACK_LOCKED', `Track ${track.name} is locked.`);
+  const next = { ...clip, ...patch };
+  if (patch.fadeIn !== undefined) clampNonNegative(patch.fadeIn, 'Fade in');
+  if (patch.fadeOut !== undefined) clampNonNegative(patch.fadeOut, 'Fade out');
+  if ((patch.fadeIn !== undefined && compare(patch.fadeIn, next.duration) > 0) || (patch.fadeOut !== undefined && compare(patch.fadeOut, next.duration) > 0))
+    throw new AppError('INVALID_FADE', 'Audio fade durations cannot exceed the clip duration.');
+  if (patch.volume !== undefined && (!Number.isFinite(patch.volume) || patch.volume < 0 || patch.volume > 8))
+    throw new AppError('INVALID_VOLUME', 'Clip volume must be between 0 and 8.');
+  Object.assign(clip, patch);
   await saveProject(filePath, project);
   return project;
 }
@@ -542,8 +564,17 @@ export async function splitClip(filePath: string, clipId: string, atTimeline: Ra
   const offset = subSafe(atTimeline, clip.start);
   if (compare(offset, rational(0)) <= 0 || compare(offset, clip.duration) >= 0) throw new AppError('SPLIT_OUTSIDE_CLIP', 'Split point must fall strictly inside the selected clip.');
   const oldDuration = clip.duration;
-  const right: TimelineClip = { ...clip, id: newId(), start: atTimeline, sourceIn: add(clip.sourceIn, offset), duration: subSafe(oldDuration, offset) };
+  const rightDuration = subSafe(oldDuration, offset);
+  const oldFadeIn = clip.fadeIn ?? rational(0), oldFadeOut = clip.fadeOut ?? rational(0);
+  const fadeOutStart = subSafe(oldDuration, oldFadeOut);
+  const leftFadeIn = compare(oldFadeIn, offset) > 0 ? offset : oldFadeIn;
+  const rightFadeIn = compare(oldFadeIn, offset) > 0 ? subSafe(oldFadeIn, offset) : rational(0);
+  const leftFadeOut = compare(offset, fadeOutStart) > 0 ? subSafe(offset, fadeOutStart) : rational(0);
+  const rightFadeOut = compare(oldFadeOut, rightDuration) > 0 ? rightDuration : oldFadeOut;
+  const right: TimelineClip = { ...clip, id: newId(), start: atTimeline, sourceIn: add(clip.sourceIn, offset), duration: rightDuration, fadeIn: rightFadeIn, fadeOut: rightFadeOut };
   clip.duration = offset;
+  clip.fadeIn = leftFadeIn;
+  clip.fadeOut = leftFadeOut;
   track.clips.push(right);
   track.clips.sort((a, b) => compare(a.start, b.start));
   await saveProject(filePath, project);

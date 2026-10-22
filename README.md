@@ -14,6 +14,7 @@ This is an early Phase A/B/C build. The editor includes an initial local beat an
 - Media library sorting by modified date, name, or duration, with a virtualized list that only mounts nearby cards and thumbnails.
 - Missing source files are marked in the media bin and can be relinked to a replacement file without breaking existing clip references.
 - Video and audio tracks; additional tracks can be added, muted, soloed, or locked. Clips can be inserted, duplicated, moved between tracks, trimmed, split, and removed.
+- Clip audio can be enabled, adjusted, and faded in or out; the settings are editable in the inspector and render through FFmpeg.
 - Drag clip edges for frame-snapped source trimming while preserving the opposite edit point.
 - Preview of imported source video, timeline playhead, persistent undo/redo, and keyboard shortcuts for save/undo/redo/delete/playback.
 - Frame-snapped composite still preview for the timeline, plus a separate source monitor for video playback.

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
+import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setImportRootWatching, splitClip, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
 import { analyzeAudio } from '../src/core/audioAnalysis';
 import { renderTimelineFrame } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
@@ -153,6 +153,33 @@ test('imports, backs up, trims, splits and exports real media without modifying 
   assert.ok(audio, 'source audio is included in the rendered timeline');
   assert.ok((await stat(output)).size > 10_000);
   assert.equal(createHash('sha256').update(await readFile(source)).digest('hex'), before, 'source file remains byte-for-byte unchanged');
+});
+
+test('clip audio fades are validated, persisted, and audible in the rendered output', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-fades-'));
+  scratch.push(directory);
+  const source = path.join(directory, 'tone.wav');
+  const projectFile = path.join(directory, 'fade.omproj');
+  const output = path.join(directory, 'fade.mp4');
+  const rawAudio = path.join(directory, 'fade-samples.raw');
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=2', '-c:a', 'pcm_s16le', source]);
+  await createProject(projectFile, { frameRate: rational(24), width: 320, height: 180 });
+  const imported = await importMedia(projectFile, [source]);
+  const audioTrack = (await loadProject(projectFile)).tracks.find((track) => track.kind === 'audio')!;
+  const withClip = await addClip(projectFile, imported.added[0].id, audioTrack.id, rational(0), rational(0), rational(2));
+  const clip = withClip.tracks.find((track) => track.id === audioTrack.id)!.clips[0];
+  const faded = await setClipAudio(projectFile, clip.id, { fadeIn: rational(1), fadeOut: rational(1) });
+  const fadedClip = faded.tracks.find((track) => track.id === audioTrack.id)!.clips[0];
+  assert.deepEqual(fadedClip.fadeIn, rational(1));
+  assert.deepEqual(fadedClip.fadeOut, rational(1));
+  await assert.rejects(setClipAudio(projectFile, clip.id, { fadeIn: rational(3) }), /cannot exceed the clip duration/);
+  await exportVideo(faded, { outputPath: output });
+  await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', output, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '48000', '-f', 's16le', rawAudio]);
+  const early = await rawRms(rawAudio, 0.1, 0.1);
+  const peak = await rawRms(rawAudio, 0.9, 0.1);
+  const late = await rawRms(rawAudio, 1.85, 0.1);
+  assert.ok(peak > early * 3, `fade in should raise audio level, early=${early}, peak=${peak}`);
+  assert.ok(peak > late * 3, `fade out should lower audio level, late=${late}, peak=${peak}`);
 });
 
 test('core rejects source overwrite and invalid split positions with stable errors', async () => {
@@ -355,11 +382,16 @@ test('headless CLI creates a project, imports media, assembles a timeline and ex
   const videoTrack = inspected.data.project.tracks.find((track: any) => track.kind === 'video');
   const inserted = await invoke('clip-add', '--project', projectPath, '--media', imported.data.added[0].id, '--track', videoTrack.id, '--start', '0', '--source-in', '1/2', '--duration', '1');
   assert.equal(inserted.data.mediaId, imported.data.added[0].id);
+  const audioSettings = await invoke('clip-audio', '--project', projectPath, '--clip', inserted.data.id, '--volume', '0.8', '--fade-in', '0.2', '--fade-out', '0.25');
+  assert.deepEqual(audioSettings.data.fadeIn, rational(1, 5));
+  assert.deepEqual(audioSettings.data.fadeOut, rational(1, 4));
+  assert.equal(audioSettings.data.volume, 0.8);
   const duplicate = await invoke('clip-duplicate', '--project', projectPath, '--clip', inserted.data.id);
   assert.notEqual(duplicate.data.id, inserted.data.id);
   assert.deepEqual(duplicate.data.sourceIn, inserted.data.sourceIn);
   assert.deepEqual(duplicate.data.duration, inserted.data.duration);
   assert.deepEqual(duplicate.data.start, { num: '1', den: '1' });
+  assert.deepEqual(duplicate.data.fadeIn, rational(1, 5));
   await invoke('clip-remove', '--project', projectPath, '--clip', duplicate.data.id);
   const soloed = await invoke('track-set', '--project', projectPath, '--track', videoTrack.id, '--solo', 'true');
   assert.equal(soloed.data.solo, true);
@@ -417,4 +449,16 @@ async function firstRgb(imagePath: string, directory: string, fileName: string):
   const rawPath = path.join(directory, fileName);
   await runCommand('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', imagePath, '-vf', 'scale=1:1:flags=neighbor', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', rawPath]);
   return readFile(rawPath);
+}
+
+async function rawRms(filePath: string, startSeconds: number, durationSeconds: number): Promise<number> {
+  const samples = await readFile(filePath);
+  const first = Math.floor(startSeconds * 48_000);
+  const end = Math.min(samples.length / 2, first + Math.floor(durationSeconds * 48_000));
+  let total = 0;
+  for (let index = first; index < end; index++) {
+    const sample = samples.readInt16LE(index * 2) / 32768;
+    total += sample * sample;
+  }
+  return Math.sqrt(total / Math.max(1, end - first));
 }

@@ -22,6 +22,7 @@ track-add --project FILE --kind video|audio [--name NAME]
 track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false]
 clip-add --project FILE --media ID --track ID [--start TIME] [--source-in TIME] [--duration TIME]
 clip-duplicate --project FILE --clip ID [--start TIME]
+clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in TIME] [--fade-out TIME]
 clip-trim --project FILE --clip ID [--start TIME] [--source-in TIME] [--duration TIME]
 clip-move --project FILE --clip ID --start TIME [--track ID]
 clip-split --project FILE --clip ID --at TIME
@@ -39,6 +40,8 @@ doctor
 In the desktop timeline, analyzed audio clips display beat ticks. The Snap toggle aligns playhead placement, clip insertion, and clip moves to detected beats and clip boundaries within a 10-pixel threshold; timing resolves to the nearest project frame.
 
 `track-set` updates track mute, solo, and lock state. Solo is applied independently to video and audio track groups in both the timeline preview and final export. `clip-duplicate` copies a clip's source range and audio settings to the same track immediately after it; `--start` overrides that timeline position.
+
+`clip-audio` changes the selected clip's audio enable flag, linear volume multiplier, and fade durations. Fade durations are nonnegative project-time values no longer than the clip; export applies them to the trimmed source audio before timeline mixing.
 
 `timeline-frame --project FILE --time TIME` renders one frame-snapped composite from the active, unmuted video tracks. The desktop Timeline monitor uses this command's shared core operation for its still preview; source video playback remains available in the Source monitor.
 

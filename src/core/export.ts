@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { AppError } from './errors';
 import { runCommand, tail } from './ffmpeg';
-import { add, compare, decimal, rational } from './time';
+import { add, compare, decimal, rational, sub } from './time';
 import { isTrackEnabled, timelineDuration, validateProject } from './project';
 import type { ExportOptions, MediaAsset, Project, Rational, TimelineClip, TimelineTrack } from './types';
 
@@ -62,8 +62,13 @@ export async function exportVideo(project: Project, options: ExportOptions): Pro
       const source = decimal(item.clip.sourceIn, 9);
       const clipDuration = decimal(item.clip.duration, 9);
       const start = decimal(item.clip.start, 9);
+      const fadeIn = item.clip.fadeIn ?? rational(0);
+      const fadeOut = item.clip.fadeOut ?? rational(0);
       const label = `aclip${i}`;
-      filter.push(`[${item.input}:a:0]atrim=start=${source}:duration=${clipDuration},aresample=48000,asetpts=N/SR/TB+(${start})/TB,volume=${item.clip.volume}[${label}]`);
+      const audioEffects = [`volume=${item.clip.volume}`];
+      if (compare(fadeIn, rational(0)) > 0) audioEffects.push(`afade=t=in:st=0:d=${decimal(fadeIn, 9)}`);
+      if (compare(fadeOut, rational(0)) > 0) audioEffects.push(`afade=t=out:st=${decimal(sub(item.clip.duration, fadeOut), 9)}:d=${decimal(fadeOut, 9)}`);
+      filter.push(`[${item.input}:a:0]atrim=start=${source}:duration=${clipDuration},aresample=48000,asetpts=PTS-STARTPTS,${audioEffects.join(',')},asetpts=N/SR/TB+(${start})/TB[${label}]`);
       audioLabels.push(`[${label}]`);
     });
     filter.push(`${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0,atrim=duration=${totalSeconds},alimiter=limit=0.95[aout]`);

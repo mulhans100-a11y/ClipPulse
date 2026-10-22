@@ -54,6 +54,7 @@ Status reflects the repository at `0.1.0`.
 
 ## Phase E — Effects and audio controls
 
+- [x] Per-clip audio enable, volume, fade-in, and fade-out controls with FFmpeg export and CLI support.
 - [ ] Shared preview/export effect semantics and keyframes.
 - [ ] Speed changes and ramps, transitions, titles, transforms, LUT/color controls.
 - [ ] Track/clip audio automation, fades, normalization, ducking and waveform display.

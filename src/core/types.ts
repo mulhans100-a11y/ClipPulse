@@ -46,6 +46,8 @@ export interface TimelineClip {
   duration: Rational;
   audioEnabled: boolean;
   volume: number;
+  fadeIn?: Rational;
+  fadeOut?: Rational;
 }
 
 export interface TimelineTrack {
