@@ -87,7 +87,8 @@
     "linux": {
       "target": ["AppImage", "deb"],
       "category": "AudioVideo;Video;",
-      "synopsis": "Local-first gaming montage editor"
+      "synopsis": "Local-first gaming montage editor",
+      "maintainer": "OpenMontage AI contributors <mulhans100-a11y@users.noreply.github.com>"
     }
   }
 }
