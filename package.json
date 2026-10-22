@@ -2,7 +2,7 @@
   "name": "openmontage-ai",
   "version": "0.1.0",
   "description": "A local-first, open-source video editor for music-synchronized gaming montages.",
-  "author": "OpenMontage AI contributors",
+  "author": "ClipPulse contributors",
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
@@ -53,7 +53,7 @@
   },
   "build": {
     "appId": "com.github.mulhans100a11y.clippulse",
-    "productName": "OpenMontage AI",
+    "productName": "ClipPulse",
     "afterPack": "scripts/copy-third-party-notices.cjs",
     "directories": {
       "output": "release"
@@ -88,7 +88,7 @@
       "target": ["AppImage", "deb"],
       "category": "AudioVideo;Video;",
       "synopsis": "Local-first gaming montage editor",
-      "maintainer": "OpenMontage AI contributors <mulhans100-a11y@users.noreply.github.com>"
+      "maintainer": "ClipPulse contributors <mulhans100-a11y@users.noreply.github.com>"
     }
   }
 }

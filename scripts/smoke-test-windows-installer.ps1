@@ -27,7 +27,7 @@ if ($install.ExitCode -ne 0) {
   throw "Silent NSIS installation failed with exit code $($install.ExitCode)."
 }
 
-$appPath = Join-Path $installRoot 'OpenMontage AI.exe'
+$appPath = Join-Path $installRoot 'ClipPulse.exe'
 if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
   throw "Installed application was not found at $appPath"
 }

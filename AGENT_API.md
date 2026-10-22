@@ -41,10 +41,10 @@ Configure the MCP host to launch the compiled CLI as a child process. Every `--a
 ```json
 {
   "mcpServers": {
-    "openmontage": {
+    "clippulse": {
       "command": "node",
       "args": [
-        "C:\\path\\to\\OpenMontage-AI\\dist\\src\\main\\cli.js",
+        "C:\\path\\to\\ClipPulse\\dist\\src\\main\\cli.js",
         "mcp-server",
         "--allow-root", "C:\\Medal\\Clips",
         "--allow-root", "C:\\Medal\\Exports"

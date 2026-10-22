@@ -141,7 +141,7 @@ function createWindow(): void {
     minWidth: 1000,
     minHeight: 680,
     backgroundColor: '#101114',
-    title: 'OpenMontage AI',
+    title: 'ClipPulse',
     webPreferences: {
       preload: path.join(here, 'preload.js'),
       contextIsolation: true,

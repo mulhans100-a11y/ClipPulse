@@ -29,7 +29,7 @@ export async function runAgentMcp(service: AgentService, input: NodeJS.ReadableS
 
 async function dispatch(service: AgentService, request: JsonRpcRequest): Promise<any> {
   switch (request.method) {
-    case 'initialize': return { protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'openmontage-ai', version: '0.1.0' }, instructions: `OpenMontage agent tools schema version ${AGENT_SCHEMA_VERSION}. All filesystem paths must be inside granted roots.` };
+    case 'initialize': return { protocolVersion: '2025-03-26', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'clippulse', version: '0.1.0' }, instructions: `ClipPulse agent tools schema version ${AGENT_SCHEMA_VERSION}. All filesystem paths must be inside granted roots.` };
     case 'ping': return {};
     case 'tools/list': return { tools: service.tools };
     case 'tools/call': {

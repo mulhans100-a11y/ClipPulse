@@ -2,7 +2,7 @@
 
 ## Current implementation
 
-OpenMontage AI is split into three local layers:
+ClipPulse is split into three local layers:
 
 1. **Electron main process** (`src/main`) owns native dialogs, project and media file access, FFmpeg process execution, and renderer IPC.
 2. **Core editing engine** (`src/core`) owns the versioned project model, validation, rational time arithmetic, media probing/import, timeline edits, and rendering. The CLI and desktop app call the same core functions.

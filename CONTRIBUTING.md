@@ -1,6 +1,6 @@
 # Contributing
 
-OpenMontage AI is an early project. Contributions should keep the core editing model usable without optional AI models or GPU hardware.
+ClipPulse is an early project. Contributions should keep the core editing model usable without optional AI models or GPU hardware.
 
 ## Local setup
 

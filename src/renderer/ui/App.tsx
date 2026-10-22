@@ -561,17 +561,17 @@ export default function App() {
     <div className="welcome-card">
       <div className="brand-mark"><Clapperboard size={28} /></div>
       <div className="eyebrow">LOCAL-FIRST VIDEO EDITOR</div>
-      <h1>OpenMontage <span>AI</span></h1>
+      <h1>ClipPulse</h1>
       <p>Create, cut, and export music-driven video edits. Your source files stay where they are.</p>
       <div className="welcome-actions"><button className="primary" onClick={() => void createProject()}><Plus size={16} /> New project</button><button onClick={() => void openProject()}><FolderOpen size={16} /> Open project</button></div>
-      <div className="runtime"><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg not detected'} · OpenMontage AI{appVersion ? ` v${appVersion}` : ''}</div>
+      <div className="runtime"><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg not detected'} · ClipPulse{appVersion ? ` v${appVersion}` : ''}</div>
       {error && <div className="error-box">{error}</div>}
     </div>
   </div>;
 
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><div className="brand-mark small"><Clapperboard size={17} /></div><strong>OpenMontage <span>AI</span></strong></div>
+      <div className="brand"><div className="brand-mark small"><Clapperboard size={17} /></div><strong>ClipPulse</strong></div>
       <div className="project-title"><span className="project-dot" />{project.name}<span className="path-label">{projectPath}</span></div>
       <div className="toolbar">
         <button className="toolbar-button" title="New project (Ctrl+N)" onClick={() => void createProject()}><FilePlus2 size={14} /> New</button>

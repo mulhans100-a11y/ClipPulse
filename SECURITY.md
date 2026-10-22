@@ -1,6 +1,6 @@
 # Security policy
 
-OpenMontage AI is an early local desktop application. It does not currently run a network service, upload media, or use cloud accounts.
+ClipPulse is an early local desktop application. It does not currently run a network service, upload media, or use cloud accounts.
 
 ## Reporting a vulnerability
 
