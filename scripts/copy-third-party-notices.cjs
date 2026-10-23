@@ -42,7 +42,8 @@ function licenseFiles(directory) {
 }
 
 exports.default = async function copyThirdPartyNotices(context) {
-  const destination = path.join(context.appOutDir, 'resources', 'third-party-licenses');
+  const resources = getPackagedResourcesDirectory(context);
+  const destination = path.join(resources, 'third-party-licenses');
   const licensesDestination = path.join(destination, 'LICENSES');
   pruneForeignOnnxRuntimeBinaries(context);
   fs.rmSync(destination, { recursive: true, force: true });
@@ -121,8 +122,7 @@ exports.default = async function copyThirdPartyNotices(context) {
 
 function pruneForeignOnnxRuntimeBinaries(context) {
   const napiRoot = path.join(
-    context.appOutDir,
-    'resources',
+    getPackagedResourcesDirectory(context),
     'app.asar.unpacked',
     'node_modules',
     'onnxruntime-node',
@@ -150,7 +150,7 @@ function pruneForeignOnnxRuntimeBinaries(context) {
 }
 
 function verifyPackagedRuntime(context, packages) {
-  const resources = path.join(context.appOutDir, 'resources');
+  const resources = getPackagedResourcesDirectory(context);
   const archive = path.join(resources, 'app.asar');
   if (!fs.existsSync(archive)) throw new Error(`Packaged application archive is missing: ${archive}`);
   if (!packages.length) throw new Error('No production npm packages were found while preparing the application package.');
@@ -180,3 +180,14 @@ function verifyPackagedRuntime(context, packages) {
   if (!fs.existsSync(notices) || fs.statSync(notices).size === 0) throw new Error('Packaged third-party license notices were not generated.');
   if (!fs.existsSync(path.join(resources, 'third-party-licenses', 'LICENSES'))) throw new Error('Packaged third-party license directory is missing.');
 }
+
+function getPackagedResourcesDirectory(context) {
+  if (context.electronPlatformName === 'darwin') {
+    const productFilename = context.packager?.appInfo?.productFilename;
+    if (!productFilename) throw new Error('Cannot resolve the macOS app bundle name while collecting package notices.');
+    return path.join(context.appOutDir, `${productFilename}.app`, 'Contents', 'Resources');
+  }
+  return path.join(context.appOutDir, 'resources');
+}
+
+exports.getPackagedResourcesDirectory = getPackagedResourcesDirectory;

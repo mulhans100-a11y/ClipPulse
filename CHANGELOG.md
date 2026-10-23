@@ -9,6 +9,7 @@
 - Added accent-aware montage anchors and a Smooth pacing preset; stronger highlight events receive an explainable preference on strong musical anchors.
 - Added a deterministic v4-versus-v5 audio evaluation runner and measured ARTBeaT/synthetic results with tolerances and documented failure cases.
 - Documented relative confidence semantics and the cache-version invalidation; v5 recomputes older cached audio analyses once.
+- Fixed the macOS release hook to find resources inside `ClipPulse.app/Contents/Resources`; added regression coverage for macOS, Windows, and Linux resource paths.
 - Added typed, modular Valorant HUD phrase recognition with explicit evidence levels and normalized-coordinate tentative kill-feed change cues.
 - Combined audio, motion, and HUD provenance in explainable highlight scores; added fast-action and low-motion passage candidates with uncertainties.
 - Persisted manual event-type corrections through project metadata, montage planning, desktop review controls, and the versioned agent API.

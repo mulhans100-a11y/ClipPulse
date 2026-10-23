@@ -29,7 +29,7 @@
     "package:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
     "start": "electron .",
     "cli": "node dist/src/main/cli.js",
-    "test": "npm run build:main && node --test dist/tests/*.test.js tests/agent-e2e.test.cjs",
+    "test": "npm run build:main && node --test dist/tests/*.test.js tests/*.test.cjs",
     "smoke-test": "node scripts/smoke-test.cjs",
     "agent-e2e": "npm run build:main && node scripts/agent-e2e.cjs",
     "benchmark:preview": "npm run build:main && node scripts/benchmark-preview.cjs",

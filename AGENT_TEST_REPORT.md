@@ -5,17 +5,19 @@
 | Prüfung | Ergebnis | Messwerte |
 | --- | --- | --- |
 | `npm run build` | Bestanden | TypeScript, Main-Prozess und Vite-Renderer; im erfolgreichen `npm run package:win` erneut ausgeführt |
-| `npm test` | Bestanden | 58 bestanden, 0 fehlgeschlagen, 0 übersprungen; Node-Testlauf 16,78 s |
+| `npm test` | Bestanden | 61 bestanden, 0 fehlgeschlagen, 0 übersprungen; Node-Testlauf 16,47 s |
 | `npm run smoke-test` | Bestanden | CLI, Projekt erstellen/öffnen, Medienimport, Timeline split/move, FFmpeg/FFprobe, MP4-Export, MCP stdio; Version 0.1.2 |
 | `npm audit` | Bestanden | 0 Schwachstellen in Produktions- und Entwicklungsabhängigkeiten |
-| Windows x64 NSIS-Paket | Bestanden | `ClipPulse Setup 0.1.2.exe`, 162.486.538 Byte; stille Installation in temporärem Ordner, App blieb 12 s geöffnet |
+| Windows x64 NSIS-Paket | Bestanden | `ClipPulse Setup 0.1.2.exe`, 162.486.385 Byte; stille Installation in temporärem Ordner, App blieb 12 s geöffnet |
 | Gepackter MCP-Server | Bestanden | Im installierten Paket 49 Werkzeuge aufgelistet; Diagnostics-Aufruf beantwortet |
 | Signatur | Nicht signiert | Windows meldet `NotSigned`; Electron-Standardicon, da kein Produkticon konfiguriert ist |
-| Linux/macOS Release-Pakete | Noch nicht getestet | Die native GitHub-Actions-Matrix für v0.1.2 muss nach dem Tag laufen |
+| Build/Test-Matrix auf Windows, Linux, macOS arm64 und Intel | Bestanden | Actions-Lauf #15, Commit `b6ea427`; alle vier Plattformjobs grün |
+| Windows/Linux Release-Pakete | Bestanden | Actions-Lauf #8; Installer/Artefakte erstellt |
+| macOS Release-Pakete | Fehlgeschlagen, behoben lokal | Actions-Lauf #8 fand den `afterPack`-Ressourcenpfad nicht in `ClipPulse.app/Contents/Resources`; Hotfix ergänzt, native Pakete müssen mit dem korrigierten Tag erneut laufen |
 | Codex-/Claude-Host mit v0.1.2 | Nicht getestet | Ein früherer Codex-CLI-Lauf für v0.1.1 steht weiter unten; er belegt keinen aktuellen v0.1.2- oder Claude-Lauf |
 | 20 echte Gaming-Clips | Nicht getestet | Für diesen Kandidaten lagen keine lokalen autorisierten Medien vor; das reproduzierbare MCP-E2E nutzt synthetische Medien |
 
-Installer-SHA-256: `9148F5AF21785A629C9E08F0B6B6FF8BD694F757F44C022AE043657DF1A0D3B6`. Die lokalen Analyseberichte wurden am selben Tag mit `npm run evaluate:audio`, `npm run evaluate:valorant-fixture` und `npm run benchmark:preview` aktualisiert. Die Audio-, HUD- und Preview-Messungen sowie ihre Grenzen stehen in [evaluation/README.md](evaluation/README.md), [GAMEPLAY_HIGHLIGHTS.md](GAMEPLAY_HIGHLIGHTS.md) und [TIMELINE_PREVIEW.md](TIMELINE_PREVIEW.md).
+Installer-SHA-256: `7EF4097651CA034AB2197B3399F52A1391E67F5CBDF49ACD086F43C80383732B`. Die lokalen Analyseberichte wurden am selben Tag mit `npm run evaluate:audio`, `npm run evaluate:valorant-fixture` und `npm run benchmark:preview` aktualisiert. Die Audio-, HUD- und Preview-Messungen sowie ihre Grenzen stehen in [evaluation/README.md](evaluation/README.md), [GAMEPLAY_HIGHLIGHTS.md](GAMEPLAY_HIGHLIGHTS.md) und [TIMELINE_PREVIEW.md](TIMELINE_PREVIEW.md).
 
 > **Historischer Lauf:** Dieser Bericht dokumentiert den Windows-x64-Stand vom 22. Oktober 2026. Er ist kein Nachweis dafür, dass alle späteren, derzeit lokalen Änderungen bereits in diesem Lauf enthalten waren. Die neuere MCP-Onboarding-Prüfung und ihre Grenzen stehen in [MCP_SETUP.md](MCP_SETUP.md).
 
