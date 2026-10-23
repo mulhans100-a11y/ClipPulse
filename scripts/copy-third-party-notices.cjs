@@ -52,12 +52,7 @@ exports.default = async function copyThirdPartyNotices(context) {
 
   const packages = findProductionPackages();
   const supplementalRoot = path.join(projectRoot, 'licenses');
-  const supplementalNotices = fs.existsSync(supplementalRoot)
-    ? fs.readdirSync(supplementalRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && (entry.name.startsWith('onnxruntime-') || entry.name.startsWith('guid-typescript-')))
-      .map((entry) => entry.name)
-      .sort()
-    : [];
+  const supplementalNotices = listSupplementalNoticeDirectories(supplementalRoot, packages);
   for (const noticeDirectory of supplementalNotices) {
     fs.cpSync(
       path.join(supplementalRoot, noticeDirectory),
@@ -192,6 +187,19 @@ function getTargetArchitecture(context) {
   return architecture;
 }
 
+function listSupplementalNoticeDirectories(supplementalRoot, packages) {
+  if (!fs.existsSync(supplementalRoot)) return [];
+  const runtimeNoticeDirectories = new Set(packages
+    .filter(({ manifest }) => manifest.name?.startsWith('onnxruntime-'))
+    .map(({ manifest }) => `onnxruntime-v${manifest.version}`));
+  return fs.readdirSync(supplementalRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && (
+      entry.name.startsWith('guid-typescript-') || runtimeNoticeDirectories.has(entry.name)
+    ))
+    .map((entry) => entry.name)
+    .sort();
+}
+
 function getPackagedResourcesDirectory(context) {
   if (context.electronPlatformName === 'darwin') {
     const productFilename = context.packager?.appInfo?.productFilename;
@@ -203,4 +211,5 @@ function getPackagedResourcesDirectory(context) {
 
 exports.getPackagedResourcesDirectory = getPackagedResourcesDirectory;
 exports.getTargetArchitecture = getTargetArchitecture;
+exports.listSupplementalNoticeDirectories = listSupplementalNoticeDirectories;
 exports.pruneForeignOnnxRuntimeBinaries = pruneForeignOnnxRuntimeBinaries;

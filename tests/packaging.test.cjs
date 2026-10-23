@@ -8,6 +8,7 @@ const { Arch } = require('builder-util');
 const {
   getPackagedResourcesDirectory,
   getTargetArchitecture,
+  listSupplementalNoticeDirectories,
   pruneForeignOnnxRuntimeBinaries,
 } = require('../scripts/copy-third-party-notices.cjs');
 
@@ -64,6 +65,25 @@ test('native runtime pruning follows the requested electron-builder architecture
 
     assert.equal(fs.existsSync(path.join(napiRoot, 'darwin', 'x64', 'onnxruntime_binding.node')), true);
     assert.equal(fs.existsSync(path.join(napiRoot, 'darwin', 'arm64')), false);
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('packaged ONNX notices match only production runtime versions', () => {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'clippulse-license-versions-'));
+  const packages = [
+    { manifest: { name: 'onnxruntime-node', version: '1.23.2' } },
+    { manifest: { name: 'onnxruntime-common', version: '1.23.2' } },
+  ];
+  try {
+    for (const directory of ['onnxruntime-v1.22.0', 'onnxruntime-v1.23.2', 'onnxruntime-v1.30.0', 'guid-typescript-1.0.0']) {
+      fs.mkdirSync(path.join(temporaryDirectory, directory));
+    }
+    assert.deepEqual(
+      listSupplementalNoticeDirectories(temporaryDirectory, packages),
+      ['guid-typescript-1.0.0', 'onnxruntime-v1.23.2'],
+    );
   } finally {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }

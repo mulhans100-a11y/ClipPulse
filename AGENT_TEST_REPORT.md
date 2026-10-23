@@ -5,20 +5,21 @@
 | Prüfung | Ergebnis | Messwerte |
 | --- | --- | --- |
 | `npm run build` | Bestanden | TypeScript, Main-Prozess und Vite-Renderer; im erfolgreichen `npm run package:win` erneut ausgeführt |
-| `npm test` | Bestanden | 63 bestanden, 0 fehlgeschlagen, 0 übersprungen; Node-Testlauf 21,21 s nach `npm ci` und Wiederherstellung der Electron-Distribution |
+| `npm test` | Bestanden | 64 bestanden, 0 fehlgeschlagen, 0 übersprungen; Node-Testlauf 26,40 s nach sauberem Install |
 | `npm run smoke-test` | Bestanden | CLI, Projekt erstellen/öffnen, Medienimport, Timeline split/move, FFmpeg/FFprobe, MP4-Export, MCP stdio; Version 0.1.2 |
 | `npm audit` | Bestanden | 0 Schwachstellen in allen Abhängigkeiten; `adm-zip` ist auf die korrigierte Version 0.6.1 aufgelöst |
-| Windows x64 NSIS-Paket | Bestanden | `ClipPulse Setup 0.1.2.exe`, 160.989.578 Byte; stille Installation in eindeutigem temporärem Ordner, App blieb 12 s geöffnet |
+| Windows x64 NSIS-Paket | Bestanden | `ClipPulse Setup 0.1.2.exe`, 161.463.269 Byte; stille Installation in eindeutigem temporärem Ordner, App blieb 12 s geöffnet |
 | Gepackter MCP-Server | Bestanden | Im installierten Paket 49 Werkzeuge aufgelistet; Diagnostics-Aufruf beantwortet |
 | Signatur | Nicht signiert | Windows meldet `NotSigned`; Electron-Standardicon, da kein Produkticon konfiguriert ist |
-| ONNX Runtime im lokalen Node-Prozess | Bestanden | Native Windows-x64-Bindung der auf 1.22.0 gepinnten Runtime wird geladen; Modellinferenz wurde damit nicht separat erneut gemessen |
+| ONNX Runtime im lokalen Node-Prozess | Bestanden | Native Windows-x64-Bindung der auf 1.23.2 gepinnten Runtime wird geladen; Modellinferenz wurde damit nicht separat erneut gemessen |
+| Aktuelle Linux-Installationsmatrix | Fehlgeschlagen, Ursache adressiert | Actions-Lauf #17 zeigte eine fehlerhafte Linux-CUDA-Paketpfadangabe in ONNX Runtime 1.22.0; der Kandidat verwendet jetzt 1.23.2 mit korrigiertem Pfad. Neuer Lauf ausstehend |
 | Build/Test-Matrix auf Windows, Linux, macOS arm64 und Intel | Vorheriger Stand bestanden | Actions-Lauf #15 prüfte Commit `b6ea427`; der aktuell geänderte Runtime-Pin braucht noch einen eigenen Matrix-Lauf |
 | macOS arm64 Paketierung | Vorheriger Stand bestanden | Actions-Lauf #15; der aktuelle Kandidat benötigt einen neuen Paketlauf |
-| macOS Intel Paketierung | Vorheriger Stand fehlgeschlagen, Ursache lokal behoben | Actions-Lauf #15 zeigte, dass das ONNX-Runtime-1.30.0-npm-Paket kein macOS-x64-Binding enthält. Der Kandidat pinnt 1.22.0 und verwendet nun die Zielarchitektur aus electron-builder; der Release-Lauf muss dies noch auf einem Intel-Runner nachweisen |
+| macOS Intel Paketierung | Vorheriger Stand fehlgeschlagen, Ursache lokal behoben | Actions-Lauf #15 zeigte, dass das ONNX-Runtime-1.30.0-npm-Paket kein macOS-x64-Binding enthält. Der Kandidat pinnt 1.23.2 und verwendet nun die Zielarchitektur aus electron-builder; der Release-Lauf muss dies noch auf einem Intel-Runner nachweisen |
 | Codex-/Claude-Host mit v0.1.2 | Nicht getestet | Ein früherer Codex-CLI-Lauf für v0.1.1 steht weiter unten; er belegt keinen aktuellen v0.1.2- oder Claude-Lauf |
 | 20 echte Gaming-Clips | Nicht getestet | Für diesen Kandidaten lagen keine lokalen autorisierten Medien vor; das reproduzierbare MCP-E2E nutzt synthetische Medien |
 
-Installer-SHA-256: `AF1F16E2D61C19DF21CFCC3E1275040EC443A1DBE5BABCE7BF729484538B8757`. `npm ci`, `npm run build`, `npm test`, `npm run smoke-test`, `npm audit`, Windows-Paketierung, isolierte Installer-Installation, gepackter MCP-Diagnostics-Aufruf und 12-Sekunden-App-Start wurden am 23. Oktober 2026 ausgeführt. Die lokalen Analyseberichte wurden zuvor am selben Tag mit `npm run evaluate:audio`, `npm run evaluate:valorant-fixture` und `npm run benchmark:preview` aktualisiert. Die Audio-, HUD- und Preview-Messungen sowie ihre Grenzen stehen in [evaluation/README.md](evaluation/README.md), [GAMEPLAY_HIGHLIGHTS.md](GAMEPLAY_HIGHLIGHTS.md) und [TIMELINE_PREVIEW.md](TIMELINE_PREVIEW.md).
+Installer-SHA-256: `6D64B2FEC8AF12A28E3F68BCBF8B2BA81492733FA16EA0EEE5901616B1685EC3`. `npm ci`, `npm run build`, `npm test`, `npm run smoke-test`, `npm audit`, Windows-Paketierung, isolierte Installer-Installation, gepackter MCP-Diagnostics-Aufruf und 12-Sekunden-App-Start wurden am 23. Oktober 2026 ausgeführt. Der Installer enthält ausschließlich die ONNX Runtime 1.23.2 Lizenzbeilage der tatsächlich gebündelten Runtime-Version. Die lokalen Analyseberichte wurden zuvor am selben Tag mit `npm run evaluate:audio`, `npm run evaluate:valorant-fixture` und `npm run benchmark:preview` aktualisiert. Die Audio-, HUD- und Preview-Messungen sowie ihre Grenzen stehen in [evaluation/README.md](evaluation/README.md), [GAMEPLAY_HIGHLIGHTS.md](GAMEPLAY_HIGHLIGHTS.md) und [TIMELINE_PREVIEW.md](TIMELINE_PREVIEW.md).
 
 > **Historischer Lauf:** Dieser Bericht dokumentiert den Windows-x64-Stand vom 22. Oktober 2026. Er ist kein Nachweis dafür, dass alle späteren, derzeit lokalen Änderungen bereits in diesem Lauf enthalten waren. Die neuere MCP-Onboarding-Prüfung und ihre Grenzen stehen in [MCP_SETUP.md](MCP_SETUP.md).
 

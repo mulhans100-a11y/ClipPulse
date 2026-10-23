@@ -2,7 +2,7 @@
 
 ## 0.1.2 Beta — Music-aligned agent editing (2026-10-23)
 
-- Pinned ONNX Runtime Node to 1.22.0, whose published package includes the macOS Intel native binding absent from 1.30.0; kept `adm-zip` on the fixed 0.6.1 release and bundled matching upstream ONNX notices. Native-runtime pruning now follows electron-builder's requested target architecture.
+- Pinned ONNX Runtime Node to 1.23.2, whose published package includes the macOS Intel native binding absent from 1.30.0 and corrected Linux CUDA package paths; kept `adm-zip` on the fixed 0.6.1 release and bundled matching upstream ONNX notices. Native-runtime pruning now follows electron-builder's requested target architecture.
 - Reworked the public README around the implemented desktop, shared-core agent workflow, installation requirements, beta limitations, and documentation links; added repository-metadata and demo-video proposals without changing GitHub settings or releases.
 - Clarified the two-input agent montage workflow after one-time project/library setup, including automatic selection across project videos and the remaining explicit project-path requirement.
 - Corrected stale user-facing OpenMontage branding while preserving legacy project/API identifiers and added a v0.1.1 release-description draft that is explicitly separate from the already published release.

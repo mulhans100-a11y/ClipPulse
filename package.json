@@ -58,7 +58,7 @@
     "wait-on": "^9.5.1"
   },
   "overrides": {
-    "onnxruntime-node": "1.22.0",
+    "onnxruntime-node": "1.23.2",
     "adm-zip": "0.6.1"
   },
   "build": {
