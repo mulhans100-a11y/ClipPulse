@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const asar = require('@electron/asar');
+const { Arch } = require('builder-util');
 
 const projectRoot = path.resolve(__dirname, '..');
 
@@ -83,7 +84,7 @@ exports.default = async function copyThirdPartyNotices(context) {
     const upstreamNotices = packageName === 'guid-typescript'
       ? supplementalNotices.filter((noticeDirectory) => noticeDirectory === `guid-typescript-${packageVersion}`)
       : packageName.startsWith('onnxruntime-')
-        ? supplementalNotices.filter((noticeDirectory) => noticeDirectory === 'onnxruntime-v1.30.0')
+        ? supplementalNotices.filter((noticeDirectory) => noticeDirectory === `onnxruntime-v${packageVersion}`)
       : [];
     const fileReferences = [
       ...(files.length ? [`\`LICENSES/${packageKey}/\``] : []),
@@ -136,13 +137,15 @@ function pruneForeignOnnxRuntimeBinaries(context) {
   for (const platformEntry of fs.readdirSync(napiRoot, { withFileTypes: true })) {
     if (!platformEntry.isDirectory()) continue;
     const platformPath = path.join(napiRoot, platformEntry.name);
-    if (platformEntry.name !== process.platform) {
+    const targetPlatform = context.electronPlatformName;
+    if (platformEntry.name !== targetPlatform) {
       fs.rmSync(platformPath, { recursive: true, force: true });
       continue;
     }
 
+    const targetArchitecture = getTargetArchitecture(context);
     for (const architectureEntry of fs.readdirSync(platformPath, { withFileTypes: true })) {
-      if (architectureEntry.isDirectory() && architectureEntry.name !== process.arch) {
+      if (architectureEntry.isDirectory() && architectureEntry.name !== targetArchitecture) {
         fs.rmSync(path.join(platformPath, architectureEntry.name), { recursive: true, force: true });
       }
     }
@@ -171,14 +174,22 @@ function verifyPackagedRuntime(context, packages) {
   const missingEntries = requiredEntries.filter((entry) => !entries.has(entry));
   if (missingEntries.length) throw new Error(`Packaged app.asar is missing required files: ${missingEntries.join(', ')}`);
 
-  const platform = process.platform;
-  const architecture = process.arch;
+  const platform = context.electronPlatformName;
+  const architecture = getTargetArchitecture(context);
   const nativeBinding = path.join(resources, 'app.asar.unpacked', 'node_modules', 'onnxruntime-node', 'bin', 'napi-v6', platform, architecture, 'onnxruntime_binding.node');
   if (!fs.existsSync(nativeBinding)) throw new Error(`Packaged ONNX Runtime native binding is missing for ${platform}/${architecture}: ${nativeBinding}`);
 
   const notices = path.join(resources, 'third-party-licenses', 'THIRD_PARTY_NOTICES.md');
   if (!fs.existsSync(notices) || fs.statSync(notices).size === 0) throw new Error('Packaged third-party license notices were not generated.');
   if (!fs.existsSync(path.join(resources, 'third-party-licenses', 'LICENSES'))) throw new Error('Packaged third-party license directory is missing.');
+}
+
+function getTargetArchitecture(context) {
+  const architecture = Object.entries(Arch).find(([name, value]) => name === name.toLowerCase() && value === context.arch)?.[0];
+  if (!architecture || architecture === 'universal') {
+    throw new Error(`Cannot resolve the single target architecture from electron-builder context: ${context.arch}`);
+  }
+  return architecture;
 }
 
 function getPackagedResourcesDirectory(context) {
@@ -191,3 +202,5 @@ function getPackagedResourcesDirectory(context) {
 }
 
 exports.getPackagedResourcesDirectory = getPackagedResourcesDirectory;
+exports.getTargetArchitecture = getTargetArchitecture;
+exports.pruneForeignOnnxRuntimeBinaries = pruneForeignOnnxRuntimeBinaries;
