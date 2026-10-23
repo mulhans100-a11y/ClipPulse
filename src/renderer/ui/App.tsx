@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Bot, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
 import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GameplayEventType, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
-import type { McpClientTarget, McpConnectionTest, McpSetupConfiguration } from '../../shared/electron';
+import type { McpClientTarget, McpConnectionTest, McpExistingConfiguration, McpSetupConfiguration } from '../../shared/electron';
 import { add as addTime, compare, decimal, frameTime, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
@@ -750,17 +750,33 @@ export default function App() {
 function McpSetupModal({ onClose }: { onClose: () => void }) {
   const [client, setClient] = useState<McpClientTarget>('codex');
   const [roots, setRoots] = useState<string[]>([]);
+  const [existingConfiguration, setExistingConfiguration] = useState<McpExistingConfiguration | null>(null);
+  const [loadingExisting, setLoadingExisting] = useState(true);
   const [connection, setConnection] = useState<McpConnectionTest | null>(null);
   const [configuration, setConfiguration] = useState<McpSetupConfiguration | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  async function chooseRoot() {
+  useEffect(() => {
+    let active = true;
+    setLoadingExisting(true);
+    setRoots([]); setExistingConfiguration(null); setConnection(null); setConfiguration(null); setError('');
+    void window.openmontage.getMcpClientConfiguration(client).then((snapshot) => {
+      if (!active) return;
+      setExistingConfiguration(snapshot);
+      setRoots(snapshot.allowedRoots);
+    }).catch((cause) => {
+      if (active) setError(cause instanceof Error ? cause.message : String(cause));
+    }).finally(() => { if (active) setLoadingExisting(false); });
+    return () => { active = false; };
+  }, [client]);
+
+  async function chooseRoot(purpose: 'media' | 'project-export') {
     setError('');
     try {
-      const root = await window.openmontage.chooseMcpAllowedRoot();
+      const root = await window.openmontage.chooseMcpAllowedRoot(purpose);
       if (!root) return;
-      setRoots((current) => current.includes(root) ? current : [...current, root]);
+      setRoots((current) => current.some((item) => (window.navigator.platform.startsWith('Win') ? item.toLocaleLowerCase('en-US') === root.toLocaleLowerCase('en-US') : item === root)) ? current : [...current, root]);
       setConnection(null); setConfiguration(null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
@@ -776,7 +792,11 @@ function McpSetupModal({ onClose }: { onClose: () => void }) {
   }
   async function createConfiguration() {
     setBusy(true); setError('');
-    try { setConfiguration(await window.openmontage.configureMcpClient(client, roots)); }
+    try {
+      const result = await window.openmontage.configureMcpClient(client, roots);
+      setConfiguration(result);
+      setExistingConfiguration({ serverNames: [result.serverName], allowedRoots: result.allowedRoots, duplicateEntries: 0 });
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   }
@@ -784,25 +804,26 @@ function McpSetupModal({ onClose }: { onClose: () => void }) {
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
     <section className="project-settings-modal mcp-setup-modal" role="dialog" aria-modal="true" aria-labelledby="mcp-setup-title">
       <div className="montage-modal-heading"><div><span className="eyebrow">LOCAL AGENT CONNECTION</span><h2 id="mcp-setup-title">Connect an AI agent</h2></div><button type="button" className="square-button" disabled={busy} onClick={onClose} title="Close">×</button></div>
-      <p>Choose an MCP client and the folders it may use. ClipPulse adds one local stdio server entry and makes a dated backup before changing an existing configuration.</p>
+      <p>Choose an MCP client and the folders it may use. ClipPulse keeps one managed server entry, updates it when you change these folders, and saves a dated backup first.</p>
       <label className="mcp-client-select"><span>Agent client</span><select value={client} onChange={(event) => { setClient(event.target.value as McpClientTarget); setConnection(null); setConfiguration(null); }}><option value="codex">OpenAI Codex</option><option value="claude-code">Claude Code</option></select></label>
-      <div className="mcp-access-note"><strong>Folder permissions</strong><span>The connected agent can read and write files inside every folder below. Keep these grants narrow; choose a source-media folder and a separate project or export folder if possible.</span></div>
-      <div className="mcp-roots-heading"><span>Allowed folders</span><button type="button" className="text-action" onClick={() => void chooseRoot()}><Plus size={12} /> Add folder</button></div>
+      <div className="mcp-access-note"><strong>Folder permissions</strong><span>The agent can read and write inside every folder below. Add the Medal/source clips, music, and a permanent project/export folder. A new Codex chat’s own <code>outputs</code> folder is not included automatically; use a stable folder you select here.</span></div>
+      {existingConfiguration?.serverNames.length ? <div className="mcp-existing-config">Existing ClipPulse setup found: <code>{existingConfiguration.serverNames.join(', ')}</code>{existingConfiguration.duplicateEntries > 0 && ` · ${existingConfiguration.duplicateEntries} duplicate ${existingConfiguration.duplicateEntries === 1 ? 'entry' : 'entries'} will be consolidated`}</div> : null}
+      <div className="mcp-roots-heading"><span>Allowed folders {loadingExisting ? '· loading saved access…' : ''}</span><div className="mcp-root-actions"><button type="button" className="text-action" onClick={() => void chooseRoot('media')} disabled={busy || loadingExisting}><Plus size={12} /> Add media/music</button><button type="button" className="text-action" onClick={() => void chooseRoot('project-export')} disabled={busy || loadingExisting}><Plus size={12} /> Add project/export</button></div></div>
       <div className="mcp-roots-list">
         {roots.map((root) => <div className="mcp-root" key={root}><FolderOpen size={14} /><span title={root}>{root}</span><button type="button" onClick={() => removeRoot(root)} aria-label={`Remove ${root}`} title="Remove folder">×</button></div>)}
-        {!roots.length && <div className="mcp-empty-roots">Select at least one media or project folder to continue.</div>}
+        {!roots.length && !loadingExisting && <div className="mcp-empty-roots">Add source clips, music, and the permanent folder where projects and exports should be saved.</div>}
       </div>
       {connection && <div className={`mcp-connection-result ${connection.diagnostics.ffmpeg?.compatible === false ? 'attention' : 'success'}`}>
         <strong>{connection.server.name} {connection.server.version} · {connection.toolCount} tools available</strong>
         <span>MCP stdio initialization, tool discovery, and the harmless diagnostics call succeeded on {connection.diagnostics.platform}{connection.diagnostics.node ? ` · ${connection.diagnostics.node}` : ''}.</span>
         {connection.diagnostics.ffmpeg?.compatible === false && <span className="mcp-ffmpeg-warning">MCP is connected, but FFmpeg/FFprobe need attention: {connection.diagnostics.ffmpeg.message ?? 'An available compatible FFmpeg/FFprobe pair was not detected.'}</span>}
       </div>}
-      {configuration && <div className="mcp-configuration-result"><strong>Configuration created</strong><span>{client === 'codex' ? 'Codex' : 'Claude Code'} · server <code>{configuration.serverName}</code></span><small>Configuration: {configuration.configPath}</small>{configuration.backupPath && <small>Backup: {configuration.backupPath}</small>}<small>Restart the selected client to load ClipPulse tools.</small></div>}
+      {configuration && <div className="mcp-configuration-result"><strong>Configuration {configuration.action === 'updated' ? 'updated' : 'created'}</strong><span>{client === 'codex' ? 'Codex' : 'Claude Code'} · server <code>{configuration.serverName}</code></span>{configuration.removedDuplicateEntries > 0 && <small>Removed {configuration.removedDuplicateEntries} duplicate ClipPulse server {configuration.removedDuplicateEntries === 1 ? 'entry' : 'entries'}.</small>}<small>Configuration: {configuration.configPath}</small>{configuration.backupPath && <small>Backup: {configuration.backupPath}</small>}<small>Restart the selected client to load ClipPulse tools with these folders.</small></div>}
       {error && <div className="modal-error">{error}</div>}
       <div className="modal-actions">
         <button type="button" onClick={onClose} disabled={busy}>Close</button>
-        <button type="button" onClick={() => void testConnection()} disabled={busy || roots.length === 0}>{busy && !configuration ? 'Testing…' : 'Test connection'}</button>
-        <button type="button" className="primary" onClick={() => void createConfiguration()} disabled={busy || !connection}>{busy && connection ? 'Saving…' : 'Create configuration'}</button>
+        <button type="button" onClick={() => void testConnection()} disabled={busy || loadingExisting || roots.length === 0}>{busy && !configuration ? 'Testing…' : 'Test connection'}</button>
+        <button type="button" className="primary" onClick={() => void createConfiguration()} disabled={busy || loadingExisting || !connection}>{busy && connection ? 'Saving…' : existingConfiguration?.serverNames.length ? 'Update configuration' : 'Create configuration'}</button>
       </div>
       <div className="mcp-client-note">Claude Desktop uses Anthropic’s Desktop Extensions flow; this setup targets Claude Code. See MCP_SETUP.md for current client instructions and copyable examples.</div>
     </section>

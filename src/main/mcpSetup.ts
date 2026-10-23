@@ -11,11 +11,18 @@ export interface McpLaunchConfiguration { command: string; args: string[]; env?:
 export interface McpConfigurationResult {
   client: McpClientTarget;
   serverName: string;
+  action: 'created' | 'updated';
+  removedDuplicateEntries: number;
   configPath: string;
   backupPath?: string;
   command: string;
   args: string[];
   allowedRoots: string[];
+}
+export interface McpExistingConfiguration {
+  serverNames: string[];
+  allowedRoots: string[];
+  duplicateEntries: number;
 }
 
 const MAX_ALLOWED_ROOTS = 24;
@@ -54,6 +61,30 @@ export async function canonicalizeAllowedRoots(roots: unknown): Promise<string[]
   return unique;
 }
 
+export async function getExistingMcpConfiguration(client: McpClientTarget, configPath?: string): Promise<McpExistingConfiguration> {
+  const resolvedConfigPath = path.resolve(configPath ?? getMcpClientConfigPath(client));
+  const existing = await readRegularConfig(resolvedConfigPath);
+  if (!existing) return { serverNames: [], allowedRoots: [], duplicateEntries: 0 };
+
+  let entries: Array<{ name: string; args: unknown }>;
+  if (client === 'codex') {
+    entries = findManagedCodexEntries(existing.contents).map(({ name, start, end }) => ({
+      name,
+      args: readCodexArgs(existing.contents.slice(start, end))
+    }));
+  } else {
+    const current = parseClaudeConfig(existing.contents, resolvedConfigPath);
+    const servers = asPlainObject(current.mcpServers, 'mcpServers', resolvedConfigPath);
+    entries = Object.entries(servers).filter(([name, value]) => isManagedClaudeEntry(name, value)).map(([name, value]) => ({
+      name,
+      args: (value as Record<string, unknown>).args
+    }));
+  }
+
+  const allowedRoots = uniqueRoots(entries.flatMap((entry) => rootsFromArgs(entry.args)));
+  return { serverNames: entries.map(({ name }) => name), allowedRoots, duplicateEntries: Math.max(0, entries.length - 1) };
+}
+
 export async function installMcpConfiguration(input: {
   client: McpClientTarget;
   roots: string[];
@@ -67,18 +98,29 @@ export async function installMcpConfiguration(input: {
   const existing = await readRegularConfig(configPath);
   let serverName: string;
   let nextContents: string;
+  let action: McpConfigurationResult['action'];
+  let removedDuplicateEntries = 0;
 
   if (input.client === 'codex') {
     const current = existing?.contents ?? '';
     if (/^\s*mcp_servers\s*=\s*\{/m.test(current)) {
       throw new Error('Codex uses an inline mcp_servers table that ClipPulse cannot safely extend. The file was left unchanged; use the copied TOML example in MCP Setup documentation.');
     }
-    serverName = findFreeTomlServerName(current);
-    nextContents = appendCodexEntry(current, serverName, input.launch);
+    const managed = findManagedCodexEntries(current);
+    const cleaned = removeRanges(current, managed.map(({ start, end }) => ({ start, end })));
+    const existingNames = managed.map((entry) => entry.name);
+    serverName = chooseTomlServerName(cleaned, existingNames);
+    action = managed.length ? 'updated' : 'created';
+    removedDuplicateEntries = Math.max(0, managed.length - 1);
+    nextContents = appendCodexEntry(cleaned, serverName, input.launch);
   } else {
     const current = existing?.contents ? parseClaudeConfig(existing.contents, configPath) : {};
     const servers = asPlainObject(current.mcpServers, 'mcpServers', configPath);
-    serverName = findFreeJsonServerName(servers);
+    const managed = Object.entries(servers).filter(([name, value]) => isManagedClaudeEntry(name, value));
+    for (const [name] of managed) delete servers[name];
+    serverName = chooseJsonServerName(servers, managed.map(([name]) => name));
+    action = managed.length ? 'updated' : 'created';
+    removedDuplicateEntries = Math.max(0, managed.length - 1);
     servers[serverName] = { type: 'stdio', command: input.launch.command, args: [...input.launch.args], ...(input.launch.env ? { env: { ...input.launch.env } } : {}) };
     current.mcpServers = servers;
     nextContents = `${JSON.stringify(current, null, 2)}\n`;
@@ -86,7 +128,7 @@ export async function installMcpConfiguration(input: {
 
   const backupPath = existing ? await createConfigBackup(configPath, existing.mode) : undefined;
   await writeConfigAtomically(configPath, nextContents, existing?.mode ?? 0o600);
-  return { client: input.client, serverName, configPath, ...(backupPath ? { backupPath } : {}), command: input.launch.command, args: [...input.launch.args], allowedRoots };
+  return { client: input.client, serverName, action, removedDuplicateEntries, configPath, ...(backupPath ? { backupPath } : {}), command: input.launch.command, args: [...input.launch.args], allowedRoots };
 }
 
 export interface McpConnectionTestResult {
@@ -218,6 +260,92 @@ function appendCodexEntry(current: string, serverName: string, launch: McpLaunch
   const env = launch.env ? `env = { ${Object.entries(launch.env).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join(', ')} }\n` : '';
   const section = `# Added by ClipPulse MCP Setup\n[mcp_servers.${serverName}]\ncommand = ${command}\nargs = ${args}\n${env}`;
   return `${current}${current && !current.endsWith('\n') ? '\n' : ''}${current.trimEnd() ? '\n' : ''}${section}`;
+}
+
+interface ManagedCodexEntry { name: string; start: number; end: number; }
+
+function findManagedCodexEntries(current: string): ManagedCodexEntry[] {
+  const marker = /^# Added by ClipPulse MCP Setup[ \t]*\r?\n[ \t]*\[mcp_servers\.([A-Za-z0-9_-]+)\][^\r\n]*(?:\r?\n|$)/gm;
+  const result: ManagedCodexEntry[] = [];
+  const matches = [...current.matchAll(marker)];
+  for (let index = 0; index < matches.length; index++) {
+    const match = matches[index];
+    const start = match.index;
+    const headerEnd = start + match[0].length;
+    const nextSection = /^\s*\[(?!\[)[^\]\r\n]+\][ \t]*(?:#.*)?\r?$/gm;
+    nextSection.lastIndex = headerEnd;
+    const following = nextSection.exec(current);
+    const nextManagedStart = matches[index + 1]?.index ?? current.length;
+    result.push({ name: match[1], start, end: Math.min(following?.index ?? current.length, nextManagedStart) });
+  }
+  return result;
+}
+
+function removeRanges(source: string, ranges: Array<{ start: number; end: number }>): string {
+  if (!ranges.length) return source;
+  let result = '';
+  let cursor = 0;
+  for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
+    result += source.slice(cursor, range.start);
+    cursor = range.end;
+  }
+  return result + source.slice(cursor);
+}
+
+function chooseTomlServerName(cleanedConfig: string, managedNames: string[]): string {
+  const existingNames = new Set(getTomlServerNames(cleanedConfig));
+  if (managedNames.length) {
+    // Prefer the stable base name when it is available. If a user-owned entry
+    // already uses it, keep the name of the ClipPulse-managed entry instead.
+    if (!existingNames.has('clippulse')) return 'clippulse';
+    const managedName = managedNames.find((name) => !existingNames.has(name));
+    if (managedName) return managedName;
+  }
+  return findFreeTomlServerName(cleanedConfig);
+}
+
+function chooseJsonServerName(servers: Record<string, unknown>, managedNames: string[]): string {
+  if (managedNames.length) {
+    if (!Object.prototype.hasOwnProperty.call(servers, 'clippulse')) return 'clippulse';
+    const managedName = managedNames.find((name) => !Object.prototype.hasOwnProperty.call(servers, name));
+    if (managedName) return managedName;
+  }
+  return findFreeJsonServerName(servers);
+}
+
+function getTomlServerNames(current: string): string[] {
+  const names: string[] = [];
+  const section = /^\s*\[\s*mcp_servers\s*\.\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))(?:\s*\]|\s*\.)/gm;
+  for (const match of current.matchAll(section)) names.push(match[1] ?? match[2] ?? match[3]);
+  return names;
+}
+
+function isManagedClaudeEntry(name: string, value: unknown): boolean {
+  if (!/^clippulse(?:-\d+)?$/i.test(name) || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const server = value as Record<string, unknown>;
+  if (server.type !== 'stdio' || typeof server.command !== 'string' || !/clippulse/i.test(server.command) || !Array.isArray(server.args)) return false;
+  const args = server.args.filter((arg): arg is string => typeof arg === 'string');
+  return args.includes('mcp-server') && args.some((arg) => /(?:^|[\\/])cli\.js$/i.test(arg)) && args.includes('--allow-root');
+}
+
+function readCodexArgs(section: string): unknown {
+  const match = /^\s*args\s*=\s*(\[[^\r\n]*\])\s*(?:#.*)?$/m.exec(section);
+  if (!match) return undefined;
+  try { return JSON.parse(match[1]) as unknown; } catch { return undefined; }
+}
+
+function rootsFromArgs(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const args = value.filter((arg): arg is string => typeof arg === 'string');
+  const roots: string[] = [];
+  for (let index = 0; index < args.length - 1; index++) {
+    if (args[index] === '--allow-root') roots.push(args[index + 1]);
+  }
+  return roots;
+}
+
+function uniqueRoots(roots: string[]): string[] {
+  return roots.filter((root, index) => roots.findIndex((candidate) => (process.platform === 'win32' ? candidate.toLocaleLowerCase('en-US') === root.toLocaleLowerCase('en-US') : candidate === root)) === index);
 }
 
 function findFreeTomlServerName(current: string): string {

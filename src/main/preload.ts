@@ -18,7 +18,8 @@ function toFileUrl(filePath: string): string {
 
 const api: OpenMontageApi = {
   version: () => ipcRenderer.invoke('app:version'),
-  chooseMcpAllowedRoot: () => ipcRenderer.invoke('agentMcp:chooseRoot'),
+  chooseMcpAllowedRoot: (purpose) => ipcRenderer.invoke('agentMcp:chooseRoot', purpose),
+  getMcpClientConfiguration: (client) => ipcRenderer.invoke('agentMcp:load', client),
   configureMcpClient: (client, roots) => ipcRenderer.invoke('agentMcp:configure', client, roots),
   testMcpConnection: (roots) => ipcRenderer.invoke('agentMcp:test', roots),
   createProject: () => ipcRenderer.invoke('project:create'),

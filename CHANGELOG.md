@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+## 0.1.3 Beta — Reliable AI-agent connection (2026-10-23)
+
+- Reuse and update a single ClipPulse MCP entry instead of creating a numbered entry on each setup; consolidate only ClipPulse-managed duplicates and preserve unrelated servers with a dated backup.
+- Load current folder grants into Agent Setup, provide separate media/music and project/export folder pickers, and explain that chat-specific output folders require an explicit grant.
+- Add actionable guidance to path-denied responses without broadening filesystem access.
+
 ## 0.1.2 Beta — Music-aligned agent editing (2026-10-23)
 
 - Pinned ONNX Runtime Node to 1.23.2, whose published package includes the macOS Intel native binding absent from 1.30.0 and corrected Linux CUDA package paths; kept `adm-zip` on the fixed 0.6.1 release and bundled matching upstream ONNX notices. Native-runtime pruning now follows electron-builder's requested target architecture.

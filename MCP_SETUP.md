@@ -7,13 +7,13 @@ ClipPulse exposes its existing versioned Agent API through an MCP stdio server. 
 1. Install and open ClipPulse.
 2. Select **Agent** in the top toolbar, or **Connect AI agent** on the welcome screen.
 3. Choose **OpenAI Codex** or **Claude Code**.
-4. Add the folders containing source media and ClipPulse projects/exports. ClipPulse resolves and displays the exact folder grants.
+4. Add the folders containing source clips, music, and a permanent project/export location. The setup dialog loads existing ClipPulse folders so you can add or remove grants without losing the others.
 5. Select **Test connection**. ClipPulse starts its local stdio server, initializes MCP, lists the tools, then calls only `diagnostics`. The test does not create projects or modify selected folders or source media.
-6. Select **Create configuration**, then restart the chosen client.
+6. Select **Create configuration** for a new setup or **Update configuration** for an existing one, then restart the chosen client.
 
-The connected agent can read and write files inside every selected folder. Agent tools enforce those roots for projects, imports, analysis caches, and exports. Grant only the folders needed. A folder grant is not read-only: do not select a source folder if the agent must not be allowed to change its contents. Keep source media outside project/export folders when possible. ClipPulse itself does not modify imported original media during editing or export.
+The connected agent can read and write files inside every selected folder. Agent tools enforce those roots for projects, imports, analysis caches, and exports. Grant only the folders needed. A folder grant is not read-only: do not select a source folder if the agent must not be allowed to change its contents. Keep source media outside project/export folders when possible. ClipPulse itself does not modify imported original media during editing or export. Codex chat-specific working folders (for example a chat's own `outputs` folder) are not included automatically; choose a stable project/export folder in the setup dialog and ask the agent to save there.
 
-When a client configuration already exists, setup preserves other entries and first writes a timestamped `.bak` backup. It chooses a unique server name (`clippulse`, `clippulse-2`, and so on) rather than replacing an existing entry. Symbolic-link configuration files, malformed Claude JSON, and Codex's unsupported inline `mcp_servers = { ... }` layout are left unchanged with an explanation.
+When a client configuration already exists, setup preserves other entries and first writes a timestamped `.bak` backup. It updates the existing ClipPulse server entry and its folder grants in place. Older duplicate entries created by previous ClipPulse setup runs are consolidated, while unrelated or manually managed servers remain unchanged. Symbolic-link configuration files, malformed Claude JSON, and Codex's unsupported inline `mcp_servers = { ... }` layout are left unchanged with an explanation. The setup dialog displays previously granted folders and lets you remove a grant before saving.
 
 ## How the installed MCP process starts
 
@@ -76,14 +76,14 @@ The test has a 20-second timeout and does not create/open a project, write in se
 - **The client does not show ClipPulse tools:** restart Codex or Claude Code, then inspect `codex mcp list` or `claude mcp list` / `/mcp`.
 - **ClipPulse fails to start after moving the app:** reopen Agent Setup and recreate the entry. The configuration contains both the app executable and the packaged CLI path.
 - **Connection test times out or initialization fails:** confirm the installation is complete, the configured app executable still exists, and selected folders remain accessible to your OS account. Reinstall the same ClipPulse version if packaged files are missing.
-- **Folder permission error:** reselect existing folders. A parent folder grants access to all content below it; keep roots narrow.
+- **Folder permission error:** use a project/export destination inside one of the listed folders, or add a stable folder with **Add project/export** and select **Update configuration**. A per-chat `outputs` folder outside the list is intentionally denied. A parent folder grants access to all content below it; keep roots narrow.
 - **MCP connects but export is unavailable:** install compatible FFmpeg and FFprobe and restart the agent client. ClipPulse needs FFmpeg 6+ with `drawtext` and `libx264`.
 - **Codex inline configuration error:** ClipPulse leaves that file unchanged. Review the current file, then use Codex's standard `[mcp_servers.<name>]` table or its `codex mcp add` command.
 - **Claude configuration is invalid JSON:** ClipPulse leaves it unchanged. Repair or restore the file from its backup before retrying.
-- **A different ClipPulse server entry already exists:** setup preserves it and adds a numbered entry. Remove an old entry through the client's own MCP management command after checking which entry is active.
+- **Old numbered ClipPulse entries exist:** opening setup loads their grants. Select **Update configuration** to consolidate ClipPulse-managed duplicates into one server entry; unrelated MCP entries are preserved and a backup is written first.
 
 ## Verification status
 
-On the current Windows x64 host, `npm run build`, all 58 automated tests, the MCP connection test through Electron, Codex's CLI config parsing, and a separately packaged unpacked app's MCP initialize/tools/diagnostics smoke test passed. The public NSIS installer has not been built in this run. A fully authenticated Codex agent request has not been verified. Claude Code is not installed in this environment, so a Claude Code client session is not claimed as tested. Linux and macOS packaging/runtime behavior has not been tested in this local run.
+For the v0.1.3 beta candidate on Windows x64, `npm run build`, all 66 automated tests, `npm run smoke-test`, `npm audit --omit=dev` (0 vulnerabilities), Windows NSIS packaging, and the installed-app smoke test passed. The installer contains the application archive, the Windows ONNX native binding, and third-party notices; the packaged MCP server initialized, listed 49 tools, and answered diagnostics. The local installer and app are unsigned. A fresh authenticated Codex editing turn has not been verified. Claude Code is not installed in this environment, so a Claude Code client session is not claimed as tested. Linux and macOS packaging/runtime behavior remains subject to the tag-triggered release workflow.
 
 See [`AGENT_API.md`](AGENT_API.md) for the versioned tool, transport, and filesystem permission contract.

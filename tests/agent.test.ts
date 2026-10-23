@@ -31,7 +31,9 @@ test('agent service exposes versioned tools and rejects paths outside granted ro
   assert.ok(schema.tools.some((item: any) => item.name === 'timeline_add_clip'));
   assert.ok(schema.tools.some((item: any) => item.name === 'mask_segment'));
   const outside = path.join(path.dirname(root), 'outside.omproj');
-  await assert.rejects(service.call('project_create', { projectPath: outside }), (error: any) => error.code === 'PATH_PERMISSION_DENIED');
+  await assert.rejects(service.call('project_create', { projectPath: outside }), (error: any) => error.code === 'PATH_PERMISSION_DENIED' && /Choose a project\/export location inside an allowed folder/.test(error.message));
+  const nestedOutput = await service.call('project_create', { projectPath: path.join(root, 'Edits', 'inside-granted-root.omproj') });
+  assert.equal(nestedOutput.filePath, path.join(root, 'Edits', 'inside-granted-root.omproj'));
   await assert.rejects(service.call('render_status', { projectPath: path.join(root, 'agent.omproj'), jobId: '..\\..\\outside' }), (error: any) => error.code === 'INVALID_ARGUMENTS');
   assert.equal((await service.call('diagnostics', {})).schemaVersion, 1);
 });

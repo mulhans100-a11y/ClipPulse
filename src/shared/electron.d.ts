@@ -1,9 +1,16 @@
 import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageOptions, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 
 export type McpClientTarget = 'codex' | 'claude-code';
+export interface McpExistingConfiguration {
+  serverNames: string[];
+  allowedRoots: string[];
+  duplicateEntries: number;
+}
 export interface McpSetupConfiguration {
   client: McpClientTarget;
   serverName: string;
+  action: 'created' | 'updated';
+  removedDuplicateEntries: number;
   configPath: string;
   backupPath?: string;
   command: string;
@@ -19,7 +26,8 @@ export interface McpConnectionTest {
 
 export interface OpenMontageApi {
   version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; compatible: boolean; message?: string }>;
-  chooseMcpAllowedRoot(): Promise<string | null>;
+  chooseMcpAllowedRoot(purpose?: 'media' | 'project-export'): Promise<string | null>;
+  getMcpClientConfiguration(client: McpClientTarget): Promise<McpExistingConfiguration>;
   configureMcpClient(client: McpClientTarget, roots: string[]): Promise<McpSetupConfiguration>;
   testMcpConnection(roots: string[]): Promise<McpConnectionTest>;
   createProject(): Promise<{ project: Project; path: string } | null>;

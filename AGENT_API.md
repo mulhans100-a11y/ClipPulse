@@ -56,7 +56,7 @@ The desktop app's **Agent** setup dialog configures Codex or Claude Code and tes
 }
 ```
 
-Claude Code reads user servers from `~/.claude.json`; Codex reads stdio servers from `~/.codex/config.toml`. Both paths can be customized by their client environment variables. The configuration manager creates dated backups, preserves other entries, and chooses a numbered server name if `clippulse` already exists. See [`MCP_SETUP.md`](MCP_SETUP.md) for the current documented formats, app onboarding, troubleshooting, and the Claude Desktop limitation.
+Claude Code reads user servers from `~/.claude.json`; Codex reads stdio servers from `~/.codex/config.toml`. Both paths can be customized by their client environment variables. The configuration manager creates dated backups, preserves unrelated entries, updates its existing ClipPulse server with the selected roots, and consolidates duplicate entries previously created by ClipPulse setup. Paths outside the selected roots remain denied; project/export paths must be inside a stable approved folder. See [`MCP_SETUP.md`](MCP_SETUP.md) for the current documented formats, app onboarding, troubleshooting, and the Claude Desktop limitation.
 
 The process speaks newline-delimited MCP JSON-RPC on stdin/stdout; diagnostics go nowhere on stdout. It implements `initialize`, `ping`, `tools/list`, and `tools/call`; malformed JSON/requests produce protocol errors without terminating the server. No network listener is created for MCP. The legacy development CLI remains supported:
 

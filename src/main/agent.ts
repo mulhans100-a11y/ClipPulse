@@ -471,7 +471,7 @@ export class AgentService {
         const targetInfo = await fs.lstat(requested).catch(() => undefined);
         if (targetInfo?.isSymbolicLink()) throw new AppError('PATH_SYMLINK_DENIED', `Unreadable symbolic link is not allowed: ${requested}`, { cause: error });
         canonical = await this.resolveProspectivePath(requested);
-        if (!this.allowedRoots.some((root) => isWithin(root, canonical))) throw new AppError('PATH_PERMISSION_DENIED', `Path is outside granted roots: ${requested}`);
+        if (!this.allowedRoots.some((root) => isWithin(root, canonical))) throw new AppError('PATH_PERMISSION_DENIED', pathPermissionMessage(requested));
         throw new AppError('PATH_NOT_FOUND', `Granted path does not exist: ${requested}`, { cause: error });
       }
     } else {
@@ -484,7 +484,7 @@ export class AgentService {
       else canonical = await this.resolveProspectivePath(requested);
     }
     const allowed = this.allowedRoots.some((root) => isWithin(root, canonical));
-    if (!allowed) throw new AppError('PATH_PERMISSION_DENIED', `Path is outside granted roots: ${requested}`);
+    if (!allowed) throw new AppError('PATH_PERMISSION_DENIED', pathPermissionMessage(requested));
     return requested;
   }
 
@@ -730,6 +730,10 @@ function validateValue(rule: any, value: unknown, location: string): void {
   } else if (rule.type === 'boolean' && typeof value !== 'boolean') throw new AppError('INVALID_ARGUMENTS', `${location} must be a boolean.`);
   if (rule.enum && value !== null && !rule.enum.includes(value)) throw new AppError('INVALID_ARGUMENTS', `${location} must be one of: ${rule.enum.join(', ')}.`);
 }
+function pathPermissionMessage(requested: string): string {
+  return `Path is outside the folders granted to ClipPulse: ${requested}. Choose a project/export location inside an allowed folder, or add a stable folder in ClipPulse Agent setup and update the MCP configuration.`;
+}
+
 function isWithin(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));

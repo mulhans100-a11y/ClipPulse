@@ -21,7 +21,7 @@ import { generateClipModelMask } from '../core/modelSegmentation';
 import { PersistentMediaJobQueue, mediaJobQueuePath, type MediaJobSource } from '../core/mediaJobs';
 import type { AutoMontageOptions, MediaAsset, Project, Rational, SegmentationOptions, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
-import { buildMcpServerArgs, canonicalizeAllowedRoots, installMcpConfiguration, testMcpConnection, type McpClientTarget } from './mcpSetup';
+import { buildMcpServerArgs, canonicalizeAllowedRoots, getExistingMcpConfiguration, installMcpConfiguration, testMcpConnection, type McpClientTarget } from './mcpSetup';
 
 const here = __dirname;
 let mainWindow: BrowserWindow | null = null;
@@ -219,11 +219,18 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('will-quit', () => { void stopFolderWatchers().catch((error) => console.error('Could not close folder watchers:', error)); });
 
 ipcMain.handle('app:version', async () => ({ appVersion: app.getVersion(), ...await ffmpegAvailable() }));
-ipcMain.handle('agentMcp:chooseRoot', async (event) => {
+ipcMain.handle('agentMcp:chooseRoot', async (event, purpose: 'media' | 'project-export' = 'media') => {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('MCP setup is available only in the ClipPulse window.');
-  const response = await dialog.showOpenDialog(mainWindow, { title: 'Choose an allowed media or project folder', properties: ['openDirectory'] });
+  if (purpose !== 'media' && purpose !== 'project-export') throw new Error('Choose a media or project/export folder.');
+  const title = purpose === 'project-export' ? 'Choose a permanent project or export folder' : 'Choose a source media or music folder';
+  const response = await dialog.showOpenDialog(mainWindow, { title, properties: ['openDirectory'] });
   if (response.canceled || !response.filePaths[0]) return null;
   return (await canonicalizeAllowedRoots([response.filePaths[0]]))[0];
+});
+ipcMain.handle('agentMcp:load', async (event, client: McpClientTarget) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('MCP setup is available only in the ClipPulse window.');
+  if (client !== 'codex' && client !== 'claude-code') throw new Error('Choose Codex or Claude Code.');
+  return getExistingMcpConfiguration(client);
 });
 ipcMain.handle('agentMcp:configure', async (event, client: McpClientTarget, roots: unknown) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('MCP setup is available only in the ClipPulse window.');
