@@ -48,8 +48,8 @@ jobs:
               release/*.dmg
               release/*.zip
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.16.0
           cache: npm
@@ -64,23 +64,28 @@ jobs:
         run: choco install ffmpeg --yes --no-progress
       - name: Install FFmpeg on Linux
         if: matrix.ffmpeg == 'linux'
-        run: |
-          # GitHub's Ubuntu image can point at an Azure mirror that stalls in CI.
-          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install --yes ffmpeg
+        run: bash scripts/install-ffmpeg-linux.sh
       - name: Install FFmpeg on macOS
         if: matrix.ffmpeg == 'macos'
         run: |
           brew install ffmpeg-full
           echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - run: npm ci
-      - name: Verify FFmpeg features used by the editor
-        run: node scripts/verify-ffmpeg-ci.cjs
       - name: Audit production dependencies
         run: npm audit --omit=dev
       - run: npm run build
+      - name: Verify FFmpeg features used by the editor
+        run: node scripts/verify-ffmpeg-ci.cjs
       - run: npm test
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ClipPulse-agent-e2e-report-${{ github.ref_name }}-${{ matrix.id }}
+          path: test-results/agent-e2e-*.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Run CLI, media, export, and MCP smoke tests
+        run: npm run smoke-test
       - name: Build native package
         run: node scripts/build-native-package.cjs ${{ matrix.builderArgs }} --publish never
         env:
@@ -101,12 +106,18 @@ jobs:
           $installer = Get-ChildItem -LiteralPath release -Filter '*.exe' -File | Select-Object -First 1
           if (-not $installer) { throw 'NSIS installer was not produced.' }
           ./scripts/smoke-test-windows-installer.ps1 -InstallerPath $installer.FullName
+      - name: Verify Linux AppImage permissions
+        if: matrix.id == 'linux-x64'
+        run: |
+          appimage="$(find release -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage" || { echo 'AppImage was not produced.'; exit 1; }
+          test -x "$appimage" || { echo "AppImage is missing its executable bit: $appimage"; exit 1; }
       - name: Generate CycloneDX SBOM
         if: matrix.id == 'linux-x64'
         run: npm sbom --sbom-format=cyclonedx --sbom-type=application > "release/ClipPulse-${GITHUB_REF_NAME}-sbom.cdx.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ClipPulse-${{ matrix.id }}
+          name: ClipPulse-${{ github.ref_name }}-${{ matrix.id }}
           path: ${{ matrix.artifacts }}
           if-no-files-found: error
           retention-days: 14
@@ -118,22 +129,47 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: ClipPulse-*
+          pattern: ClipPulse-${{ github.ref_name }}-*
           path: release
           merge-multiple: true
-      - name: Add release status and checksums
+      - name: Add versioned release status and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          cat > release/RELEASE-STATUS.md <<'EOF'
-          This is an automatically assembled draft. Review platform startup and signing before publishing it.
+          status_file="ClipPulse-${RELEASE_TAG}-RELEASE-STATUS.md"
+          checksum_file="ClipPulse-${RELEASE_TAG}-SHA256SUMS.txt"
+          cat > "release/${status_file}" <<EOF
+          This is an automatically assembled draft for ${RELEASE_TAG}. Review platform installation, license notices, and signing before publishing it.
 
           Windows and macOS signing are enabled only when the matching repository Actions secrets are configured. FFmpeg is a separate user-installed dependency. The CycloneDX SBOM lists the locked npm dependency tree; it does not include FFmpeg or the model downloaded on first use.
           EOF
-          cd release
-          sha256sum * > SHA256SUMS.txt
+          (
+            cd release
+            for file in *; do
+              [[ "$file" == "${checksum_file}" ]] && continue
+              sha256sum "$file"
+            done
+          ) > "release/${checksum_file}"
+          (cd release && sha256sum --check "${checksum_file}")
+      - name: Refuse to modify an existing GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to change it."
+            exit 1
+          fi
       - name: Create GitHub draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --generate-notes --draft --verify-tag
+        run: |
+          notes_file="V${GITHUB_REF_NAME#v}_RELEASE_NOTES.md"
+          if [[ -f "$notes_file" ]]; then
+            gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --notes-file "$notes_file" --draft --verify-tag
+          else
+            gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --generate-notes --draft --verify-tag
+          fi

@@ -54,7 +54,7 @@ export async function getOptionalAnalysisRuntimes(): Promise<OptionalAnalysisRun
   }
 
   return [
-    { id: 'ffmpeg', label: 'FFmpeg', status: ffmpeg.ffmpeg && ffmpeg.ffprobe ? 'ready' : 'missing', message: ffmpeg.message ?? 'Required for local audio/video analysis.' },
+    { id: 'ffmpeg', label: 'FFmpeg', status: ffmpeg.ffmpeg && ffmpeg.ffprobe && ffmpeg.compatible ? 'ready' : 'missing', message: ffmpeg.message ?? 'FFmpeg 6 or newer with drawtext and libx264, plus ffprobe 6 or newer, is required for local editing and export.' },
     tesseract,
     gameRules,
     modelStatus

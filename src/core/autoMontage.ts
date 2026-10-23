@@ -26,27 +26,32 @@ const PRESETS: Record<AutoMontageStyle, Preset> = {
   clean: {
     targetShotSeconds: 4.2, minShotSeconds: 2.4, maxShotSeconds: 7.4, leadSeconds: 1.2, tailSeconds: 1.1, cutRatio: 0.48,
     videoAudioVolume: 0.28, musicVolume: 0.92, fadeSeconds: 0.12,
-    anchorPreference: { drop: 1, downbeat: 0.95, beat: 0.62, onset: 0.25, paced: 0.05 }
+    anchorPreference: { drop: 1, accent: 0.92, downbeat: 0.95, beat: 0.62, onset: 0.25, paced: 0.05 }
   },
   aggressive: {
     targetShotSeconds: 1.9, minShotSeconds: 0.8, maxShotSeconds: 3.5, leadSeconds: 0.65, tailSeconds: 0.6, cutRatio: 0.5,
     videoAudioVolume: 0.2, musicVolume: 1, fadeSeconds: 0.04,
-    anchorPreference: { drop: 1, downbeat: 0.85, beat: 0.8, onset: 0.62, paced: 0.05 }
+    anchorPreference: { drop: 1, accent: 0.98, downbeat: 0.85, beat: 0.8, onset: 0.62, paced: 0.05 }
   },
   cinematic: {
     targetShotSeconds: 5.8, minShotSeconds: 3.2, maxShotSeconds: 9.5, leadSeconds: 2, tailSeconds: 1.8, cutRatio: 0.43,
     videoAudioVolume: 0.3, musicVolume: 0.86, fadeSeconds: 0.34,
-    anchorPreference: { drop: 1, downbeat: 0.95, beat: 0.48, onset: 0.2, paced: 0.05 }
+    anchorPreference: { drop: 1, accent: 0.94, downbeat: 0.95, beat: 0.48, onset: 0.2, paced: 0.05 }
+  },
+  smooth: {
+    targetShotSeconds: 4.8, minShotSeconds: 3, maxShotSeconds: 7.2, leadSeconds: 1.6, tailSeconds: 1.4, cutRatio: 0.46,
+    videoAudioVolume: 0.28, musicVolume: 0.9, fadeSeconds: 0.24,
+    anchorPreference: { drop: 0.82, accent: 0.88, downbeat: 1, beat: 0.56, onset: 0.18, paced: 0.08 }
   },
   velocity: {
     targetShotSeconds: 2.8, minShotSeconds: 1.1, maxShotSeconds: 5.2, leadSeconds: 0.95, tailSeconds: 0.9, cutRatio: 0.5,
     videoAudioVolume: 0.2, musicVolume: 1, fadeSeconds: 0.06,
-    anchorPreference: { drop: 1, downbeat: 0.88, beat: 0.78, onset: 0.58, paced: 0.05 }
+    anchorPreference: { drop: 1, accent: 0.96, downbeat: 0.88, beat: 0.78, onset: 0.58, paced: 0.05 }
   },
   custom: {
     targetShotSeconds: 3.5, minShotSeconds: 1.2, maxShotSeconds: 7, leadSeconds: 1, tailSeconds: 1, cutRatio: 0.5,
     videoAudioVolume: 0.25, musicVolume: 0.95, fadeSeconds: 0.1,
-    anchorPreference: { drop: 1, downbeat: 0.9, beat: 0.68, onset: 0.4, paced: 0.05 }
+    anchorPreference: { drop: 1, accent: 0.9, downbeat: 0.9, beat: 0.68, onset: 0.4, paced: 0.05 }
   }
 };
 
@@ -63,6 +68,7 @@ interface EventCandidate {
   decisive: number;
   end: number;
   reviewStatus?: 'accepted' | 'corrected';
+  eventType?: AnalysisEvent['eventType'];
   highlightScore: number;
   framingScore: number;
   eventLabel: string;
@@ -91,6 +97,8 @@ export function buildAutomaticMontagePlans(input: AutoMontageAnalysisInput): Aut
     return analysis.events.flatMap((event) => {
       const review = asset.analysisEventReviews?.find((item) => item.eventId === event.id);
       if (review?.status === 'rejected') return [];
+      const eventType = review?.status === 'corrected' && review.correctedEventType ? review.correctedEventType : event.eventType;
+      if (review?.status !== 'accepted' && review?.status !== 'corrected' && ['quiet_passage', 'unknown', 'kill_feed_change'].includes(eventType ?? '')) return [];
       const start = review?.status === 'corrected' ? review.startSeconds : event.startSeconds;
       const decisive = review?.status === 'corrected' ? review.decisiveSeconds : event.decisiveSeconds;
       const end = review?.status === 'corrected' ? review.endSeconds : event.endSeconds;
@@ -111,7 +119,7 @@ export function buildAutomaticMontagePlans(input: AutoMontageAnalysisInput): Aut
         event.rankScore * 0.42 + event.confidence * 100 * 0.2 + event.interestingness * 100 * 0.13 + rating * 0.13 + corroboration * 0.07 + framingScore * 0.05 + (asset.favorite ? 3 : 0) + reviewBonus,
         0, 100
       );
-      return [{ asset, event, start, decisive, end, reviewStatus: review?.status === 'accepted' || review?.status === 'corrected' ? review.status : undefined, highlightScore: round(highlightScore), framingScore, eventLabel: labelForEvent(event) }];
+      return [{ asset, event, start, decisive, end, reviewStatus: review?.status === 'accepted' || review?.status === 'corrected' ? review.status : undefined, eventType, highlightScore: round(highlightScore), framingScore, eventLabel: labelForEvent(event, eventType) }];
     });
   });
   if (!eventCandidates.length) throw new AppError('NO_HIGHLIGHTS_FOUND', 'No usable highlight events were found in the selected videos. Run highlight analysis, review its cues, or select videos that contain detected events. Rejected events are excluded.');
@@ -318,7 +326,8 @@ function placeEvents(
         const pacing = round(clamp(1 - Math.abs(duration - targetShot) / Math.max(maxShot, 0.1), 0, 1) * 100);
         const sameAssetPenalty = (assetCounts.get(candidate.asset.id) ?? 0) * 20 + (priorAssetUses.get(candidate.asset.id) ?? 0) * (variant > 1 ? 12 : 0);
         const sameGamePenalty = candidate.asset.game ? (gameCounts.get(candidate.asset.game.toLowerCase()) ?? 0) * 8 : 0;
-        const sameKindPenalty = (kindCounts.get(candidate.event.kind) ?? 0) * 5;
+        const eventKindKey = candidate.eventType ?? candidate.event.kind;
+        const sameKindPenalty = (kindCounts.get(eventKindKey) ?? 0) * 5;
         const priorEventPenalty = priorEvents.has(uniqueEventKey) ? 18 : 0;
         const usableEvent: AutoMontageSegment = {
           index: index + 1,
@@ -328,6 +337,7 @@ function placeEvents(
           game: candidate.asset.game,
           eventId: candidate.event.id,
           eventKind: candidate.event.kind,
+          ...(candidate.eventType ? { eventType: candidate.eventType } : {}),
           eventLabel: candidate.eventLabel,
           reviewStatus: candidate.reviewStatus,
           sourceEventStartSeconds: candidate.start,
@@ -346,7 +356,10 @@ function placeEvents(
           detectors: structuredClone(candidate.event.detectors),
           explanation: ''
         };
-        const utility = candidate.highlightScore * 0.53 + musicFit * 0.27 + framing * 0.06 + pacing * 0.14 - sameAssetPenalty - sameGamePenalty - sameKindPenalty - priorEventPenalty;
+        const impact = eventImpact(candidate.eventType);
+        const strongMoment = ['drop', 'accent', 'downbeat'].includes(anchor.kind) ? 1 : anchor.kind === 'beat' ? 0.35 : 0;
+        const impactAlignmentBonus = impact * strongMoment * anchor.strength * 0.16;
+        const utility = candidate.highlightScore * 0.53 + musicFit * 0.27 + framing * 0.06 + pacing * 0.14 + impactAlignmentBonus - sameAssetPenalty - sameGamePenalty - sameKindPenalty - priorEventPenalty;
         return [{ usableEvent, utility, candidate, uniqueEventKey }];
       });
       if (!possible.length) { failedIndex = index; break; }
@@ -354,8 +367,9 @@ function placeEvents(
       const choice = possible[0];
       const segment = choice.usableEvent;
       const rationale = [
-        `highlight ${segment.score.highlight}/100`,
+      `highlight ${segment.score.highlight}/100`,
         `${segment.anchorKind} music anchor ${segment.targetAnchorSeconds.toFixed(3)}s`,
+      ...(eventImpact(segment.eventType) >= 45 && ['drop', 'accent', 'downbeat'].includes(segment.anchorKind) ? ['high-impact event prioritized on a strong musical accent'] : []),
         `${segment.alignmentErrorFrames} output-frame sync error`,
         `${segment.score.pacing}/100 pacing`,
         segment.game ? `game ${segment.game}` : undefined,
@@ -369,7 +383,8 @@ function placeEvents(
         const game = choice.candidate.asset.game.toLowerCase();
         gameCounts.set(game, (gameCounts.get(game) ?? 0) + 1);
       }
-      kindCounts.set(choice.candidate.event.kind, (kindCounts.get(choice.candidate.event.kind) ?? 0) + 1);
+      const eventKindKey = choice.candidate.eventType ?? choice.candidate.event.kind;
+      kindCounts.set(eventKindKey, (kindCounts.get(eventKindKey) ?? 0) + 1);
     }
     if (failedIndex < 0) {
       const maxAllowed = maxShot * 1.18 + 1 / fps;
@@ -418,19 +433,29 @@ function chooseMusicAnchors(analysis: AudioAnalysis, duration: number, fps: Rati
 
 function buildMusicAnchors(analysis: AudioAnalysis, fps: Rational): MusicAnchor[] {
   const candidates: MusicAnchor[] = [];
-  const addCandidates = (times: number[], kind: MusicAnchor['kind'], strength: number) => {
-    for (const time of times) {
+  type SignalAnchor = number | { timeSeconds: number; strength: number; confidence?: number };
+  const addCandidates = (items: SignalAnchor[], kind: MusicAnchor['kind'], fallbackStrength: number) => {
+    for (const item of items) {
+      const time = typeof item === 'number' ? item : item.timeSeconds;
       if (!Number.isFinite(time) || time < 0) continue;
       const snapped = snapToFrame(time, fps);
       const energyIndex = Math.floor(time / Math.max(analysis.energyHopSeconds, 0.001));
       const energy = analysis.energyCurve[energyIndex] ?? 0.5;
-      candidates.push({ time: snapped, kind, strength: round(clamp(strength * 0.72 + energy * 0.28, 0, 1)) });
+      const signalStrength = typeof item === 'number'
+        ? fallbackStrength
+        : clamp(item.strength * (0.55 + 0.45 * (item.confidence ?? 0.5)), 0, 1);
+      candidates.push({ time: snapped, kind, strength: round(clamp(signalStrength * 0.72 + energy * 0.28, 0, 1)) });
     }
   };
-  addCandidates(analysis.drops, 'drop', 1);
-  addCandidates(analysis.downbeats, 'downbeat', 0.88);
-  addCandidates(analysis.beats, 'beat', 0.62);
-  addCandidates(analysis.onsets, 'onset', 0.42);
+  const structureEvents = analysis.structureEvents ?? [];
+  const drops = structureEvents.filter((event) => event.type === 'drop');
+  const accents = structureEvents.filter((event) => event.type === 'strong_accent');
+  const gridDownbeats = analysis.beatGrid?.filter((point) => point.downbeat) ?? [];
+  addCandidates(drops.length ? drops : analysis.drops, 'drop', 1);
+  addCandidates(accents.length ? accents : (analysis.accents ?? []), 'accent', 0.92);
+  addCandidates(gridDownbeats.length ? gridDownbeats : analysis.downbeats, 'downbeat', 0.88);
+  addCandidates(analysis.beatGrid?.length ? analysis.beatGrid : analysis.beats, 'beat', 0.62);
+  addCandidates(analysis.onsetEvents?.length ? analysis.onsetEvents : analysis.onsets, 'onset', 0.42);
   candidates.sort((a, b) => a.time - b.time || b.strength - a.strength);
   const merged: MusicAnchor[] = [];
   const tolerance = 1 / (Number(fps.num) / Number(fps.den));
@@ -467,7 +492,7 @@ function scorePlan(segments: AutoMontageSegment[], duration: number, targetShot:
 
 function validateOptions(options: AutoMontageOptions): void {
   if (!options || typeof options.musicMediaId !== 'string' || !options.musicMediaId) throw new AppError('INVALID_MONTAGE_OPTIONS', 'A music media ID is required.');
-  if (!['clean', 'aggressive', 'cinematic', 'velocity', 'custom'].includes(options.style)) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Choose a supported montage style.');
+  if (!['clean', 'aggressive', 'cinematic', 'smooth', 'velocity', 'custom'].includes(options.style)) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Choose a supported montage style.');
   if (!Number.isFinite(options.durationSeconds) || options.durationSeconds < 1 || options.durationSeconds > 1800) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Montage duration must be between 1 and 1800 seconds.');
   if (!Number.isInteger(options.variants) || options.variants < 1 || options.variants > 5) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Generate between one and five montage variants.');
   if (!Number.isFinite(options.intensity) || options.intensity < 0 || options.intensity > 1) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Cut intensity must be between 0 and 1.');
@@ -485,7 +510,7 @@ function validateCustomRules(rules: AutoMontageCustomRules | undefined): asserts
   if (!bounded(rules.leadSeconds, 0, 15) || !bounded(rules.tailSeconds, 0, 15)) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Custom lead-in and tail context must be between 0 and 15 seconds.');
   if (!bounded(rules.cutRatio, 0.25, 0.75)) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Custom cut position ratio must be between 0.25 and 0.75.');
   if (!bounded(rules.videoAudioVolume, 0, 1) || !bounded(rules.musicVolume, 0, 2)) throw new AppError('INVALID_MONTAGE_OPTIONS', 'Custom game audio must be between 0× and 1×; music volume must be between 0× and 2×.');
-  if (!rules.anchorPreference || !['drop', 'downbeat', 'beat', 'onset'].every((key) => bounded(rules.anchorPreference[key as keyof AutoMontageCustomRules['anchorPreference']], 0, 1)))
+  if (!rules.anchorPreference || !(['drop', 'downbeat', 'beat', 'onset'] as const).every((key) => bounded(rules.anchorPreference[key], 0, 1)) || (rules.anchorPreference.accent !== undefined && !bounded(rules.anchorPreference.accent, 0, 1)))
     throw new AppError('INVALID_MONTAGE_OPTIONS', 'Each custom music-anchor weight must be between 0 and 1.');
 }
 
@@ -516,10 +541,23 @@ function getPreset(style: AutoMontageStyle, rules?: AutoMontageCustomRules): Pre
 }
 
 function styleLabel(style: AutoMontageStyle): string {
-  return ({ clean: 'Clean Competitive', aggressive: 'Aggressive Gaming', cinematic: 'Cinematic', velocity: 'Velocity Pacing', custom: 'Custom' })[style];
+  return ({ clean: 'Clean Competitive', aggressive: 'Aggressive Gaming', cinematic: 'Cinematic', smooth: 'Smooth', velocity: 'Velocity Pacing', custom: 'Custom' })[style];
 }
 
-function labelForEvent(event: AnalysisEvent): string {
+function eventImpact(type?: AnalysisEvent['eventType']): number {
+  return ({ ace: 100, multi_kill: 88, clutch: 80, headshot: 72, kill: 62, round_end: 45, round_objective: 38 } as Partial<Record<NonNullable<AnalysisEvent['eventType']>, number>>)[type ?? 'unknown'] ?? 0;
+}
+
+function labelForEvent(event: AnalysisEvent, overrideType = event.eventType): string {
+  if (overrideType) {
+    const labels: Record<NonNullable<AnalysisEvent['eventType']>, string> = {
+      kill: 'Kill', headshot: 'Headshot', multi_kill: 'Multi-kill', ace: 'Ace', clutch: 'Clutch', clutch_situation: 'Possible clutch situation',
+      round_end: 'Round end', round_objective: 'Round objective', kill_feed_change: 'Possible kill-feed change', combat_activity: 'Combat activity',
+      fast_action_candidate: 'Fast action candidate', quiet_passage: 'Low-activity passage', audio_activity: 'Audio activity',
+      scene_change: 'Scene change', text_recognition: 'HUD text', unknown: 'Unclassified event'
+    };
+    return labels[overrideType];
+  }
   const gameEvent = event.detectors.find((detector) => typeof detector.evidence.gameEvent === 'string')?.evidence.gameEvent;
   if (typeof gameEvent === 'string') return gameEvent.replaceAll('_', ' ');
   return ({ audio_activity: 'Audio activity', scene_change: 'Scene change', motion_activity: 'Motion activity', text_recognition: 'HUD text', gameplay_event: 'Gameplay event', coincident_activity: 'Combined activity' })[event.kind];
@@ -535,7 +573,7 @@ function anchorUtility(anchor: MusicAnchor, preset: Preset, expectedTime: number
   return preset.anchorPreference[anchor.kind] * 70 + anchor.strength * 28 - distance * 5 + variantTieBreak;
 }
 
-function candidatePriority(kind: MusicAnchor['kind']): number { return ({ drop: 5, downbeat: 4, beat: 3, onset: 2, paced: 1 })[kind]; }
+function candidatePriority(kind: MusicAnchor['kind']): number { return ({ drop: 6, accent: 5, downbeat: 4, beat: 3, onset: 2, paced: 1 })[kind]; }
 
 function snapToFrame(value: number, fps: Rational): number {
   const frame = Math.round(value * Number(fps.num) / Number(fps.den));

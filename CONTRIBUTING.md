@@ -25,6 +25,6 @@ npm test
 
 Include a concise problem statement, design notes, validation commands and observed output, platform/runtime details, and screenshots for visible UI changes. Do not submit private media, secrets, non-redistributable models, or copyrighted song/game footage.
 
-## Code of conduct
+## Community expectations
 
-Be respectful, assume good faith, explain technical disagreements, and focus review on concrete behavior and maintainability. A formal community code of conduct may be adopted before public release.
+Be respectful, assume good faith, explain technical disagreements, and focus review on concrete behavior and maintainability. The repository is public, but it does not currently include a separate formal code-of-conduct document; contributors are expected to follow these project guidelines in issues and reviews.

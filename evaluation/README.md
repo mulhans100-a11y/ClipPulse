@@ -1,6 +1,6 @@
 # Phase C evaluation workflow
 
-OpenMontage ships the evaluation runner and a manifest template. It does not ship gameplay or commercial music recordings. Use material you are authorized to evaluate; keep private recordings outside the repository.
+ClipPulse ships the evaluation runner and a manifest template. It does not ship gameplay or commercial music recordings. Use material you are authorized to evaluate; keep private recordings outside the repository.
 
 ## Prepare a manifest
 
@@ -34,6 +34,14 @@ Historical baseline for analyzer `rms-onset-autocorrelation-v2` (22 October 2026
 
 Analyzer `spectral-flux-dynamic-beat-v4` was evaluated against the same 24 tracks: BPM MAE 11.70 on the eight fixed-tempo references, aggregate beat F1 0.678, and meter coverage 0.40. That is a 56% lower BPM error and a 0.141 absolute increase in beat F1 over the old baseline. Downbeat evaluation recorded zero true positives, and all meter estimates in the covered subset were wrong. The v4 tempo and beat results improved substantially; meter and downbeat tracking remain weak and uncalibrated. These scores come from a deliberately difficult reference set and are not a representative estimate for all music. The user-provided `Cornfield` track was analyzed at an estimated 96 BPM with 211 beat positions; it has no reference labels, so that result is exploratory, not scored.
 
+### Adaptive beat grid v5 evaluation
+
+Run `npm run evaluate:audio` to compile the frozen v4 reference analyzer and run it side by side with the current v5 analyzer. The runner creates deterministic local WAV stimuli across ambient, rock, metal, EDM, tempo-change, syncopation, build/drop, and silence cases, then scores both generations against the exact generated references. If the ignored local ARTBeaT dataset is available under `evaluation/.local/artbeat/`, the same run also scores those 24 eligible licensed tracks. It writes the machine-readable output to `reports/audio-analysis-evaluation.json`; the report includes Node/FFmpeg versions, evaluation time, explicit tolerances, per-case values, aggregate/category metrics, and the low-scoring tracks.
+
+Evaluation matching uses one-to-one nearest-event matching with 80 ms beat/accent tolerance, 120 ms downbeat tolerance, and 1.5 s drop tolerance. Quiet and build-up intervals require intersection-over-union of at least 0.5. Synthetic tempo maps are sampled once each second; abrupt tempo boundaries count as detected within 2 s. Global BPM MAE is only scored on constant-tempo references. Tempo values, meter, beats, and event confidence are heuristic and are not calibrated probabilities. ARTBeaT supplies beat/downbeat labels but not independently reviewed accents or section/drop labels, so section-structure precision/recall is reported only on synthetic stimuli. The comparison does not establish transfer to commercial soundtracks or all genres.
+
+The checked-in run was refreshed on 2026-10-23 (Node 24.16.0 / FFmpeg 9.0.2; 5.72 s). It measured ARTBeaT beat F1 0.6731 → 0.7175 (+0.0445 absolute) and matched timing MAE 45.3 ms → 44.4 ms. BPM MAE on eight fixed-tempo references was 35.46 → 17.55 BPM. ARTBeaT downbeat F1 remains very poor (0.0215 → 0.0225 at 120 ms), with 2 true positives and 142 false positives for v5. In seven synthetic cases, beat F1 changed 0.8426 → 0.8483 and MAE 27.32 → 27.27 ms; downbeat F1 changed 0.5658 → 0.6460. Local-tempo MAE changed 36.47 → 34.30 BPM, but this aggregate is dominated by pulse ambiguity in fast/syncopated cases. The continuous 90→150 BPM ramp was tracked at 2.41 BPM local MAE; an abrupt 75→150 BPM change was not split into local tempo segments. Synthetic accent F1 was 0.5686 (P 0.4754, R 0.7073, 29.9 ms matched MAE); drop F1 0.50 (1 TP, 2 FP); build-up F1 0.50 (1 TP, 2 FP); and quiet-interval F1 1.00 on the single labeled pause. These are deliberately small deterministic stimuli, not listener ratings. ARTBeaT remains a controlled rhythm challenge, not representative commercial music. Known weaknesses include a rhythmic-deception track with F1 0 in both analyzers and the syncopation track regressing from F1 0.5176 to 0.4267. The exact per-category/per-track data and the failure examples are in `reports/audio-analysis-evaluation.json`; treat that machine report as authoritative for reruns.
+
 Run the report after building:
 
 ```powershell
@@ -42,11 +50,13 @@ npm run cli -- evaluate-highlights --dataset .\evaluation\my-game.json --max-gap
 npm run cli -- analysis-runtimes
 ```
 
-The report includes per-detector precision, recall, F1, false positives and false negatives, plus score calibration diagnostics. `--max-gap` controls the allowed difference between predicted and annotated decisive timestamps. A missing Tesseract runtime is recorded as an OCR detector skip; the other local detectors continue. No model weights are downloaded or bundled.
+The report includes per-detector precision, recall, F1, false positives and false negatives, per-event-type precision/recall/F1 and mean absolute timing error, plus a clearly labeled time-only activity-cue baseline and score calibration diagnostics. `--max-gap` controls the allowed difference between predicted and annotated decisive timestamps. A missing Tesseract runtime is recorded as an OCR detector skip; the other local detectors continue. No gameplay model weights are downloaded or bundled.
 
 ## Game event phrase rules
 
-When a media asset has a game name, sampled OCR text is checked against explicit event phrases. Built-in profiles cover Valorant, Counter-Strike, Fortnite, Apex Legends, Overwatch, Call of Duty, OpenArena, and Anarch. To customize terms, copy `config/game-rules.example.json`, edit the profile aliases and event keywords, then set `OPENMONTAGE_GAME_RULES` to the JSON file before launching the desktop app or CLI. Matching normalizes case and punctuation and uses literal phrases; it does not run arbitrary expressions or download code. Phrase rules produce heuristic cues, not model predictions. Install Tesseract separately to enable OCR; use `analysis-runtimes` to check the detected state.
+When a media asset has a game name, sampled OCR text is checked against explicit event phrases. Built-in phrase profiles cover Valorant, Counter-Strike, Fortnite, Apex Legends, Overwatch, Call of Duty, OpenArena, and Anarch. Valorant additionally has a modular game adapter for typed HUD phrases and a normalized-coordinate tentative feed-row-change cue; the latter is not a kill claim. Other profiles retain phrase cues without claiming a trained game model. To customize terms, copy `config/game-rules.example.json`, edit the profile aliases and event keywords, then set `OPENMONTAGE_GAME_RULES` to the JSON file before launching the desktop app or CLI. Matching normalizes case and punctuation and uses literal phrases; it does not run arbitrary expressions or download code. Install Tesseract separately to enable OCR; use `analysis-runtimes` to check the detected state.
+
+The deterministic parser regression fixture and its legacy substring-rule comparison are documented in [`GAMEPLAY_HIGHLIGHTS.md`](../GAMEPLAY_HIGHLIGHTS.md). That synthetic text fixture does not measure OCR image recognition or gameplay event accuracy. No representative, independently annotated Valorant media is currently checked in or reported.
 
 ## Interpreting scores
 

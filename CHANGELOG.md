@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.2 Beta — Music-aligned agent editing (2026-10-23)
+
+- Reworked the public README around the implemented desktop, shared-core agent workflow, installation requirements, beta limitations, and documentation links; added repository-metadata and demo-video proposals without changing GitHub settings or releases.
+- Clarified the two-input agent montage workflow after one-time project/library setup, including automatic selection across project videos and the remaining explicit project-path requirement.
+- Corrected stale user-facing OpenMontage branding while preserving legacy project/API identifiers and added a v0.1.1 release-description draft that is explicitly separate from the already published release.
+- Added adaptive local-tempo beat tracking, a confidence-bearing beat grid, distinct transient/accent events, and build-up/drop/quiet section cues while preserving legacy audio fields and the v1 agent contract.
+- Added accent-aware montage anchors and a Smooth pacing preset; stronger highlight events receive an explainable preference on strong musical anchors.
+- Added a deterministic v4-versus-v5 audio evaluation runner and measured ARTBeaT/synthetic results with tolerances and documented failure cases.
+- Documented relative confidence semantics and the cache-version invalidation; v5 recomputes older cached audio analyses once.
+- Added typed, modular Valorant HUD phrase recognition with explicit evidence levels and normalized-coordinate tentative kill-feed change cues.
+- Combined audio, motion, and HUD provenance in explainable highlight scores; added fast-action and low-motion passage candidates with uncertainties.
+- Persisted manual event-type corrections through project metadata, montage planning, desktop review controls, and the versioned agent API.
+- Added event-type precision/recall/F1 and timestamp-error evaluation to local annotation reports, plus a deterministic synthetic text fixture compared with the legacy substring rules.
+- Documented that no representative authorized Valorant gameplay benchmark or compatible trained gameplay model is available; fixture scores are parser regression results only.
+
 ## 0.1.1 — ClipPulse branding and documentation
 
 - Renamed the desktop application, installer, command-line interface, and automation identity to ClipPulse.
@@ -10,7 +25,7 @@
 
 - Added electron-builder targets and native GitHub Actions release builds for Windows x64, Linux x64, macOS arm64, and macOS Intel.
 - Added a Windows fresh-runner installer/start smoke test, production dependency audit, CycloneDX SBOM, SHA-256 checksums, and draft-only GitHub release assembly.
-- Added signing-secret setup and manual artifact review instructions; no application release has been published.
+- Added signing-secret setup and manual artifact review instructions. The v0.1.0 release remained a draft; v0.1.1 later became the first published application pre-release.
 - Added per-platform production dependency license manifests and license text files to packaged application resources, including native `sharp`/libvips, version-matched ONNX Runtime, and `guid-typescript` notices.
 - Added Chokidar for cross-platform recursive media-folder watching, canonicalized Windows short paths before watch startup, and made watcher readiness and shutdown explicit.
 - Made optional OCR evaluation checks follow the detector's actual availability on each CI runner.

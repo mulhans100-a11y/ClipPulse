@@ -1,12 +1,67 @@
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { AppError } from './errors';
 import { buildClipPreviewFilters, clipSourceOffsetAt } from './clipEffects';
 import { appendCompositeLayer } from './compositing';
 import { runCommand, tail } from './ffmpeg';
-import { add, compare, decimal, rational, sub } from './time';
-import { isTrackEnabled, validateProject } from './project';
+import { add, compare, decimal, frameTime, rational, sub, toFrame } from './time';
+import { isTrackEnabled, timelineDuration, validateProject } from './project';
 import type { Project, Rational } from './types';
+
+export interface TimelinePreviewRange { start: Rational; duration: Rational; }
+
+/** Align playback previews to small frame-exact chunks so edits only invalidate ranges they touch. */
+export function timelinePreviewRangeAt(project: Project, requestedTime: Rational, chunkSeconds = 5): TimelinePreviewRange {
+  const total = timelineDuration(project);
+  if (compare(total, rational(0)) <= 0) throw new AppError('EMPTY_TIMELINE', 'Add at least one clip to the timeline before previewing.');
+  if (compare(requestedTime, rational(0)) < 0 || !Number.isFinite(chunkSeconds) || chunkSeconds <= 0) {
+    throw new AppError('INVALID_TIME', 'Preview time and chunk duration must be nonnegative and finite.');
+  }
+  const totalFrames = Math.max(1, toFrame(total, project.frameRate));
+  const requestedFrame = Math.min(totalFrames - 1, toFrame(requestedTime, project.frameRate));
+  const chunkFrames = Math.max(1, Math.round(chunkSeconds * Number(project.frameRate.num) / Number(project.frameRate.den)));
+  const firstFrame = Math.floor(requestedFrame / chunkFrames) * chunkFrames;
+  const start = frameTime(firstFrame, project.frameRate);
+  const maxChunk = frameTime(Math.min(chunkFrames, totalFrames - firstFrame), project.frameRate);
+  const remaining = sub(total, start);
+  return { start, duration: compare(remaining, maxChunk) < 0 ? remaining : maxChunk };
+}
+
+/** Hash only inputs that can affect a range, leaving cached, unrelated timeline sections reusable. */
+export function timelinePreviewCacheKey(project: Project, range: TimelinePreviewRange, quality: 'preview' | 'final' = 'preview'): string {
+  const end = add(range.start, range.duration);
+  const usedMediaIds = new Set<string>();
+  const tracks = project.tracks.flatMap((track) => {
+    if (!isTrackEnabled(project, track)) return [];
+    const clips = track.clips.filter((clip) => compare(clip.start, end) < 0 && compare(add(clip.start, clip.duration), range.start) > 0);
+    if (!clips.length) return [];
+    for (const clip of clips) usedMediaIds.add(clip.mediaId);
+    const hasAudioOutput = clips.some((clip) => {
+      const asset = project.media.find((item) => item.id === clip.mediaId);
+      return asset?.hasAudio && clip.audioEnabled && (track.kind === 'audio' || track.kind === 'video');
+    });
+    const renderSettings = {
+      kind: track.kind,
+      ...(hasAudioOutput ? {
+        volume: track.volume, volumeKeyframes: track.volumeKeyframes,
+        audioRole: track.audioRole, normalizeAudio: track.normalizeAudio, duckUnderDialogue: track.duckUnderDialogue
+      } : {})
+    };
+    return [{ ...renderSettings, clips: clips.map(({ id: _id, ...clip }) => clip) }];
+  });
+  const media = project.media.filter((asset) => usedMediaIds.has(asset.id)).map((asset) => ({
+    id: asset.id, path: asset.path, kind: asset.kind, hasAudio: asset.hasAudio,
+    contentHash: asset.contentHash, sizeBytes: asset.sizeBytes, modifiedAt: asset.modifiedAt,
+    width: asset.width, height: asset.height, frameRate: asset.frameRate
+  }));
+  const inputs = {
+    version: 2, quality, projectId: project.id,
+    profile: { width: project.width, height: project.height, frameRate: project.frameRate },
+    range, tracks, media
+  };
+  return createHash('sha256').update(JSON.stringify(inputs)).digest('hex').slice(0, 32);
+}
 
 /** Render one frame of the visible video-track composite at a timeline time. */
 export async function renderTimelineFrame(project: Project, timelineTime: Rational, outputPath: string, overwrite = true): Promise<string> {

@@ -67,6 +67,29 @@ export interface DetectorEvaluationResult {
   confidenceCalibration: { brierScore: number; expectedCalibrationError: number; bins: Array<{ lowerBound: number; upperBound: number; count: number; meanConfidence: number; observedPrecision: number }> } | null;
 }
 
+export interface GameplayEventEvaluationResult {
+  eventType: string;
+  truePositives: number;
+  falsePositives: number;
+  falseNegatives: number;
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  meanAbsoluteTimingErrorSeconds: number | null;
+}
+
+export interface GameplayCueBaselineResult {
+  method: 'legacy-time-only-activity-cues';
+  truePositives: number;
+  falsePositives: number;
+  falseNegatives: number;
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  meanAbsoluteTimingErrorSeconds: number | null;
+  note: string;
+}
+
 export interface HighlightEvaluationReport {
   datasetId: string;
   game: string;
@@ -79,6 +102,8 @@ export interface HighlightEvaluationReport {
   disputedAnnotations: number;
   matchToleranceSeconds: number;
   detectorResults: DetectorEvaluationResult[];
+  gameplayEventResults: GameplayEventEvaluationResult[];
+  gameplayCueBaseline: GameplayCueBaselineResult;
   musicResults: MusicEvaluationResult[];
   musicByCategory: Array<{ category: string; items: number; bpmMeanAbsoluteError: number | null; beatF1: number | null; downbeatF1: number | null; meterAccuracy: number | null; meterCoverage: number | null }>;
   musicSummary: { bpmMeanAbsoluteError: number | null; beatPrecision: number | null; beatRecall: number | null; beatF1: number | null; downbeatPrecision: number | null; downbeatRecall: number | null; downbeatF1: number | null; tempoScoreCalibration: { brierScore: number; expectedCalibrationError: number } | null; meterAccuracy: number | null; meterCoverage: number | null; meterScoreCalibration: { brierScore: number; expectedCalibrationError: number } | null };
@@ -178,6 +203,8 @@ export async function evaluateHighlightDataset(datasetPath: string, matchToleran
     };
   });
   const musicEntries = dataset.items.flatMap((item, index) => item.musicAnnotations?.length ? [{ item, analysis: analyses[index].audioAnalysis, mediaPath: analyses[index].mediaPath }] : []);
+  const gameplayEventResults = evaluateGameplayEventTypes(analyses, matchToleranceSeconds);
+  const gameplayCueBaseline = evaluateLegacyCueBaseline(analyses, matchToleranceSeconds);
   const musicResults = musicEntries.map(({ item, analysis, mediaPath }) => evaluateMusicItem(item, analysis, mediaPath));
   const beatCounts = musicResults.reduce((counts, item) => ({ tp: counts.tp + item.beatTruePositives, fp: counts.fp + item.beatFalsePositives, fn: counts.fn + item.beatFalseNegatives }), { tp: 0, fp: 0, fn: 0 });
   const downbeatCounts = musicResults.reduce((counts, item) => ({ tp: counts.tp + item.downbeatTruePositives, fp: counts.fp + item.downbeatFalsePositives, fn: counts.fn + item.downbeatFalseNegatives }), { tp: 0, fp: 0, fn: 0 });
@@ -204,6 +231,8 @@ export async function evaluateHighlightDataset(datasetPath: string, matchToleran
     disputedAnnotations: analyses.reduce((sum, entry) => sum + entry.disputedAnnotations, 0),
     matchToleranceSeconds,
     detectorResults,
+    gameplayEventResults,
+    gameplayCueBaseline,
     musicResults,
     musicByCategory: summarizeMusicByCategory(musicResults),
     musicSummary: {
@@ -218,6 +247,61 @@ export async function evaluateHighlightDataset(datasetPath: string, matchToleran
     items: analyses.map(({ mediaPath, analysis, consensus }) => ({ mediaPath, analysis, referenceEvents: consensus.length }))
   };
 }
+
+function evaluateGameplayEventTypes(analyses: Array<{ analysis: HighlightAnalysis; consensus: ConsensusLabel[] }>, tolerance: number): GameplayEventEvaluationResult[] {
+  const excludedGenericTypes = new Set(['audio_activity', 'scene_change', 'text_recognition', 'unknown']);
+  const eventTypes = new Set<string>();
+  for (const item of analyses) {
+    for (const label of item.consensus) eventTypes.add(normalizeEventType(label.eventType));
+    for (const event of item.analysis.events) if (event.eventType && !excludedGenericTypes.has(event.eventType)) eventTypes.add(event.eventType);
+  }
+  return [...eventTypes].sort().map((eventType) => {
+    const truths = analyses.flatMap((entry, mediaIndex) => entry.consensus.filter((label) => normalizeEventType(label.eventType) === eventType).map((label) => ({ mediaIndex, label })));
+    const predictions = analyses.flatMap((entry, mediaIndex) => entry.analysis.events.filter((event) => event.eventType && normalizeEventType(event.eventType) === eventType).map((event) => ({ mediaIndex, event })));
+    const unmatched = new Set(predictions.map((_item, index) => index));
+    let truePositives = 0;
+    let absoluteTimingError = 0;
+    for (const truth of truths) {
+      const match = [...unmatched].map((index) => ({ index, prediction: predictions[index], delta: Math.abs(predictions[index].event.decisiveSeconds - truth.label.decisiveSeconds) }))
+        .filter((candidate) => candidate.prediction.mediaIndex === truth.mediaIndex && candidate.delta <= tolerance)
+        .sort((a, b) => a.delta - b.delta)[0];
+      if (match) { unmatched.delete(match.index); truePositives++; absoluteTimingError += match.delta; }
+    }
+    const falsePositives = unmatched.size;
+    const falseNegatives = truths.length - truePositives;
+    const precision = safeRatio(truePositives, truePositives + falsePositives) ?? (falseNegatives > 0 ? 0 : null);
+    const recall = safeRatio(truePositives, truePositives + falseNegatives);
+    return { eventType, truePositives, falsePositives, falseNegatives, precision, recall, f1: f1Score(truePositives, falsePositives, falseNegatives), meanAbsoluteTimingErrorSeconds: truePositives ? absoluteTimingError / truePositives : null };
+  });
+}
+
+function evaluateLegacyCueBaseline(analyses: Array<{ analysis: HighlightAnalysis; consensus: ConsensusLabel[] }>, tolerance: number): GameplayCueBaselineResult {
+  const cues = analyses.flatMap((entry, mediaIndex) => entry.analysis.events
+    .filter((event) => event.eventType !== 'quiet_passage' && event.eventType !== 'kill_feed_change')
+    .map((event) => ({ mediaIndex, event })));
+  const truths = analyses.flatMap((entry, mediaIndex) => entry.consensus.map((label) => ({ mediaIndex, label })));
+  const unmatched = new Set(cues.map((_item, index) => index));
+  let truePositives = 0;
+  let absoluteTimingError = 0;
+  for (const truth of truths) {
+    const match = [...unmatched].map((index) => ({ index, prediction: cues[index], delta: Math.abs(cues[index].event.decisiveSeconds - truth.label.decisiveSeconds) }))
+      .filter((candidate) => candidate.prediction.mediaIndex === truth.mediaIndex && candidate.delta <= tolerance)
+      .sort((a, b) => a.delta - b.delta)[0];
+    if (match) { unmatched.delete(match.index); truePositives++; absoluteTimingError += match.delta; }
+  }
+  const falsePositives = unmatched.size;
+  const falseNegatives = truths.length - truePositives;
+  const precision = safeRatio(truePositives, truePositives + falsePositives) ?? (falseNegatives > 0 ? 0 : null);
+  const recall = safeRatio(truePositives, truePositives + falseNegatives);
+  return {
+    method: 'legacy-time-only-activity-cues', truePositives, falsePositives, falseNegatives,
+    precision, recall, f1: f1Score(truePositives, falsePositives, falseNegatives),
+    meanAbsoluteTimingErrorSeconds: truePositives ? absoluteTimingError / truePositives : null,
+    note: 'This is a time-only cue baseline: legacy scene/audio/motion/HUD candidates count as a hit without checking the event label. It is not a rerun of the pre-change detector binaries.'
+  };
+}
+
+function normalizeEventType(value: string): string { return value.trim().normalize('NFKC').toLocaleLowerCase().replace(/[\s-]+/g, '_'); }
 
 function summarizeMusicByCategory(items: MusicEvaluationResult[]): HighlightEvaluationReport['musicByCategory'] {
   const categories = new Map<string, MusicEvaluationResult[]>();

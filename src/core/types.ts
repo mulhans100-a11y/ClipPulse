@@ -79,8 +79,45 @@ export interface EnergySection {
   meanEnergy: number;
 }
 
+/** A locally estimated tempo interval. Values are heuristic estimates in quarter-note BPM. */
+export interface TempoSegment {
+  startSeconds: number;
+  endSeconds: number;
+  bpm: number;
+  confidence: number;
+}
+
+/** One point on the analyzed pulse grid. Confidence is a relative signal score, not a probability. */
+export interface BeatGridPoint {
+  timeSeconds: number;
+  index: number;
+  confidence: number;
+  strength: number;
+  downbeat: boolean;
+}
+
+/** A detected transient that may be a beat, subdivision, or offbeat event. */
+export interface AudioOnset {
+  timeSeconds: number;
+  strength: number;
+  confidence: number;
+}
+
+export type MusicStructureEventType = 'strong_accent' | 'build_up' | 'drop' | 'quiet' | 'section_change';
+
+/** Larger musical events, distinct from individual onset detections and regular beats. */
+export interface MusicStructureEvent {
+  type: MusicStructureEventType;
+  timeSeconds: number;
+  endSeconds?: number;
+  confidence: number;
+  strength: number;
+  signals: string[];
+}
+
 export interface AudioAnalysis {
-  method: 'spectral-flux-dynamic-beat-v4';
+  /** v4 remains readable for projects and fixtures created by earlier releases. */
+  method: 'spectral-flux-dynamic-beat-v4' | 'spectral-flux-adaptive-beat-v5';
   sampleRate: number;
   hopSeconds: number;
   durationSeconds: number;
@@ -88,6 +125,10 @@ export interface AudioAnalysis {
   bpmHypotheses: BpmHypothesis[];
   beatPhaseSeconds?: number;
   beats: number[];
+  /** Additive, confidence-bearing view of `beats`. */
+  beatGrid?: BeatGridPoint[];
+  /** Local tempo estimates; can reveal a tempo change hidden by the global BPM. */
+  tempoSegments?: TempoSegment[];
   meter?: MeterEstimate;
   downbeats: number[];
   energyHopSeconds: number;
@@ -95,10 +136,18 @@ export interface AudioAnalysis {
   energySections: EnergySection[];
   drops: number[];
   onsets: number[];
+  /** Strong rhythmic/accent positions, separate from every onset. */
+  accents?: number[];
+  /** Confidence-bearing individual transients, including offbeat and subdivision onsets. */
+  onsetEvents?: AudioOnset[];
+  /** Build-ups, drops, quiet intervals and other section-scale changes. */
+  structureEvents?: MusicStructureEvent[];
 }
 
 export type DetectorModality = 'audio' | 'video' | 'text';
 export type AnalysisEventKind = 'audio_activity' | 'scene_change' | 'motion_activity' | 'text_recognition' | 'gameplay_event' | 'coincident_activity';
+export type GameplayEventType = 'kill' | 'headshot' | 'multi_kill' | 'ace' | 'clutch' | 'clutch_situation' | 'round_end' | 'round_objective' | 'kill_feed_change' | 'combat_activity' | 'fast_action_candidate' | 'quiet_passage' | 'audio_activity' | 'scene_change' | 'text_recognition' | 'unknown';
+export type EvidenceLevel = 'explicit' | 'corroborated' | 'heuristic' | 'unknown';
 
 export interface DetectorProvenance {
   detectorId: string;
@@ -123,6 +172,16 @@ export interface AnalysisEvent {
   rankScore: number;
   rank: number;
   detectors: DetectorProvenance[];
+  /** Semantic event label. Older cached/project data may not provide one. */
+  eventType?: GameplayEventType;
+  /** Evidence quality, not a calibrated probability. */
+  evidenceLevel?: EvidenceLevel;
+  /** Human-readable signal IDs that explain the classification. */
+  signals?: string[];
+  /** Explicit reasons an event could be misclassified or is not proven. */
+  uncertainties?: string[];
+  /** Normalized, inspectable components used to produce rankScore. */
+  scoreBreakdown?: { confidence: number; cueStrength: number; corroboration: number; semanticPriority: number; total: number };
 }
 
 export interface DetectorRunStatus {
@@ -163,6 +222,8 @@ export interface AnalysisEventReview {
   startSeconds: number;
   decisiveSeconds: number;
   endSeconds: number;
+  /** Optional manual semantic correction; present only after an explicit user correction. */
+  correctedEventType?: GameplayEventType;
   updatedAt: string;
 }
 
@@ -265,13 +326,18 @@ export interface ImportRoot {
 export interface ExportOptions {
   outputPath: string;
   overwrite?: boolean;
+  /** Render only this exact project-time interval; final export is unchanged when omitted. */
+  range?: { start: Rational; duration: Rational };
+  /** Preview uses a reduced output size, frame rate, and bitrate while sharing the export graph. */
+  quality?: 'preview' | 'final';
   videoBitrate?: string;
   audioBitrate?: string;
   encoder?: 'libx264' | 'h264_amf' | 'h264_nvenc' | 'h264_qsv';
   onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
 }
 
-export type AutoMontageStyle = 'clean' | 'aggressive' | 'cinematic' | 'velocity' | 'custom';
+export type AutoMontageStyle = 'clean' | 'aggressive' | 'cinematic' | 'smooth' | 'velocity' | 'custom';
 export type AutoMontageFormat = 'project' | 'landscape-1080p' | 'portrait-1080p' | 'square-1080p';
 export interface AutoMontageCustomRules {
   targetShotSeconds: number;
@@ -282,7 +348,7 @@ export interface AutoMontageCustomRules {
   cutRatio: number;
   videoAudioVolume: number;
   musicVolume: number;
-  anchorPreference: { drop: number; downbeat: number; beat: number; onset: number };
+  anchorPreference: { drop: number; accent?: number; downbeat: number; beat: number; onset: number };
 }
 
 export interface AutoMontageOptions {
@@ -305,6 +371,7 @@ export interface AutoMontageSegment {
   game?: string;
   eventId: string;
   eventKind: AnalysisEvent['kind'];
+  eventType?: GameplayEventType;
   eventLabel: string;
   reviewStatus?: 'accepted' | 'corrected';
   sourceEventStartSeconds: number;
@@ -316,7 +383,7 @@ export interface AutoMontageSegment {
   durationSeconds: number;
   durationFrames: number;
   targetAnchorSeconds: number;
-  anchorKind: 'drop' | 'downbeat' | 'beat' | 'onset' | 'paced';
+  anchorKind: 'drop' | 'accent' | 'downbeat' | 'beat' | 'onset' | 'paced';
   anchorStrength: number;
   alignmentErrorFrames: number;
   score: { highlight: number; musicFit: number; framing: number; pacing: number };

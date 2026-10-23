@@ -1,0 +1,56 @@
+{
+  "benchmark": "synthetic-timeline-preview-v1",
+  "platform": "win32",
+  "ffmpeg": "ffmpeg version 9.0.2-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+  "sampledNodeRssBeforeBytes": 48443392,
+  "sampledNodeRssBytes": 52391936,
+  "sampledNodeRssDeltaBytes": 3948544,
+  "note": "RSS samples cover the benchmark Node process; FFmpeg child peak working set is not sampled.",
+  "cachePolicyBytes": 536870912,
+  "baselineFromBeforeChanges": {
+    "10": {
+      "firstFullRenderMs": 327.8,
+      "fullRenderAfterEditMs": 339.7
+    },
+    "60": {
+      "firstFullRenderMs": 1339,
+      "fullRenderAfterEditMs": 1336.6
+    }
+  },
+  "results": [
+    {
+      "timelineSeconds": 10,
+      "baselineFullRenderMs": 327.8,
+      "baselineFullRenderAfterEditMs": 339.7,
+      "fullRenderMeasuredNowMs": 304.5,
+      "fullRenderAfterEditMeasuredNowMs": 312,
+      "prioritizedRangeSeconds": 5,
+      "previewCacheMissMs": 225.7,
+      "identicalPreviewCacheHitMs": 0.1,
+      "unrelatedEditCacheHit": true,
+      "unrelatedEditCacheHitMs": 0.1,
+      "inRangeEditCacheMiss": true,
+      "inRangeEditRenderMs": 218.9,
+      "previewCacheBytesAfterEditCases": 1904101,
+      "previewFileBytes": 946895,
+      "fullFinalFileBytes": 2059895
+    },
+    {
+      "timelineSeconds": 60,
+      "baselineFullRenderMs": 1339,
+      "baselineFullRenderAfterEditMs": 1336.6,
+      "fullRenderMeasuredNowMs": 1249,
+      "fullRenderAfterEditMeasuredNowMs": 1242.8,
+      "prioritizedRangeSeconds": 5,
+      "previewCacheMissMs": 223.7,
+      "identicalPreviewCacheHitMs": 0.1,
+      "unrelatedEditCacheHit": true,
+      "unrelatedEditCacheHitMs": 0.1,
+      "inRangeEditCacheMiss": true,
+      "inRangeEditRenderMs": 222.3,
+      "previewCacheBytesAfterEditCases": 2027089,
+      "previewFileBytes": 1000525,
+      "fullFinalFileBytes": 11802625
+    }
+  ]
+}

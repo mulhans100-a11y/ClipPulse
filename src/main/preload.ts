@@ -18,6 +18,9 @@ function toFileUrl(filePath: string): string {
 
 const api: OpenMontageApi = {
   version: () => ipcRenderer.invoke('app:version'),
+  chooseMcpAllowedRoot: () => ipcRenderer.invoke('agentMcp:chooseRoot'),
+  configureMcpClient: (client, roots) => ipcRenderer.invoke('agentMcp:configure', client, roots),
+  testMcpConnection: (roots) => ipcRenderer.invoke('agentMcp:test', roots),
   createProject: () => ipcRenderer.invoke('project:create'),
   openProject: () => ipcRenderer.invoke('project:open'),
   openProjectFile: (filePath) => ipcRenderer.invoke('project:openFile', filePath),
@@ -69,7 +72,8 @@ const api: OpenMontageApi = {
   splitClip: (filePath, clipId, at) => ipcRenderer.invoke('timeline:splitClip', filePath, clipId, at),
   removeClip: (filePath, clipId) => ipcRenderer.invoke('timeline:removeClip', filePath, clipId),
   renderTimelineFrame: (filePath, time) => ipcRenderer.invoke('timeline:previewFrame', filePath, time),
-  renderTimelinePlayback: (filePath) => ipcRenderer.invoke('timeline:playbackPreview', filePath),
+  renderTimelinePlayback: (filePath, time) => ipcRenderer.invoke('timeline:playbackPreview', filePath, time),
+  cancelTimelinePlayback: (filePath) => ipcRenderer.invoke('timeline:cancelPlaybackPreview', filePath),
   onTimelinePlaybackProgress: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: number) => callback(progress);
     ipcRenderer.on('timeline:playbackProgress', listener);

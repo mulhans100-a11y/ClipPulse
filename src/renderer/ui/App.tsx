@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AudioLines, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
-import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
+import { Activity, AudioLines, Bot, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GameplayEventType, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
+import type { McpClientTarget, McpConnectionTest, McpSetupConfiguration } from '../../shared/electron';
 import { add as addTime, compare, decimal, frameTime, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
 import { mediaVirtualWindow } from './mediaVirtualization';
@@ -15,7 +16,10 @@ function formatTime(value: number): string {
   const minutes = Math.floor(ms / 60000), seconds = Math.floor(ms / 1000) % 60, centis = Math.floor(ms / 10) % 100;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centis).padStart(2, '0')}`;
 }
-function analysisEventLabel(event: HighlightAnalysis['events'][number]): string {
+const GAMEPLAY_EVENT_TYPES: GameplayEventType[] = ['kill', 'headshot', 'multi_kill', 'ace', 'clutch', 'clutch_situation', 'round_end', 'round_objective', 'kill_feed_change', 'combat_activity', 'fast_action_candidate', 'quiet_passage', 'audio_activity', 'scene_change', 'text_recognition', 'unknown'];
+function analysisEventLabel(event: HighlightAnalysis['events'][number], correctedType?: GameplayEventType): string {
+  const eventType = correctedType ?? event.eventType;
+  if (eventType) return eventType.replaceAll('_', ' ');
   const gameEvent = event.detectors.find((detector) => typeof detector.evidence.gameEvent === 'string')?.evidence.gameEvent;
   if (typeof gameEvent === 'string') return gameEvent.replaceAll('_', ' ');
   if (event.kind === 'coincident_activity') return 'Combined activity';
@@ -79,11 +83,12 @@ export default function App() {
   const [mediaJobs, setMediaJobs] = useState<MediaJob[]>([]);
   const [mediaJobsPaused, setMediaJobsPaused] = useState(false);
   const [showProjectSettings, setShowProjectSettings] = useState(false);
+  const [showMcpSetup, setShowMcpSetup] = useState(false);
   const [showMontageGenerator, setShowMontageGenerator] = useState(false);
   const [previewMode, setPreviewMode] = useState<'timeline' | 'source'>('timeline');
   const [timelineFramePath, setTimelineFramePath] = useState<string | null>(null);
   const [timelinePreviewBusy, setTimelinePreviewBusy] = useState(false);
-  const [timelinePlayback, setTimelinePlayback] = useState<{ path: string; revision: string } | null>(null);
+  const [timelinePlayback, setTimelinePlayback] = useState<{ path: string; revision: string; startTime: Rational; duration: Rational; hasMore: boolean } | null>(null);
   const [timelinePlaybackBusy, setTimelinePlaybackBusy] = useState(false);
   const [timelinePlaybackProgress, setTimelinePlaybackProgress] = useState<number | null>(null);
   const [timelinePlaying, setTimelinePlaying] = useState(false);
@@ -91,6 +96,7 @@ export default function App() {
   const [notice, setNotice] = useState('Ready');
   const [error, setError] = useState('');
   const [ffmpeg, setFfmpeg] = useState(false);
+  const [ffmpegMessage, setFfmpegMessage] = useState('');
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [canUndo, setCanUndo] = useState(false);
@@ -152,7 +158,7 @@ export default function App() {
 
   useEffect(() => {
     if (!window.openmontage) { setError('Desktop bridge unavailable. Start the editor with npm run dev or npm start.'); return; }
-    void window.openmontage.version().then((info) => { setAppVersion(info.appVersion); setFfmpeg(info.ffmpeg && info.ffprobe); }).catch((cause) => setError(String(cause)));
+    void window.openmontage.version().then((info) => { setAppVersion(info.appVersion); setFfmpeg(info.ffmpeg && info.ffprobe && info.compatible); setFfmpegMessage(info.message ?? ''); }).catch((cause) => setError(String(cause)));
   }, []);
   useEffect(() => {
     const element = mediaListRef.current;
@@ -168,7 +174,11 @@ export default function App() {
   }, [filter, favoriteOnly, mediaSort, project?.id]);
   useEffect(() => {
     if (!project || !projectPath || previewMode !== 'timeline') return;
-    if (timelinePlayback && timelinePlayback.revision === project.updatedAt) return;
+    if (timelinePlayback && timelinePlayback.revision === project.updatedAt) {
+      const start = secondsOf(timelinePlayback.startTime);
+      const end = start + secondsOf(timelinePlayback.duration);
+      if (playhead >= start && playhead < end) return;
+    }
     const requestId = ++previewRequest.current;
     const timer = setTimeout(() => {
       setTimelinePreviewBusy(true);
@@ -189,7 +199,8 @@ export default function App() {
   useEffect(() => {
     const video = timelinePlaybackRef.current;
     if (!currentTimelinePlayback || previewMode !== 'timeline' || timelinePlaying || !video || video.readyState === 0) return;
-    const target = Math.min(playhead, Number.isFinite(video.duration) ? video.duration : playhead);
+    const target = playhead - secondsOf(currentTimelinePlayback.startTime);
+    if (target < 0 || target > secondsOf(currentTimelinePlayback.duration)) return;
     if (Math.abs(video.currentTime - target) > 0.02) video.currentTime = target;
   }, [playhead, currentTimelinePlayback, previewMode, timelinePlaying]);
   useEffect(() => {
@@ -252,6 +263,7 @@ export default function App() {
     if (!project || !projectPath) return;
     try {
       setError('');
+      await window.openmontage.cancelTimelinePlayback(projectPath).catch(() => undefined);
       const result = await operation();
       const next = update(result);
       if (next) { setProject(next); await refreshHistory(projectPath); }
@@ -363,6 +375,7 @@ export default function App() {
   async function undo() {
     if (!project || !projectPath || !canUndo) return;
     try {
+      await window.openmontage.cancelTimelinePlayback(projectPath).catch(() => undefined);
       const previous = await window.openmontage.undoProject(projectPath); setProject(previous);
       await refreshHistory(projectPath); setNotice('Undo complete');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -370,6 +383,7 @@ export default function App() {
   async function redo() {
     if (!project || !projectPath || !canRedo) return;
     try {
+      await window.openmontage.cancelTimelinePlayback(projectPath).catch(() => undefined);
       const next = await window.openmontage.redoProject(projectPath); setProject(next);
       await refreshHistory(projectPath); setNotice('Redo complete');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -377,6 +391,7 @@ export default function App() {
   async function exportVideo() {
     if (!project) return;
     try {
+      await window.openmontage.cancelTimelinePlayback(projectPath).catch(() => undefined);
       setExportProgress(0); setError('');
       const result = await window.openmontage.exportVideo(projectPath);
       if (result) { setNotice(`Export complete · ${result.outputPath}`); await window.openmontage.reveal(result.outputPath); }
@@ -395,6 +410,22 @@ export default function App() {
       setNotice(`Opened variant ${variant.plan.variant} · source project remains unchanged`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
   }
+  async function loadTimelinePlaybackAt(time: number) {
+    if (!project || !projectPath || timelinePlaybackBusy) return;
+    try {
+      setError(''); setTimelinePlaybackBusy(true); setTimelinePlaybackProgress(0); setNotice('Rendering playhead preview…');
+      const result = await window.openmontage.renderTimelinePlayback(projectPath, time);
+      if ('cancelled' in result) return;
+      timelinePlaybackStart.current = secondsOf(result.startTime);
+      autoplayTimelinePlayback.current = true;
+      setTimelinePlayback(result);
+      setNotice('Timeline preview ready');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setTimelinePlaybackBusy(false); setTimelinePlaybackProgress(null);
+    }
+  }
   async function togglePlayback() {
     if (previewMode === 'source') {
       const video = mediaRef.current;
@@ -403,33 +434,22 @@ export default function App() {
     }
     const video = timelinePlaybackRef.current;
     if (video && !video.paused) { video.pause(); return; }
-    if (currentTimelinePlayback && video) {
-      video.currentTime = Math.min(playhead, Number.isFinite(video.duration) ? video.duration : playhead);
+    const segmentStart = currentTimelinePlayback ? secondsOf(currentTimelinePlayback.startTime) : 0;
+    const segmentEnd = currentTimelinePlayback ? segmentStart + secondsOf(currentTimelinePlayback.duration) : 0;
+    if (currentTimelinePlayback && video && playhead >= segmentStart && playhead <= segmentEnd) {
+      video.currentTime = Math.min(playhead - segmentStart, Number.isFinite(video.duration) ? video.duration : playhead - segmentStart);
       void video.play().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
       return;
     }
-    if (!project || !projectPath || timelinePlaybackBusy) return;
-    try {
-      setError(''); setTimelinePlaybackBusy(true); setTimelinePlaybackProgress(0); setNotice('Rendering timeline playback…');
-      const result = await window.openmontage.renderTimelinePlayback(projectPath);
-      timelinePlaybackStart.current = playhead;
-      autoplayTimelinePlayback.current = true;
-      setTimelinePlayback(result);
-      setNotice('Timeline preview rendered');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setTimelinePlaybackBusy(false); setTimelinePlaybackProgress(null);
-    }
+    await loadTimelinePlaybackAt(playhead);
   }
   function seekTo(time: number) {
     const video = timelinePlaybackRef.current;
-    const target = previewMode === 'timeline' && currentTimelinePlayback && video && Number.isFinite(video.duration)
-      ? Math.max(0, Math.min(time, video.duration))
-      : time;
-    setPlayhead(target);
+    setPlayhead(time);
     if (previewMode === 'timeline' && currentTimelinePlayback && video) {
-      video.currentTime = target;
+      const localTime = time - secondsOf(currentTimelinePlayback.startTime);
+      if (localTime >= 0 && localTime <= secondsOf(currentTimelinePlayback.duration)) video.currentTime = localTime;
+      else if (!video.paused) video.pause();
     }
   }
   async function splitSelected() {
@@ -521,6 +541,7 @@ export default function App() {
   }
   async function relinkAsset(mediaId: string) {
     try {
+      await window.openmontage.cancelTimelinePlayback(projectPath).catch(() => undefined);
       const next = await window.openmontage.relinkMedia(projectPath, mediaId);
       if (!next) return;
       setProject(next); await refreshMissingMedia(projectPath); await refreshHistory(projectPath);
@@ -529,6 +550,7 @@ export default function App() {
   }
   async function saveProjectSettings(patch: { name: string; width: number; height: number; frameRate: Project['frameRate'] }) {
     try {
+      await window.openmontage.cancelTimelinePlayback(projectPath).catch(() => undefined);
       const next = await window.openmontage.updateProjectProfile(projectPath, patch);
       setProject(next); await refreshHistory(projectPath); setShowProjectSettings(false); setNotice('Project settings saved');
     } catch (cause) {
@@ -563,8 +585,8 @@ export default function App() {
       <div className="eyebrow">LOCAL-FIRST VIDEO EDITOR</div>
       <h1>ClipPulse</h1>
       <p>Create, cut, and export music-driven video edits. Your source files stay where they are.</p>
-      <div className="welcome-actions"><button className="primary" onClick={() => void createProject()}><Plus size={16} /> New project</button><button onClick={() => void openProject()}><FolderOpen size={16} /> Open project</button></div>
-      <div className="runtime"><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg not detected'} · ClipPulse{appVersion ? ` v${appVersion}` : ''}</div>
+      <div className="welcome-actions"><button className="primary" onClick={() => void createProject()}><Plus size={16} /> New project</button><button onClick={() => void openProject()}><FolderOpen size={16} /> Open project</button><button onClick={() => setShowMcpSetup(true)}><Bot size={16} /> Connect AI agent</button></div>
+      <div className="runtime" title={ffmpegMessage || undefined}><span className={ffmpeg ? 'dot online' : 'dot'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg needs attention'} · ClipPulse{appVersion ? ` v${appVersion}` : ''}</div>
       {error && <div className="error-box">{error}</div>}
     </div>
   </div>;
@@ -579,6 +601,7 @@ export default function App() {
         <button className="icon-button" title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={() => void undo()}><Undo2 size={16} /></button>
         <button className="icon-button" title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={() => void redo()}><Redo2 size={16} /></button>
         <button className="toolbar-button" onClick={() => void save()}><Check size={15} /> Save</button>
+        <button className="toolbar-button" title="Connect Codex or Claude Code" onClick={() => setShowMcpSetup(true)}><Bot size={14} /> Agent</button>
         <button className="toolbar-button montage-button" title="Generate separate editable montage variants" onClick={() => setShowMontageGenerator(true)}><Sparkles size={14} /> Auto edit</button>
         <button className="export-button" disabled={!ffmpeg || exportProgress !== null} onClick={() => void exportVideo()}><Upload size={15} />{exportProgress === null ? 'Export' : `${Math.round(exportProgress * 100)}%`}</button>
       </div>
@@ -602,7 +625,7 @@ export default function App() {
           </button>)}
           {mediaWindow.bottomPadding > 0 && <div className="media-virtual-spacer" style={{ height: mediaWindow.bottomPadding }} aria-hidden="true" />}
         </div>
-        <div className="panel-footer"><span className={ffmpeg ? 'status-light good' : 'status-light'} />{ffmpeg ? 'FFmpeg connected' : 'FFmpeg unavailable'}<span className="footer-version">v0.1.0</span></div>
+        <div className="panel-footer" title={ffmpegMessage || undefined}><span className={ffmpeg ? 'status-light good' : 'status-light'} />{ffmpeg ? 'FFmpeg ready' : 'FFmpeg needs attention'}{appVersion && <span className="footer-version">v{appVersion}</span>}</div>
       </aside>
 
       <main className="center-panel">
@@ -611,12 +634,16 @@ export default function App() {
           <div className="monitor-stage">
             {previewMode === 'timeline' ? <>{currentTimelinePlayback ? <video ref={timelinePlaybackRef} key={currentTimelinePlayback.path} src={window.openmontage.toFileUrl(currentTimelinePlayback.path)} onLoadedMetadata={(event) => {
                 const video = event.currentTarget;
-                video.currentTime = Math.min(timelinePlaybackStart.current, video.duration || timelinePlaybackStart.current);
+                video.currentTime = Math.min(Math.max(0, playhead - timelinePlaybackStart.current), video.duration || 0);
                 if (autoplayTimelinePlayback.current) {
                   autoplayTimelinePlayback.current = false;
                   void video.play().catch(() => setNotice('Preview rendered — press Play to start'));
                 }
-              }} onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)} onPlay={() => setTimelinePlaying(true)} onPause={() => setTimelinePlaying(false)} onEnded={(event) => { setTimelinePlaying(false); setPlayhead(event.currentTarget.duration); }} /> : timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{(timelinePlaybackBusy || timelinePreviewBusy) && <span className="preview-busy">{timelinePlaybackBusy ? `Rendering playback${timelinePlaybackProgress === null ? '…' : ` ${Math.round(timelinePlaybackProgress * 100)}%`}` : 'Rendering frame…'}</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={`${activeMedia.id}:${sourcePreviewPath}`} src={window.openmontage.toFileUrl(sourcePreviewPath!)} controls onTimeUpdate={(event) => {
+              }} onTimeUpdate={(event) => setPlayhead(timelinePlaybackStart.current + event.currentTarget.currentTime)} onPlay={() => setTimelinePlaying(true)} onPause={() => setTimelinePlaying(false)} onEnded={(event) => {
+                const end = timelinePlaybackStart.current + event.currentTarget.duration;
+                setTimelinePlaying(false); setPlayhead(end);
+                if (currentTimelinePlayback?.hasMore) void loadTimelinePlaybackAt(end);
+              }} /> : timelineFramePath ? <img className="timeline-preview-image" src={`${window.openmontage.toFileUrl(timelineFramePath)}?v=${project.updatedAt}`} /> : <div className="monitor-placeholder"><div className="placeholder-grid" /><div className="placeholder-icon"><Layers2 size={32} /></div><strong>Timeline preview</strong><span>Scrub the playhead to view the edit</span><div className="playhead-time">{formatTime(playhead)}</div></div>}{(timelinePlaybackBusy || timelinePreviewBusy) && <span className="preview-busy">{timelinePlaybackBusy ? `Rendering playhead${timelinePlaybackProgress === null ? '…' : ` ${Math.round(timelinePlaybackProgress * 100)}%`}` : 'Rendering frame…'}</span>}</> : activeMedia?.kind === 'video' ? <video ref={mediaRef} key={`${activeMedia.id}:${sourcePreviewPath}`} src={window.openmontage.toFileUrl(sourcePreviewPath!)} controls onTimeUpdate={(event) => {
               const videoTime = event.currentTarget.currentTime;
               sourcePreviewPosition.current = { mediaId: activeMedia.id, contentHash: activeMedia.contentHash, time: videoTime };
               if (currentClip) setPlayhead(secondsOf(currentClip.clip.start) + Math.max(0, videoTime - secondsOf(currentClip.clip.sourceIn)));
@@ -713,9 +740,72 @@ export default function App() {
     </div>
 
     {showProjectSettings && <ProjectSettingsModal project={project} onClose={() => setShowProjectSettings(false)} onSave={saveProjectSettings} />}
+    {showMcpSetup && <McpSetupModal onClose={() => setShowMcpSetup(false)} />}
     {showMontageGenerator && <AutoMontageModal project={project} onClose={() => setShowMontageGenerator(false)} onGenerate={generateAutomaticMontage} onOpenVariant={openAutomaticMontageVariant} onImportMusic={importMusicForMontage} />}
 
     <footer className="statusbar"><span className={error ? 'status-error' : ''}>{error ? error : notice}</span><span className="status-right"><i className={ffmpeg ? 'online' : ''} />{ffmpeg ? 'Ready' : 'FFmpeg missing'} <span className="status-separator" />{project ? `${project.media.length} media` : ''}</span></footer>
+  </div>;
+}
+
+function McpSetupModal({ onClose }: { onClose: () => void }) {
+  const [client, setClient] = useState<McpClientTarget>('codex');
+  const [roots, setRoots] = useState<string[]>([]);
+  const [connection, setConnection] = useState<McpConnectionTest | null>(null);
+  const [configuration, setConfiguration] = useState<McpSetupConfiguration | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function chooseRoot() {
+    setError('');
+    try {
+      const root = await window.openmontage.chooseMcpAllowedRoot();
+      if (!root) return;
+      setRoots((current) => current.includes(root) ? current : [...current, root]);
+      setConnection(null); setConfiguration(null);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  }
+  function removeRoot(root: string) {
+    setRoots((current) => current.filter((item) => item !== root));
+    setConnection(null); setConfiguration(null);
+  }
+  async function testConnection() {
+    setBusy(true); setError(''); setConnection(null); setConfiguration(null);
+    try { setConnection(await window.openmontage.testMcpConnection(roots)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); }
+  }
+  async function createConfiguration() {
+    setBusy(true); setError('');
+    try { setConfiguration(await window.openmontage.configureMcpClient(client, roots)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
+    <section className="project-settings-modal mcp-setup-modal" role="dialog" aria-modal="true" aria-labelledby="mcp-setup-title">
+      <div className="montage-modal-heading"><div><span className="eyebrow">LOCAL AGENT CONNECTION</span><h2 id="mcp-setup-title">Connect an AI agent</h2></div><button type="button" className="square-button" disabled={busy} onClick={onClose} title="Close">×</button></div>
+      <p>Choose an MCP client and the folders it may use. ClipPulse adds one local stdio server entry and makes a dated backup before changing an existing configuration.</p>
+      <label className="mcp-client-select"><span>Agent client</span><select value={client} onChange={(event) => { setClient(event.target.value as McpClientTarget); setConnection(null); setConfiguration(null); }}><option value="codex">OpenAI Codex</option><option value="claude-code">Claude Code</option></select></label>
+      <div className="mcp-access-note"><strong>Folder permissions</strong><span>The connected agent can read and write files inside every folder below. Keep these grants narrow; choose a source-media folder and a separate project or export folder if possible.</span></div>
+      <div className="mcp-roots-heading"><span>Allowed folders</span><button type="button" className="text-action" onClick={() => void chooseRoot()}><Plus size={12} /> Add folder</button></div>
+      <div className="mcp-roots-list">
+        {roots.map((root) => <div className="mcp-root" key={root}><FolderOpen size={14} /><span title={root}>{root}</span><button type="button" onClick={() => removeRoot(root)} aria-label={`Remove ${root}`} title="Remove folder">×</button></div>)}
+        {!roots.length && <div className="mcp-empty-roots">Select at least one media or project folder to continue.</div>}
+      </div>
+      {connection && <div className={`mcp-connection-result ${connection.diagnostics.ffmpeg?.compatible === false ? 'attention' : 'success'}`}>
+        <strong>{connection.server.name} {connection.server.version} · {connection.toolCount} tools available</strong>
+        <span>MCP stdio initialization, tool discovery, and the harmless diagnostics call succeeded on {connection.diagnostics.platform}{connection.diagnostics.node ? ` · ${connection.diagnostics.node}` : ''}.</span>
+        {connection.diagnostics.ffmpeg?.compatible === false && <span className="mcp-ffmpeg-warning">MCP is connected, but FFmpeg/FFprobe need attention: {connection.diagnostics.ffmpeg.message ?? 'An available compatible FFmpeg/FFprobe pair was not detected.'}</span>}
+      </div>}
+      {configuration && <div className="mcp-configuration-result"><strong>Configuration created</strong><span>{client === 'codex' ? 'Codex' : 'Claude Code'} · server <code>{configuration.serverName}</code></span><small>Configuration: {configuration.configPath}</small>{configuration.backupPath && <small>Backup: {configuration.backupPath}</small>}<small>Restart the selected client to load ClipPulse tools.</small></div>}
+      {error && <div className="modal-error">{error}</div>}
+      <div className="modal-actions">
+        <button type="button" onClick={onClose} disabled={busy}>Close</button>
+        <button type="button" onClick={() => void testConnection()} disabled={busy || roots.length === 0}>{busy && !configuration ? 'Testing…' : 'Test connection'}</button>
+        <button type="button" className="primary" onClick={() => void createConfiguration()} disabled={busy || !connection}>{busy && connection ? 'Saving…' : 'Create configuration'}</button>
+      </div>
+      <div className="mcp-client-note">Claude Desktop uses Anthropic’s Desktop Extensions flow; this setup targets Claude Code. See MCP_SETUP.md for current client instructions and copyable examples.</div>
+    </section>
   </div>;
 }
 
@@ -900,7 +990,7 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
   const [cueFailure, setCueFailure] = useState<{ assetId: string; message: string } | null>(null);
   const [analysisRuntimes, setAnalysisRuntimes] = useState<AnalysisRuntimeStatus[]>([]);
   const cueError = cueFailure?.assetId === asset.id ? cueFailure.message : null;
-  const [cueCorrections, setCueCorrections] = useState<Record<string, { start: number; decisive: number; end: number }>>({});
+  const [cueCorrections, setCueCorrections] = useState<Record<string, { start: number; decisive: number; end: number; eventType: GameplayEventType }>>({});
   const reviewedDetectorPrecision = useMemo(() => {
     const counts = new Map<string, { accepted: number; rejected: number }>();
     for (const review of asset.analysisEventReviews ?? []) for (const id of review.detectorIds) {
@@ -923,6 +1013,7 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
     const end = Math.max(start + 1, Math.floor((index + 1) * analysis.energyCurve.length / Math.min(120, analysis.energyCurve.length)));
     return analysis.energyCurve.slice(start, end).reduce((sum, value) => sum + value, 0) / (end - start);
   }) : [];
+  const musicStructure = analysis?.structureEvents ?? [];
   useEffect(() => { setTags((asset.tags ?? []).join(', ')); setGame(asset.game ?? ''); setRating(asset.rating ?? 0); setAnalysisResult(null); setAnalysisFailure(null); setCueResult(null); setCueFailure(null); setCueCorrections({}); }, [asset.id, asset.tags, asset.game, asset.rating]);
   useEffect(() => { let active = true; void window.openmontage.getAnalysisRuntimes().then((runtimes) => { if (active) setAnalysisRuntimes(runtimes); }).catch(() => { if (active) setAnalysisRuntimes([]); }); return () => { active = false; }; }, []);
   async function runAnalysis() {
@@ -938,14 +1029,15 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
     finally { setCueRunningAssetId((current) => current === asset.id ? null : current); }
   }
   function saveEventReview(event: HighlightAnalysis['events'][number], status: AnalysisEventReview['status']) {
-    const correction = cueCorrections[event.id] ?? { start: event.startSeconds, decisive: event.decisiveSeconds, end: event.endSeconds };
-    if (status === 'corrected' && (![correction.start, correction.decisive, correction.end].every(Number.isFinite) || correction.start < 0 || correction.start > correction.decisive || correction.decisive > correction.end || correction.end > secondsOf(asset.duration))) return;
     const existing = asset.analysisEventReviews?.find((item) => item.eventId === event.id);
+    const correction = cueCorrections[event.id] ?? { start: existing?.startSeconds ?? event.startSeconds, decisive: existing?.decisiveSeconds ?? event.decisiveSeconds, end: existing?.endSeconds ?? event.endSeconds, eventType: existing?.correctedEventType ?? event.eventType ?? 'unknown' };
+    if (status === 'corrected' && (![correction.start, correction.decisive, correction.end].every(Number.isFinite) || correction.start < 0 || correction.start > correction.decisive || correction.decisive > correction.end || correction.end > secondsOf(asset.duration))) return;
     const review: AnalysisEventReview = {
       eventId: event.id, detectorIds: event.detectors.map((item) => item.detectorId), status,
       startSeconds: status === 'corrected' ? correction.start : existing?.startSeconds ?? event.startSeconds,
       decisiveSeconds: status === 'corrected' ? correction.decisive : existing?.decisiveSeconds ?? event.decisiveSeconds,
       endSeconds: status === 'corrected' ? correction.end : existing?.endSeconds ?? event.endSeconds,
+      ...(status === 'corrected' ? { correctedEventType: correction.eventType } : {}),
       updatedAt: new Date().toISOString()
     };
     const previous = asset.analysisEventReviews ?? [];
@@ -977,8 +1069,9 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
         {analysis.bpmHypotheses.length > 1 && <div className="analysis-hypotheses"><span>Other tempo matches</span><strong>{analysis.bpmHypotheses.slice(1).map((item) => `${item.bpm} BPM · ${item.score.toFixed(2)}`).join('  /  ')}</strong></div>}
         <div className="analysis-counts"><span>{analysis.beats.length} beats · {analysis.downbeats.length} downbeats</span><span>{analysis.onsets.length} transients</span></div>
         <div className="energy-strip" role="img" aria-label="Relative one-second music energy" title="Relative energy by second">{energyBins.map((energy, index) => <i key={index} style={{ height: `${Math.max(3, Math.round(energy * 22))}px` }} />)}</div>
-        <div className="analysis-cues"><span>METER</span><strong>{analysis.meter ? `${analysis.meter.beatsPerBar}/4 · ${Math.round(analysis.meter.confidence * 100)}%` : 'Unclear'}</strong><span>SECTIONS · ENERGY RISES</span><strong>{analysis.energySections.length} · {analysis.drops.length}{analysis.drops.length ? ` · ${formatTime(analysis.drops[0])}` : ''}</strong></div>
-        <small>Local onset and RMS heuristics · meter confidence is not a probability</small>
+        <div className="analysis-cues"><span>METER</span><strong>{analysis.meter ? `${analysis.meter.beatsPerBar}/${analysis.meter.denominator} · ${Math.round(analysis.meter.confidence * 100)}%` : 'Unclear'}</strong><span>SECTIONS · DROPS</span><strong>{analysis.energySections.length} · {analysis.drops.length}{analysis.drops.length ? ` · ${formatTime(analysis.drops[0])}` : ''}</strong></div>
+        <div className="analysis-cues"><span>ACCENTS · BUILD-UPS</span><strong>{analysis.accents?.length ?? 0} · {musicStructure.filter((event) => event.type === 'build_up').length}</strong><span>QUIET · TEMPO ZONES</span><strong>{musicStructure.filter((event) => event.type === 'quiet').length} · {analysis.tempoSegments?.length ?? 0}</strong></div>
+        <small>Beat and onset confidences are relative local heuristics, not calibrated probabilities.</small>
       </div>}
       <button className="analyze-highlights" disabled={cueRunning} onClick={() => void runCueAnalysis()}><Sparkles size={14} />{cueRunning ? 'Finding activity cues…' : cueAnalysis ? 'Refresh ranked activity cues' : 'Find ranked activity cues'}</button>
       {cueError && <div className="analysis-error">{cueError}</div>}
@@ -986,17 +1079,17 @@ function MediaInspector({ asset, projectPath, missing, analysisStatus, onAnalysi
         <div className="cue-analysis-heading"><strong>{cueAnalysis.events.length} ranked cues</strong><span>HEURISTIC</span></div>
         {cueAnalysis.events.length ? <div className="cue-event-list">{cueAnalysis.events.slice(0, 12).map((event) => {
           const review = asset.analysisEventReviews?.find((item) => item.eventId === event.id);
-          const correction = cueCorrections[event.id] ?? { start: review?.startSeconds ?? event.startSeconds, decisive: review?.decisiveSeconds ?? event.decisiveSeconds, end: review?.endSeconds ?? event.endSeconds };
+          const correction = cueCorrections[event.id] ?? { start: review?.startSeconds ?? event.startSeconds, decisive: review?.decisiveSeconds ?? event.decisiveSeconds, end: review?.endSeconds ?? event.endSeconds, eventType: review?.correctedEventType ?? event.eventType ?? 'unknown' as GameplayEventType };
           return <div className="cue-event" key={event.id}>
-            <span className="cue-rank">{String(event.rank).padStart(2, '0')}</span><div><strong>{analysisEventLabel(event)}</strong><small>{formatTime(review?.startSeconds ?? event.startSeconds)}–{formatTime(review?.endSeconds ?? event.endSeconds)} · event {formatTime(review?.decisiveSeconds ?? event.decisiveSeconds)}</small><small>{event.detectors.map((detector) => detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')).join(' + ')}</small>{event.detectors.find((detector) => typeof detector.evidence.gameProfile === 'string')?.evidence.gameProfile && <small>Game rules: {String(event.detectors.find((detector) => typeof detector.evidence.gameProfile === 'string')?.evidence.gameProfile)}</small>}{event.detectors.find((detector) => typeof detector.evidence.recognizedText === 'string')?.evidence.recognizedText && <small>HUD: {String(event.detectors.find((detector) => typeof detector.evidence.recognizedText === 'string')?.evidence.recognizedText)}</small>}<small>Confidence {Math.round(event.confidence * 100)}% · cue strength {Math.round(event.interestingness * 100)}%</small>
+            <span className="cue-rank">{String(event.rank).padStart(2, '0')}</span><div><strong>{analysisEventLabel(event, review?.correctedEventType)}</strong><small>{formatTime(review?.startSeconds ?? event.startSeconds)}–{formatTime(review?.endSeconds ?? event.endSeconds)} · event {formatTime(review?.decisiveSeconds ?? event.decisiveSeconds)}</small><small>{event.detectors.map((detector) => detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')).join(' + ')} · {event.evidenceLevel ?? 'legacy heuristic'}</small>{event.detectors.find((detector) => typeof detector.evidence.gameProfile === 'string')?.evidence.gameProfile && <small>Game rules: {String(event.detectors.find((detector) => typeof detector.evidence.gameProfile === 'string')?.evidence.gameProfile)}</small>}{event.detectors.find((detector) => typeof detector.evidence.recognizedText === 'string')?.evidence.recognizedText && <small>HUD: {String(event.detectors.find((detector) => typeof detector.evidence.recognizedText === 'string')?.evidence.recognizedText)}</small>}{event.signals?.length ? <small>Signals: {event.signals.join(' · ')}</small> : null}<small>Heuristic confidence {Math.round(event.confidence * 100)}% · cue strength {Math.round(event.interestingness * 100)}% · rank score {event.scoreBreakdown ? `confidence ${event.scoreBreakdown.confidence.toFixed(2)}, activity ${event.scoreBreakdown.cueStrength.toFixed(2)}, corroboration ${event.scoreBreakdown.corroboration.toFixed(2)}, event priority ${event.scoreBreakdown.semanticPriority.toFixed(2)}` : event.rankScore}</small>{event.uncertainties?.map((uncertainty, index) => <small key={index}>Uncertainty: {uncertainty}</small>)}
               <div className="cue-review-actions"><button className={review?.status === 'accepted' ? 'selected' : ''} onClick={() => saveEventReview(event, 'accepted')}>Accept</button><button className={review?.status === 'rejected' ? 'selected' : ''} onClick={() => saveEventReview(event, 'rejected')}>Reject</button><span>{review?.status ?? 'unreviewed'}</span></div>
-              <div className="cue-correction-fields"><label>Start<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.start} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, start: Number(e.target.value) } }))} /></label><label>Event<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.decisive} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, decisive: Number(e.target.value) } }))} /></label><label>End<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.end} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, end: Number(e.target.value) } }))} /></label><button onClick={() => saveEventReview(event, 'corrected')}>Save correction</button></div>
+              <div className="cue-correction-fields"><label>Type<select value={correction.eventType} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, eventType: e.target.value as GameplayEventType } }))}>{GAMEPLAY_EVENT_TYPES.map((type) => <option value={type} key={type}>{type.replaceAll('_', ' ')}</option>)}</select></label><label>Start<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.start} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, start: Number(e.target.value) } }))} /></label><label>Event<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.decisive} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, decisive: Number(e.target.value) } }))} /></label><label>End<input type="number" min="0" max={secondsOf(asset.duration)} step="0.01" value={correction.end} onChange={(e) => setCueCorrections((current) => ({ ...current, [event.id]: { ...correction, end: Number(e.target.value) } }))} /></label><button onClick={() => saveEventReview(event, 'corrected')}>Save correction</button></div>
             </div><b>{event.rankScore}</b>
           </div>;
         })}</div> : <div className="cue-empty">No activity cues found.</div>}
         {reviewedDetectorPrecision.length > 0 && <div className="review-metrics"><strong>Reviewed proposal precision · this asset</strong>{reviewedDetectorPrecision.map((item) => <span key={item.id}>{item.id.replace('openmontage.', '').replaceAll('-', ' ')} · {Math.round(item.precision * 100)}% ({item.accepted}/{item.total})</span>)}</div>}
         {cueAnalysis.warnings.map((warning) => <div className="analysis-error" key={warning}>{warning}</div>)}
-        <small>Rank reflects local audio/scene heuristics. It is not a gameplay label or calibrated highlight-quality score.</small>
+        <small>Event types separate explicit HUD text from heuristic activity estimates. Scores and confidence are not calibrated probabilities; OCR text and feed changes can be wrong.</small>
       </div>}
     </section>
     <section className="inspector-section muted-section"><div className="section-label"><span>DETECTOR STATUS</span><button><ChevronDown size={14} /></button></div>{cueAnalysis ? cueAnalysis.detectors.map((detector) => <div className="detector-status-row" key={detector.detectorId}><Activity size={13} /><span>{detector.detectorId.replace('openmontage.', '').replaceAll('-', ' ')}{detector.message && <small className="detector-message">{detector.message}</small>}</span><small className={`detector-state ${detector.status}`}>{detector.status}</small></div>) : <div className="disabled-row"><Activity size={14} /><span>Local detectors</span><small>Run analysis to inspect</small></div>}{analysisRuntimes.map((runtime) => <div className="detector-status-row" key={runtime.id}><Sparkles size={13} /><span>{runtime.label}<small className="detector-message">{runtime.message}</small></span><small className={`detector-state ${runtime.status}`}>{runtime.status}</small></div>)}</section>
@@ -1022,7 +1115,7 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
   const [customRules, setCustomRules] = useState<AutoMontageCustomRules>({
     targetShotSeconds: 3.5, minShotSeconds: 1.2, maxShotSeconds: 7, leadSeconds: 1, tailSeconds: 1,
     cutRatio: 0.5, videoAudioVolume: 0.25, musicVolume: 0.95,
-    anchorPreference: { drop: 1, downbeat: 0.9, beat: 0.68, onset: 0.4 }
+    anchorPreference: { drop: 1, accent: 0.9, downbeat: 0.9, beat: 0.68, onset: 0.4 }
   });
   const [busy, setBusy] = useState(false);
   const [importingMusic, setImportingMusic] = useState(false);
@@ -1077,7 +1170,7 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
       <p className="montage-intro">Analyze local highlights, align their decisive moments to music anchors, and create separate editable project variants. Your current timeline is preserved.</p>
       <div className="modal-field-pair">
         <div className="montage-music-field"><label><span>Music / audio</span><select value={musicMediaId} onChange={(event) => setMusicMediaId(event.target.value)} required><option value="" disabled>Select audio</option>{musicAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name} · {formatTime(secondsOf(asset.duration))}</option>)}</select></label><button type="button" className="music-import-button" disabled={busy || importingMusic} onClick={() => void importMusic()}><Music2 size={13} />{importingMusic ? 'Importing…' : 'Import music'}</button></div>
-        <label><span>Editing style</span><select value={style} onChange={(event) => setStyle(event.target.value as AutoMontageStyle)}><option value="clean">Clean Competitive</option><option value="aggressive">Aggressive Gaming</option><option value="cinematic">Cinematic</option><option value="velocity">Velocity pacing</option><option value="custom">Custom pacing</option></select></label>
+        <label><span>Editing style</span><select value={style} onChange={(event) => setStyle(event.target.value as AutoMontageStyle)}><option value="clean">Clean Competitive</option><option value="aggressive">Aggressive Gaming</option><option value="cinematic">Cinematic</option><option value="smooth">Smooth</option><option value="velocity">Velocity pacing</option><option value="custom">Custom pacing</option></select></label>
       </div>
       <div className="modal-field-pair">
         <label><span>Desired duration · seconds</span><input type="number" min="1" max="1800" step="0.5" value={duration} onChange={(event) => setDuration(event.target.value)} required /></label>
@@ -1099,7 +1192,7 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
           <label>Gameplay audio · ×<input type="number" min="0" max="1" step="0.05" value={customRules.videoAudioVolume} onChange={(event) => updateCustomRule('videoAudioVolume', Number(event.target.value))} /></label>
           <label>Music · ×<input type="number" min="0" max="2" step="0.05" value={customRules.musicVolume} onChange={(event) => updateCustomRule('musicVolume', Number(event.target.value))} /></label>
         </div>
-        <div className="custom-anchor-rules">{(['drop', 'downbeat', 'beat', 'onset'] as const).map((key) => <label key={key}>{key} weight<input type="number" min="0" max="1" step="0.05" value={customRules.anchorPreference[key]} onChange={(event) => updateCustomAnchor(key, Number(event.target.value))} /></label>)}</div>
+        <div className="custom-anchor-rules">{(['drop', 'accent', 'downbeat', 'beat', 'onset'] as const).map((key) => <label key={key}>{key} weight<input type="number" min="0" max="1" step="0.05" value={customRules.anchorPreference[key] ?? 0.9} onChange={(event) => updateCustomAnchor(key, Number(event.target.value))} /></label>)}</div>
       </div>}
       <div className="montage-source-heading"><span>Video sources</span><button type="button" className="text-action" onClick={() => setVideoMediaIds(videoMediaIds.length === videos.length ? [] : videos.map((asset) => asset.id))}>{videoMediaIds.length === videos.length ? 'Select none' : 'Select all'}</button><small>{videoMediaIds.length} of {videos.length} selected</small></div>
       <div className="montage-video-list">

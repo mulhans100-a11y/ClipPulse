@@ -35,7 +35,7 @@ export async function startAgentRest(service: AgentService, options: { port?: nu
       }
       return send(response, 404, failure('ROUTE_NOT_FOUND', 'No endpoint matches this method and path.'));
     } catch (error) {
-      const appError = asAppError(error); return send(response, appError.code === 'INVALID_ARGUMENTS' ? 400 : appError.code === 'UNKNOWN_TOOL' ? 404 : 422, failure(appError.code, appError.message));
+      const appError = asAppError(error); return send(response, statusForError(appError.code), failure(appError.code, appError.message));
     }
   });
   const port = options.port ?? 43173;
@@ -58,4 +58,13 @@ function success(data: unknown) { return { schemaVersion: AGENT_SCHEMA_VERSION, 
 function failure(code: string, message: string) { return { schemaVersion: AGENT_SCHEMA_VERSION, ok: false, error: { code, message } }; }
 function send(response: import('node:http').ServerResponse, status: number, body: unknown): void { if (response.headersSent) return; response.statusCode = status; response.end(`${JSON.stringify(body)}\n`); }
 function secureTokenEqual(candidate: string, expected: string): boolean { const left = Buffer.from(candidate); const right = Buffer.from(expected); return left.length === right.length && timingSafeEqual(left, right); }
+function statusForError(code: string): number {
+  if (code === 'REQUEST_TOO_LARGE') return 413;
+  if (code === 'INVALID_ARGUMENTS' || code === 'INVALID_JSON') return 400;
+  if (code === 'UNKNOWN_TOOL' || code === 'PATH_NOT_FOUND' || code === 'JOB_NOT_FOUND') return 404;
+  if (code === 'PATH_PERMISSION_DENIED' || code === 'PATH_SYMLINK_DENIED' || code === 'PATH_PERMISSION_REQUIRED') return 403;
+  if (code === 'OUTPUT_EXISTS' || code === 'SOURCE_OVERWRITE_BLOCKED') return 409;
+  if (code === 'FFMPEG_NOT_FOUND' || code === 'FFPROBE_NOT_FOUND' || code === 'FFMPEG_INCOMPATIBLE') return 503;
+  return 422;
+}
 

@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const asar = require('@electron/asar');
 
 const projectRoot = path.resolve(__dirname, '..');
 
@@ -43,6 +44,7 @@ function licenseFiles(directory) {
 exports.default = async function copyThirdPartyNotices(context) {
   const destination = path.join(context.appOutDir, 'resources', 'third-party-licenses');
   const licensesDestination = path.join(destination, 'LICENSES');
+  pruneForeignOnnxRuntimeBinaries(context);
   fs.rmSync(destination, { recursive: true, force: true });
   fs.mkdirSync(licensesDestination, { recursive: true });
 
@@ -113,5 +115,68 @@ exports.default = async function copyThirdPartyNotices(context) {
   ].join('\n');
 
   fs.writeFileSync(path.join(destination, 'THIRD_PARTY_NOTICES.md'), notice);
+  verifyPackagedRuntime(context, packages);
   console.log(`Copied license and upstream notice files for ${packages.length} production packages to ${destination}`);
 };
+
+function pruneForeignOnnxRuntimeBinaries(context) {
+  const napiRoot = path.join(
+    context.appOutDir,
+    'resources',
+    'app.asar.unpacked',
+    'node_modules',
+    'onnxruntime-node',
+    'bin',
+    'napi-v6',
+  );
+  if (!fs.existsSync(napiRoot)) {
+    throw new Error(`Unpacked ONNX Runtime binaries are missing: ${napiRoot}`);
+  }
+
+  for (const platformEntry of fs.readdirSync(napiRoot, { withFileTypes: true })) {
+    if (!platformEntry.isDirectory()) continue;
+    const platformPath = path.join(napiRoot, platformEntry.name);
+    if (platformEntry.name !== process.platform) {
+      fs.rmSync(platformPath, { recursive: true, force: true });
+      continue;
+    }
+
+    for (const architectureEntry of fs.readdirSync(platformPath, { withFileTypes: true })) {
+      if (architectureEntry.isDirectory() && architectureEntry.name !== process.arch) {
+        fs.rmSync(path.join(platformPath, architectureEntry.name), { recursive: true, force: true });
+      }
+    }
+  }
+}
+
+function verifyPackagedRuntime(context, packages) {
+  const resources = path.join(context.appOutDir, 'resources');
+  const archive = path.join(resources, 'app.asar');
+  if (!fs.existsSync(archive)) throw new Error(`Packaged application archive is missing: ${archive}`);
+  if (!packages.length) throw new Error('No production npm packages were found while preparing the application package.');
+
+  const entries = new Set(asar.listPackage(archive).map((entry) => entry.replaceAll('\\', '/').replace(/^\/+/, '')));
+  const requiredEntries = [
+    'package.json',
+    'dist/package.json',
+    'dist/src/main/index.js',
+    'dist/src/main/cli.js',
+    'dist/renderer/index.html',
+    'node_modules/@huggingface/transformers/package.json',
+    'node_modules/@modelcontextprotocol/sdk/package.json',
+    'node_modules/chokidar/package.json',
+    'node_modules/react/package.json',
+    'node_modules/react-dom/package.json'
+  ];
+  const missingEntries = requiredEntries.filter((entry) => !entries.has(entry));
+  if (missingEntries.length) throw new Error(`Packaged app.asar is missing required files: ${missingEntries.join(', ')}`);
+
+  const platform = process.platform;
+  const architecture = process.arch;
+  const nativeBinding = path.join(resources, 'app.asar.unpacked', 'node_modules', 'onnxruntime-node', 'bin', 'napi-v6', platform, architecture, 'onnxruntime_binding.node');
+  if (!fs.existsSync(nativeBinding)) throw new Error(`Packaged ONNX Runtime native binding is missing for ${platform}/${architecture}: ${nativeBinding}`);
+
+  const notices = path.join(resources, 'third-party-licenses', 'THIRD_PARTY_NOTICES.md');
+  if (!fs.existsSync(notices) || fs.statSync(notices).size === 0) throw new Error('Packaged third-party license notices were not generated.');
+  if (!fs.existsSync(path.join(resources, 'third-party-licenses', 'LICENSES'))) throw new Error('Packaged third-party license directory is missing.');
+}

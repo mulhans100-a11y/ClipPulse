@@ -2,15 +2,15 @@
 
 ## What the editor supports today
 
-OpenMontage imports files and recursively scans a user-selected local folder. It retains source paths, records metadata, detects identical content, and does not modify or upload captures. This works for Medal captures that exist as local files, as well as OBS, ShadowPlay, ReLive, and other supported media formats.
+ClipPulse imports files and recursively scans a user-selected local folder. It retains source paths, records metadata, detects identical content, and does not modify or upload captures. This works for Medal captures that exist as local files, as well as OBS, ShadowPlay, ReLive, and other supported media formats.
 
 There is no Medal account login, private-cloud download, or web scraping in this build.
 
 ## Capture-folder shortcut
 
-The Medal button in the media panel checks `<system drive>:\Medal`, matching Medal's documented Windows default (their support article gives `C:\Medal` as an example). If that folder is missing, OpenMontage opens a folder picker so the user can select a custom location configured in Medal. On other platforms, the user selects the local capture folder directly.
+The Medal button in the media panel checks `<system drive>:\Medal`, matching Medal's documented Windows default (their support article gives `C:\Medal` as an example). If that folder is missing, ClipPulse opens a folder picker so the user can select a custom location configured in Medal. On other platforms, the user selects the local capture folder directly.
 
-The selected folder is recursively imported and registered with OpenMontage's existing recursive watcher. New supported media files are then indexed and added when the watcher detects changes. OpenMontage does not read Medal's private database or modify the capture files.
+The selected folder is recursively imported and registered with ClipPulse's existing recursive watcher. New supported media files are then indexed and added when the watcher detects changes. ClipPulse does not read Medal's private database or modify the capture files.
 
 Source: [Medal Support — Managing PC Storage](https://support.medal.tv/support/solutions/articles/48001275457/)
 

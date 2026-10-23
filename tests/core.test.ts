@@ -1,20 +1,22 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { addClip, addTrack, createProject, findMissingMedia, getImportRoots, getProjectHistory, importMedia, loadProject, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setClipEffects, setImportRootWatching, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings } from '../src/core/project';
 import { analyzeAudio, readCachedAudioAnalysis } from '../src/core/audioAnalysis';
-import { analyzeHighlightCues } from '../src/core/highlightAnalysis';
+import { analyzeHighlightCues, type DetectorPlugin } from '../src/core/highlightAnalysis';
+import { classifyValorantHudText, detectValorantKillFeedChanges, legacyValorantTextMatch } from '../src/core/gameplay/valorant';
 import { evaluateHighlightDataset } from '../src/core/analysisEvaluation';
 import { buildAutomaticMontagePlans, materializeAutomaticMontageProject } from '../src/core/autoMontage';
 import { gameRuleCacheKey, matchGameEvent } from '../src/core/gameRules';
-import { renderTimelineFrame } from '../src/core/timelinePreview';
+import { renderTimelineFrame, timelinePreviewCacheKey, timelinePreviewRangeAt } from '../src/core/timelinePreview';
 import { exportVideo } from '../src/core/export';
-import { runCommand } from '../src/core/ffmpeg';
+import { prunePreviewCache } from '../src/core/previewCache';
+import { ffmpegCompatibilityProblems, runCommand } from '../src/core/ffmpeg';
 import { libraryDatabasePath, MediaLibrary } from '../src/core/library';
 import { watchFolder } from '../src/core/folderWatcher';
 import { medalCaptureFolderPreset } from '../src/core/medal';
@@ -37,6 +39,16 @@ test('rational time arithmetic stays exact across non-integer frame rates', () =
   assert.deepEqual(parseDecimal('5/2'), { num: '5', den: '2' });
   assert.equal(decimal(parseDecimal('12.500000')), '12.5');
   assert.equal(compare(rational(1, 3), rational(2, 5)), -1);
+});
+
+test('FFmpeg compatibility diagnostics require supported versions, drawtext, and libx264', () => {
+  assert.deepEqual(ffmpegCompatibilityProblems(
+    'ffmpeg version 9.0.2', 'ffprobe version 9.0.2', ' ... drawtext V->V Draw text', ' ... libx264 V.... H.264 encoder'
+  ), []);
+  const problems = ffmpegCompatibilityProblems('ffmpeg version 5.1.2', 'ffprobe version 5.1.2', 'filters without the required text filter', 'encoders without the required H.264 encoder');
+  assert.ok(problems.some((problem) => problem.includes('ffmpeg 5 is too old')));
+  assert.ok(problems.some((problem) => problem.includes('drawtext')));
+  assert.ok(problems.some((problem) => problem.includes('libx264')));
 });
 
 test('mask paths flatten cubic and quadratic Bezier segments into stable tracking points', () => {
@@ -113,7 +125,8 @@ test('automatic montage planner aligns reviewed highlights to music, diversifies
     sizeBytes: 1000, modifiedAt: '', contentHash: `montage-video-hash-${index}`, importedAt: '',
     game: index % 2 ? 'Valorant' : 'Counter-Strike', rating: index === 1 ? 5 : 0,
     ...(index === 0 ? { analysisEventReviews: [{ eventId: `event-${index}`, detectorIds: ['test'], status: 'rejected' as const, startSeconds: 7.8, decisiveSeconds: 8, endSeconds: 8.3, updatedAt: '' }] } : {}),
-    ...(index === 1 ? { analysisEventReviews: [{ eventId: `event-${index}`, detectorIds: ['test'], status: 'accepted' as const, startSeconds: 8.05, decisiveSeconds: 8.25, endSeconds: 8.55, updatedAt: '' }] } : {})
+    ...(index === 1 ? { analysisEventReviews: [{ eventId: `event-${index}`, detectorIds: ['test'], status: 'accepted' as const, startSeconds: 8.05, decisiveSeconds: 8.25, endSeconds: 8.55, updatedAt: '' }] } : {}),
+    ...(index === 3 ? { analysisEventReviews: [{ eventId: 'feed-change', detectorIds: ['test'], status: 'corrected' as const, correctedEventType: 'kill' as const, startSeconds: 9.8, decisiveSeconds: 10, endSeconds: 10.2, updatedAt: '' }] } : {})
   }));
   const music: MediaAsset = { id: 'montage-music', path: 'C:\\media\\music.wav', name: 'music.wav', kind: 'audio', duration: rational(20), hasAudio: true, sizeBytes: 1000, modifiedAt: '', contentHash: 'montage-music-hash', importedAt: '' };
   const project: Project = {
@@ -126,9 +139,13 @@ test('automatic montage planner aligns reviewed highlights to music, diversifies
   const sourceBefore = JSON.stringify(project);
   const musicAnalysis: AudioAnalysis = {
     method: 'spectral-flux-dynamic-beat-v4', sampleRate: 11025, hopSeconds: 0.02, durationSeconds: 20, estimatedBpm: 120,
-    bpmHypotheses: [{ bpm: 120, score: 0.9 }], beatPhaseSeconds: 0, beats: Array.from({ length: 40 }, (_value, index) => index * 0.5),
+    bpmHypotheses: [{ bpm: 120, score: 0.9 }], beatPhaseSeconds: 0, beats: Array.from({ length: 40 }, (_value, index) => index * 0.5), accents: [2, 4, 8, 10],
     meter: { beatsPerBar: 4, denominator: 4, downbeatPhase: 0, confidence: 0.7 }, downbeats: Array.from({ length: 10 }, (_value, index) => index * 2),
-    energyHopSeconds: 1, energyCurve: Array(20).fill(0.75), energySections: [], drops: [6, 12], onsets: []
+    energyHopSeconds: 1, energyCurve: Array(20).fill(0.75), energySections: [], drops: [6, 12], onsets: [],
+    structureEvents: [
+      { type: 'strong_accent', timeSeconds: 4, confidence: 0.25, strength: 0.2, signals: ['weak test accent'] },
+      { type: 'strong_accent', timeSeconds: 10, confidence: 0.95, strength: 0.95, signals: ['strong test accent'] }
+    ]
   };
   const highlightAnalyses: Array<{ mediaId: string; analysis: HighlightAnalysis }> = videos.map((asset, index) => {
     const decisiveSeconds = 8 + index * 0.35;
@@ -136,9 +153,13 @@ test('automatic montage planner aligns reviewed highlights to music, diversifies
       id: `event-${index}`, mediaId: asset.id, kind: 'gameplay_event' as const,
       startSeconds: decisiveSeconds - 0.2, decisiveSeconds, endSeconds: decisiveSeconds + 0.25,
       confidence: 0.86, interestingness: 0.84, rankScore: 82 + index % 3, rank: index + 1,
+      eventType: 'headshot' as const, evidenceLevel: 'explicit' as const,
       detectors: [{ detectorId: 'test-hud', version: '1', modality: 'text' as const, confidence: 0.86, evidence: { gameEvent: 'headshot' } }]
     };
-    return { mediaId: asset.id, analysis: { method: 'heuristic-detector-pipeline-v1', durationSeconds: 20, scoreWeights: { confidence: 0.4, interestingness: 0.4, corroboration: 0.2 }, detectors: [], warnings: [], events: [event] } };
+    const quiet = { ...event, id: `quiet-${index}`, eventType: 'quiet_passage' as const, evidenceLevel: 'heuristic' as const, rankScore: 99 };
+    const feedChange = { ...event, id: 'feed-change', eventType: 'kill_feed_change' as const, evidenceLevel: 'heuristic' as const, rankScore: 100 };
+    const events = [event, ...(index === 2 ? [quiet] : []), ...(index === 3 ? [feedChange] : [])];
+    return { mediaId: asset.id, analysis: { method: 'heuristic-detector-pipeline-v1', durationSeconds: 20, scoreWeights: { confidence: 0.4, interestingness: 0.4, corroboration: 0.2 }, detectors: [], warnings: [], events } };
   });
   const plans = buildAutomaticMontagePlans({
     project, musicAnalysis, highlightAnalyses,
@@ -149,6 +170,12 @@ test('automatic montage planner aligns reviewed highlights to music, diversifies
   assert.ok(plans.every((plan) => plan.segments.length >= 3));
   assert.ok(plans.every((plan) => plan.segments.every((segment) => segment.alignmentErrorFrames === 0)));
   assert.ok(plans[0].segments.every((segment) => segment.mediaId !== videos[0].id), 'rejected events are excluded from planning');
+  assert.ok(plans[0].segments.every((segment) => segment.eventType !== 'quiet_passage'), 'unreviewed low-activity passages are not used as montage highlights');
+  assert.ok(plans[0].segments.every((segment) => segment.eventId !== 'feed-change' || segment.eventType === 'kill'), 'a user correction is applied to a possible feed-change cue before planning');
+  assert.ok(plans[0].segments.some((segment) => segment.eventId === 'feed-change' && segment.eventType === 'kill'), 'a manually corrected event remains eligible for montage selection');
+  assert.ok(plans[0].segments.some((segment) => segment.eventType === 'headshot'), 'semantic event types pass through to the generated plan');
+  assert.ok(plans[0].segments.some((segment) => segment.anchorKind === 'accent' || segment.anchorKind === 'drop'), 'strong accents and drops are preferred musical edit anchors');
+  assert.ok(plans[0].segments.some((segment) => segment.anchorKind === 'accent' && segment.anchorStrength > 0.8), 'high-strength structured accents retain their signal strength in montage alignment');
   assert.ok(plans[0].segments.some((segment) => segment.reviewStatus === 'accepted'), 'accepted review state contributes to event provenance');
   assert.notDeepEqual(plans[0].segments.map((segment) => segment.eventId), plans[1].segments.map((segment) => segment.eventId), 'later variants prefer different events from the same source pool');
   for (const segment of plans[0].segments) {
@@ -166,6 +193,8 @@ test('automatic montage planner aligns reviewed highlights to music, diversifies
   const customProject = materializeAutomaticMontageProject(project, customPlan);
   assert.equal(customProject.tracks.find((track) => track.kind === 'audio')!.clips[0].volume, 0.65, 'custom rules change the rendered music level');
   assert.equal(customProject.tracks.find((track) => track.kind === 'video')!.clips[0].volume, 0.1, 'custom rules change the game-audio mix');
+  const smoothPlan = buildAutomaticMontagePlans({ project, musicAnalysis, highlightAnalyses, options: { musicMediaId: music.id, style: 'smooth', durationSeconds: 6, variants: 1, intensity: 0.4, format: 'project' } })[0];
+  assert.equal(smoothPlan.style, 'smooth', 'the smooth pacing preset is supported by the shared core');
 });
 
 test('automatic montage variants assemble into a continuous editable timeline that exports a playable MP4', async () => {
@@ -205,6 +234,87 @@ test('automatic montage variants assemble into a continuous editable timeline th
   assert.equal(outputVideo.nb_read_frames, '300');
   assert.ok(info.streams.some((stream: any) => stream.codec_type === 'audio'));
   assert.ok((await stat(outputPath)).size > 10_000);
+});
+
+test('range previews reuse unaffected ranges, preserve timeline AV sync, and cancel stale renders', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-range-preview-'));
+  scratch.push(directory);
+  const videoPath = path.join(directory, 'synthetic-av.mp4');
+  await runCommand('ffmpeg', [
+    '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=12',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=12',
+    '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', videoPath
+  ]);
+  const sourceStat = await stat(videoPath);
+  const asset: MediaAsset = { id: 'range-av', path: videoPath, name: 'synthetic-av.mp4', kind: 'video', duration: rational(12), width: 320, height: 180, frameRate: rational(30), hasAudio: true, sizeBytes: sourceStat.size, modifiedAt: sourceStat.mtime.toISOString(), contentHash: 'range-av-fixture-v1', importedAt: '' };
+  const project: Project = {
+    schemaVersion: 1, id: 'range-preview-project', name: 'Range preview', createdAt: '', updatedAt: '',
+    frameRate: rational(30), width: 1280, height: 720, media: [asset],
+    tracks: [{ id: 'video-1', name: 'V1', kind: 'video', muted: false, solo: false, locked: false, volume: 1, clips: [
+      { id: 'before-range', mediaId: asset.id, start: rational(0), sourceIn: rational(0), duration: rational(2), audioEnabled: true, volume: 1 },
+      { id: 'crossing-range', mediaId: asset.id, start: rational(2), sourceIn: rational(2), duration: rational(10), audioEnabled: true, volume: 1 }
+    ] }]
+  };
+  const requested = rational(5);
+  const range = timelinePreviewRangeAt(project, requested);
+  assert.deepEqual(range, { start: rational(5), duration: rational(5) }, 'preview ranges are aligned to exact frame boundaries');
+  const selectedRange = { start: rational(4), duration: rational(3) };
+  const originalKey = timelinePreviewCacheKey(project, selectedRange);
+  const nonRenderEdit = structuredClone(project);
+  nonRenderEdit.tracks[0].name = 'Renamed track'; nonRenderEdit.tracks[0].locked = true; nonRenderEdit.tracks[0].clips[1].id = 'renamed-clip';
+  assert.equal(timelinePreviewCacheKey(nonRenderEdit, selectedRange), originalKey, 'editor labels, locks, and identifiers do not invalidate rendered pixels');
+  const outsideEdit = structuredClone(project);
+  outsideEdit.tracks[0].clips[0].transform = { scale: 1.1, x: 0, y: 0, rotationDegrees: 0 };
+  assert.equal(timelinePreviewCacheKey(outsideEdit, selectedRange), originalKey, 'an edit to a clip outside this range preserves its cache key');
+  const insideEdit = structuredClone(project);
+  insideEdit.tracks[0].clips[1].transform = { scale: 1.1, x: 0, y: 0, rotationDegrees: 0 };
+  assert.notEqual(timelinePreviewCacheKey(insideEdit, selectedRange), originalKey, 'an edit to a clip intersecting this range invalidates it');
+
+  const previewPath = path.join(directory, 'range-preview.mp4');
+  const preview = await exportVideo(project, { outputPath: previewPath, range: selectedRange, quality: 'preview' });
+  assert.equal(decimal(preview.duration), '3');
+  assert.equal(decimal(preview.frameRate), '24');
+  const previewProbe = JSON.parse((await runCommand('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,start_time,duration', '-of', 'json', previewPath])).stdout);
+  const previewVideo = previewProbe.streams.find((stream: any) => stream.codec_type === 'video');
+  const previewAudio = previewProbe.streams.find((stream: any) => stream.codec_type === 'audio');
+  assert.deepEqual([previewVideo.width, previewVideo.height], [960, 540]);
+  assert.ok(previewAudio, 'range preview keeps the corresponding audio stream');
+  assert.ok(Math.abs(Number(previewVideo.start_time) - Number(previewAudio.start_time)) < 0.05, 'audio and video start in sync after range extraction');
+  assert.ok(Math.abs(Number(previewProbe.format.duration) - 3) < 0.08, 'range duration stays aligned to the requested timeline window');
+
+  const controller = new AbortController();
+  const cancelPath = path.join(directory, 'cancelled-preview.mp4');
+  const pending = exportVideo(project, { outputPath: cancelPath, range: selectedRange, quality: 'preview', signal: controller.signal });
+  setTimeout(() => controller.abort(), 25);
+  await assert.rejects(pending, (error: any) => error.code === 'PROCESS_ABORTED');
+  await assert.rejects(stat(cancelPath), (error: any) => error.code === 'ENOENT');
+  const leftovers = (await readdir(directory)).filter((name) => name.includes('cancelled-preview') && name.endsWith('.rendering.mp4'));
+  assert.deepEqual(leftovers, [], 'cancelled FFmpeg renders remove their temporary output');
+});
+
+test('preview cache pruning enforces file count, byte, and age budgets while retaining the active entry', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-preview-cache-'));
+  scratch.push(directory);
+  const active = path.join(directory, 'active.mp4');
+  const newest = path.join(directory, 'newest.mp4');
+  const small = path.join(directory, 'small.mp4');
+  const expired = path.join(directory, 'expired.mp4');
+  await writeFile(active, Buffer.alloc(50));
+  await writeFile(newest, Buffer.alloc(40));
+  await writeFile(small, Buffer.alloc(20));
+  await writeFile(expired, Buffer.alloc(5));
+  const now = Date.now();
+  await utimes(active, new Date(now - 300), new Date(now - 300));
+  await utimes(newest, new Date(now), new Date(now));
+  await utimes(small, new Date(now - 100), new Date(now - 100));
+  await utimes(expired, new Date(now - 60_000), new Date(now - 60_000));
+  const removed = await prunePreviewCache(directory, active, { maxFiles: 2, maxBytes: 80, maxAgeMs: 10_000, matches: (name) => name.endsWith('.mp4') });
+  assert.ok(removed.some((file) => file.endsWith('newest.mp4')), 'the cache byte cap excludes a newer but too-large entry');
+  assert.ok(removed.some((file) => file.endsWith('expired.mp4')), 'expired cache files are removed');
+  assert.equal((await stat(active)).size, 50, 'the active preview stays available even when it alone exceeds normal recency');
+  assert.equal((await stat(small)).size, 20, 'a recent entry that fits the remaining budget is retained');
+  assert.equal((await readdir(directory)).filter((name) => name.endsWith('.mp4')).length, 2, 'the retained cache stays inside the configured file limit');
 });
 
 test('media library virtual window bounds rendered rows and preserves total scroll height', () => {
@@ -555,8 +665,15 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
   assert.ok(Math.abs(result.estimatedBpm - 120) <= 4, `expected about 120 BPM, got ${result.estimatedBpm}`);
   assert.ok(result.beats.length >= 25, `expected beat positions, got ${result.beats.length}`);
   assert.ok(result.onsets.length >= 25, `expected detected onsets, got ${result.onsets.length}`);
-  assert.ok(result.beatPhaseSeconds !== undefined && result.beatPhaseSeconds < 0.1);
-  assert.equal(result.method, 'spectral-flux-dynamic-beat-v4');
+  assert.ok(result.beatPhaseSeconds !== undefined && Math.abs(result.beatPhaseSeconds - (result.beats[0] % (60 / result.estimatedBpm!))) < 0.001, 'beat phase remains expressed in seconds relative to the detected pulse period');
+  assert.equal(result.method, 'spectral-flux-adaptive-beat-v5');
+  assert.ok(result.beatGrid && result.beatGrid.length === result.beats.length, 'structured beat-grid points align one-to-one with legacy beat timestamps');
+  assert.ok(result.beatGrid!.every((point, index) => point.index === index && point.confidence >= 0 && point.confidence <= 1));
+  assert.ok(result.beatGrid!.every((point, index, grid) => index === 0 || point.timeSeconds > grid[index - 1].timeSeconds), 'the confidence grid is strictly time ordered');
+  assert.ok(result.tempoSegments && result.tempoSegments.length > 0 && result.tempoSegments[0].startSeconds === 0);
+  assert.equal(result.onsetEvents?.length, result.onsets.length, 'individual transients include confidence while legacy onset timestamps remain');
+  assert.ok(result.onsetEvents?.every((onset) => onset.confidence >= 0 && onset.confidence <= 1));
+  assert.ok(Array.isArray(result.accents) && Array.isArray(result.structureEvents));
   assert.ok(result.energyCurve.length >= 15);
   assert.ok(result.energySections.length > 0);
   assert.equal(result.meter, undefined, 'even beats without bar accents do not invent a meter');
@@ -565,6 +682,10 @@ test('local audio analysis finds a synthetic 120 BPM click track and reuses its 
   assert.ok((await stat(cache)).size > 100);
   assert.deepEqual(await readCachedAudioAnalysis(source, cache), result, 'the library can identify a fresh completed analysis cache');
   assert.deepEqual(await analyzeAudio(source, cache), result, 'a matching source size and mtime reuse the saved result');
+  const sourceInfo = await stat(source);
+  await writeFile(cache, JSON.stringify({ sourceSizeBytes: sourceInfo.size, sourceMtimeMs: sourceInfo.mtimeMs, analysis: { ...result, method: 'spectral-flux-dynamic-beat-v4' } }));
+  assert.equal(await readCachedAudioAnalysis(source, cache), null, 'an older analysis method invalidates the cache after an algorithm change');
+  await analyzeAudio(source, cache);
   await writeFile(source, Buffer.concat([await readFile(source), Buffer.from([0])]));
   assert.equal(await readCachedAudioAnalysis(source, cache), null, 'a source change invalidates the visible analysis status');
   for (const bpm of [90, 150]) {
@@ -585,7 +706,9 @@ test('audio analysis reports accented meter, downbeats, and a high-energy transi
   assert.ok(analysis.estimatedBpm && Math.abs(analysis.estimatedBpm - 120) <= 4);
   assert.equal(analysis.meter?.beatsPerBar, 4, `expected accented 4/4, got ${JSON.stringify(analysis.meter)}`);
   assert.ok(analysis.downbeats.length >= 10);
+  assert.ok((analysis.accents?.length ?? 0) > 0, 'strong beats or transients are exposed as accent anchors');
   assert.ok(analysis.drops.some((time) => Math.abs(time - 12) <= 2), `expected an energy rise near 12 seconds, got ${analysis.drops.join(', ')}`);
+  assert.ok(analysis.structureEvents?.some((event) => event.type === 'drop' && event.signals.length > 0));
 });
 
 test('motion and optional OCR detectors report their availability and motion evidence', async () => {
@@ -610,16 +733,72 @@ test('game rules reload changed local profiles and emit explicit game event labe
   const previousPath = process.env.OPENMONTAGE_GAME_RULES;
   process.env.OPENMONTAGE_GAME_RULES = rulesPath;
   try {
-    await writeFile(rulesPath, JSON.stringify({ schemaVersion: 1, profiles: [{ id: 'test-arena', gameAliases: ['Test Arena'], events: [{ id: 'round_win', keywords: ['victorious squad'] }] }] }));
+    await writeFile(rulesPath, JSON.stringify({ schemaVersion: 1, profiles: [{ id: 'test-arena', gameAliases: ['Test Arena'], events: [{ id: 'round_win', eventType: 'round_end', keywords: ['victorious squad'] }] }] }));
     const initialKey = await gameRuleCacheKey();
-    assert.deepEqual(await matchGameEvent('Victorious Squad!', 'Test Arena'), { profileId: 'test-arena', eventId: 'round_win', matchedKeyword: 'victorious squad' });
-    await writeFile(rulesPath, JSON.stringify({ schemaVersion: 1, profiles: [{ id: 'test-arena', gameAliases: ['Test Arena'], events: [{ id: 'objective', keywords: ['objective secured'] }] }] }));
+    assert.deepEqual(await matchGameEvent('Victorious Squad!', 'Test Arena'), { profileId: 'test-arena', eventId: 'round_win', matchedKeyword: 'victorious squad', eventType: 'round_end', evidenceLevel: 'explicit' });
+    await writeFile(rulesPath, JSON.stringify({ schemaVersion: 1, profiles: [{ id: 'test-arena', gameAliases: ['Test Arena'], events: [{ id: 'objective', eventType: 'round_objective', keywords: ['objective secured'] }] }] }));
     assert.notEqual(await gameRuleCacheKey(), initialKey, 'custom rule changes invalidate the detector cache key');
-    assert.deepEqual(await matchGameEvent('Objective secured', 'Test Arena'), { profileId: 'test-arena', eventId: 'objective', matchedKeyword: 'objective secured' });
+    assert.deepEqual(await matchGameEvent('Objective secured', 'Test Arena'), { profileId: 'test-arena', eventId: 'objective', matchedKeyword: 'objective secured', eventType: 'round_objective', evidenceLevel: 'explicit' });
   } finally {
     if (previousPath === undefined) delete process.env.OPENMONTAGE_GAME_RULES;
     else process.env.OPENMONTAGE_GAME_RULES = previousPath;
   }
+});
+
+test('Valorant adapter classifies explicit HUD labels without inventing kills from ordinary text', async () => {
+  assert.equal(classifyValorantHudText('Enemy eliminated · Headshot')?.eventType, 'headshot');
+  assert.equal(classifyValorantHudText('Double Kill')?.eventType, 'multi_kill');
+  assert.equal(classifyValorantHudText('ACE')?.evidenceLevel, 'explicit');
+  assert.equal(classifyValorantHudText('1v3')?.evidenceLevel, 'heuristic');
+  assert.equal(classifyValorantHudText('Round won')?.eventType, 'round_end');
+  assert.equal(classifyValorantHudText('Spike defused')?.eventType, 'round_objective');
+  assert.equal(classifyValorantHudText('Space'), null, 'word-boundary matching avoids the old substring false positive');
+  assert.equal(classifyValorantHudText('Headshots are allowed'), null, 'plural HUD text does not become a headshot');
+  assert.equal(classifyValorantHudText('Enemy eliminated', 'Counter-Strike'), null, 'the Valorant adapter does not classify other games');
+  assert.equal(legacyValorantTextMatch('Space')?.eventId, 'ace', 'fixture baseline preserves the prior substring matcher behavior');
+  assert.equal((await matchGameEvent('Double Kill', 'Valorant'))?.eventType, 'multi_kill');
+  assert.equal((await matchGameEvent('Counter-Terrorists win', 'CS2'))?.eventType, 'round_end', 'other built-in profiles retain typed event semantics');
+});
+
+test('Valorant kill-feed row changes are normalized, debounced, and remain uncertain cues', () => {
+  const word = (text: string, x: number, lineId = 'feed') => ({ text, confidence: 90, x, y: 0.1, width: 0.07, height: 0.02, lineId });
+  const changes = detectValorantKillFeedChanges([
+    { timeSeconds: 1, words: [word('Jett', 0.72), word('Vandal', 0.81)] },
+    { timeSeconds: 1.25, words: [word('Jett', 0.72), word('Vandal', 0.81)] },
+    { timeSeconds: 1.5, words: [word('Jett', 0.72), word('Vandal', 0.81), word('Sage', 0.9)] },
+    { timeSeconds: 2, words: [word('Score', 0.2), word('13', 0.29)] }
+  ]);
+  assert.equal(changes.length, 1, 'the first frame establishes a baseline; later changed rows are only possible feed events');
+  assert.equal(changes[0].signature, 'jett vandal sage');
+  assert.ok(changes.every((change) => change.confidence <= 0.75));
+});
+
+test('highlight fusion retains explicit gameplay types and explains audio-motion candidates', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'openmontage-gameplay-fusion-'));
+  scratch.push(directory);
+  const mediaPath = path.join(directory, 'generated-media-marker.dat');
+  await writeFile(mediaPath, 'synthetic-marker');
+  const detectors: DetectorPlugin[] = [
+    { id: 'test.motion', version: '1', modality: 'video', async detect() { return [{ kind: 'motion_activity', startSeconds: 4.8, decisiveSeconds: 5, endSeconds: 5.4, confidence: 0.7, interestingness: 0.8, evidence: { metric: 'frame-difference' } }]; } },
+    { id: 'test.audio', version: '1', modality: 'audio', async detect() { return [{ kind: 'audio_activity', startSeconds: 4.9, decisiveSeconds: 5.1, endSeconds: 5.5, confidence: 0.65, interestingness: 0.75, evidence: { transientCount: 3 } }]; } },
+    { id: 'test.hud', version: '1', modality: 'text', async detect() { return [{ kind: 'gameplay_event', eventType: 'headshot', evidenceLevel: 'explicit', uncertainties: ['OCR can misread text.'], startSeconds: 5, decisiveSeconds: 5.2, endSeconds: 5.3, confidence: 0.93, interestingness: 0.9, evidence: { recognizedText: 'Headshot', matchedKeyword: 'headshot' } }]; } }
+  ];
+  const audioAnalysis: AudioAnalysis = { method: 'spectral-flux-dynamic-beat-v4', sampleRate: 48000, hopSeconds: 0.01, durationSeconds: 10, bpmHypotheses: [], beats: [], downbeats: [], energyHopSeconds: 1, energyCurve: Array(10).fill(0.5), energySections: [], drops: [], onsets: [] };
+  const analysis = await analyzeHighlightCues({ mediaId: 'fused', mediaPath, mediaKind: 'video', durationSeconds: 10, game: 'Valorant', audioAnalysis }, undefined, detectors);
+  assert.equal(analysis.events.length, 1);
+  const event = analysis.events[0];
+  assert.equal(event.eventType, 'headshot');
+  assert.equal(event.evidenceLevel, 'explicit');
+  assert.equal(event.kind, 'coincident_activity');
+  assert.ok(event.signals?.includes('test.motion'));
+  assert.ok(event.signals?.includes('test.audio'));
+  assert.ok(event.signals?.includes('matchedKeyword=headshot'));
+  assert.ok(event.uncertainties?.includes('OCR can misread text.'));
+  assert.ok(event.scoreBreakdown && Math.abs(event.scoreBreakdown.total - event.rankScore / 100) <= 0.01);
+  const activityOnly = await analyzeHighlightCues({ mediaId: 'activity-only', mediaPath, mediaKind: 'video', durationSeconds: 10, game: 'Valorant', audioAnalysis }, undefined, detectors.slice(0, 2));
+  assert.equal(activityOnly.events[0].eventType, 'combat_activity');
+  assert.equal(activityOnly.events[0].evidenceLevel, 'corroborated');
+  assert.ok(activityOnly.events[0].uncertainties?.some((item) => item.includes('do not prove a fight')));
 });
 
 test('evaluation reports independent gameplay consensus and real-music beat metrics', async () => {
@@ -647,6 +826,11 @@ test('evaluation reports independent gameplay consensus and real-music beat metr
   const report = await evaluateHighlightDataset(manifest);
   assert.equal(report.referenceEvents, 1);
   assert.equal(report.disputedAnnotations, 0);
+  const syntheticKillMetrics = report.gameplayEventResults.find((result) => result.eventType === 'kill');
+  assert.equal(syntheticKillMetrics?.truePositives, 0, 'generic generated motion cannot be labeled as a kill without proof');
+  assert.equal(syntheticKillMetrics?.falseNegatives, 1);
+  assert.equal(syntheticKillMetrics?.meanAbsoluteTimingErrorSeconds, null);
+  assert.equal(report.gameplayCueBaseline.method, 'legacy-time-only-activity-cues');
   assert.equal(report.detectorResults.find((result) => result.detectorId === 'openmontage.frame-difference-motion')?.evaluatedMediaItems, 1);
   const ocrResult = report.detectorResults.find((result) => result.detectorId === 'openmontage.tesseract-hud-ocr');
   const ocrStatus = report.items[0].analysis.detectors.find((detector) => detector.detectorId === 'openmontage.tesseract-hud-ocr')?.status;

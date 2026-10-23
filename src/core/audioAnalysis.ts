@@ -5,22 +5,22 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors';
-import type { AudioAnalysis, BpmHypothesis, EnergySection, MeterEstimate } from './types';
+import type { AudioAnalysis, AudioOnset, BeatGridPoint, BpmHypothesis, EnergySection, MeterEstimate, MusicStructureEvent, TempoSegment } from './types';
 
 const SAMPLE_RATE = 11_025;
 const FFT_SIZE = 2_048;
 const HOP_SAMPLES = 256; // about 23 ms
-// A centered Hann window sees an attack before its labeled frame center.
-// Shift detected transients by half the analysis window to compensate.
+// The positive half of the centered FFT window contains the samples after its nominal center.
 const ONSET_TIME_CORRECTION_SECONDS = FFT_SIZE / (2 * SAMPLE_RATE);
+const AUDIO_ANALYSIS_METHOD: AudioAnalysis['method'] = 'spectral-flux-adaptive-beat-v5';
 const FFT_WINDOW = Float64Array.from({ length: FFT_SIZE }, (_value, index) => 0.5 - 0.5 * Math.cos(2 * Math.PI * index / (FFT_SIZE - 1)));
 const FFT_BIT_REVERSE = makeBitReverseTable(FFT_SIZE);
 const FFT_STAGES = makeFftStages(FFT_SIZE);
 
 /**
  * Decode audio to mono PCM, derive a spectrally weighted onset-strength curve,
- * then track a tempo-tolerant beat path locally. Scores are comparative
- * autocorrelation values, not calibrated probabilities.
+ * then track a tempo-tolerant beat grid. Per-beat and per-tempo confidence
+ * values are comparative signal scores, not calibrated probabilities.
  */
 export async function analyzeAudio(filePath: string, cacheFilePath?: string): Promise<AudioAnalysis> {
   const source = path.resolve(filePath);
@@ -39,36 +39,56 @@ export async function analyzeAudio(filePath: string, cacheFilePath?: string): Pr
     const hopSeconds = HOP_SAMPLES / SAMPLE_RATE;
     const pulseHypotheses = findBpmHypotheses(onsetEnvelope, hopSeconds);
     const best = pulseHypotheses[0];
-    const beats = best ? trackBeats(onsetEnvelope, 60 / best.bpm / hopSeconds, hopSeconds) : [];
+    const rawTempoSegments = best ? estimateTempoSegments(onsetEnvelope, hopSeconds, best.bpm) : [];
+    const trackedBeats = best ? trackAdaptiveBeatGrid(onsetEnvelope, hopSeconds, rawTempoSegments, best.bpm, onsetData.rms, onsetData.bassEnergy) : [];
+    const beats = trackedBeats.map((beat) => beat.timeSeconds);
     const periodSeconds = best ? 60 / best.bpm : undefined;
     const phase = beats[0] === undefined || periodSeconds === undefined
       ? undefined
       : beats[0] % periodSeconds;
     const firstBeatIndex = beats[0] === undefined || periodSeconds === undefined ? 0 : Math.floor(beats[0] / periodSeconds);
-    const meter = estimateMeter(onsetData.rms, onsetData.bassEnergy, beats, hopSeconds, periodSeconds);
-    const tempoScale = meter?.denominator === 8 ? 0.5 : 1;
+    const meter = estimateMeter(onsetData.rms, onsetData.bassEnergy, beats, hopSeconds, periodSeconds, trackedBeats.map((beat) => beat.strength));
+    const tempoScale = meter?.denominator === 8 && meter.confidence >= 0.72 ? 0.5 : 1;
     const bpmHypotheses = pulseHypotheses.map((hypothesis) => ({ ...hypothesis, bpm: roundBpm(hypothesis.bpm * tempoScale) }));
-    const downbeats = meter ? beats.filter((_beat, index) => (index + firstBeatIndex) % meter.beatsPerBar === meter.downbeatPhase) : [];
+    const beatGrid: BeatGridPoint[] = trackedBeats.map((beat) => ({
+      timeSeconds: beat.timeSeconds,
+      index: beat.index,
+      confidence: beat.confidence,
+      strength: beat.strength,
+      downbeat: meter ? modulo(beat.index + firstBeatIndex, meter.beatsPerBar) === meter.downbeatPhase : false
+    }));
+    const downbeats = beatGrid.filter((beat) => beat.downbeat).map((beat) => beat.timeSeconds);
     const energyCurve = normalizeEnergy(onsetData.energyBySecond);
     const energySections = findEnergySections(energyCurve);
-    const drops = findEnergyDrops(energyCurve);
-    const onsets = pickOnsets(onsetEnvelope, hopSeconds);
+    const onsetPeaks = findOnsetPeaks(onsetEnvelope, hopSeconds);
+    const onsets = onsetPeaks.map((onset) => onset.timeSeconds);
+    const onsetEvents: AudioOnset[] = onsetPeaks.map((onset) => ({ ...onset, confidence: Number((0.25 + onset.strength * 0.7).toFixed(3)) }));
+    const accentEvents = findAccents(beatGrid, onsetPeaks);
+    const accents = accentEvents.map((accent) => accent.timeSeconds);
+    const structureEvents = findMusicStructureEvents(energyCurve, onsetData.energyBySecond, energySections, accentEvents);
+    const drops = structureEvents.filter((event) => event.type === 'drop').map((event) => event.timeSeconds);
+    const tempoSegments: TempoSegment[] = rawTempoSegments.map((segment) => ({ ...segment, bpm: roundBpm(segment.bpm * tempoScale) }));
     const result: AudioAnalysis = {
-      method: 'spectral-flux-dynamic-beat-v4',
+      method: AUDIO_ANALYSIS_METHOD,
       sampleRate: SAMPLE_RATE,
       hopSeconds,
       durationSeconds: onsetEnvelope.length * hopSeconds,
       estimatedBpm: bpmHypotheses[0]?.bpm,
       bpmHypotheses,
-      beatPhaseSeconds: phase === undefined ? undefined : phase * hopSeconds,
+      beatPhaseSeconds: phase,
       beats,
+      beatGrid,
+      tempoSegments,
       ...(meter ? { meter } : {}),
       downbeats,
       energyHopSeconds: 1,
       energyCurve,
       energySections,
       drops,
-      onsets
+      onsets,
+      onsetEvents,
+      accents,
+      structureEvents
     };
     if (cacheFilePath) {
       await fs.mkdir(path.dirname(cacheFilePath), { recursive: true });
@@ -90,7 +110,7 @@ export async function readCachedAudioAnalysis(filePath: string, cacheFilePath: s
     const sourceStat = sourceSizeBytes === undefined || sourceMtimeMs === undefined ? await fs.stat(filePath) : undefined;
     const cached = JSON.parse(await fs.readFile(cacheFilePath, 'utf8')) as { sourceSizeBytes: number; sourceMtimeMs: number; analysis: AudioAnalysis };
     if (cached.sourceSizeBytes !== (sourceSizeBytes ?? sourceStat!.size) || cached.sourceMtimeMs !== (sourceMtimeMs ?? sourceStat!.mtimeMs)) return null;
-    if (cached.analysis?.method !== 'spectral-flux-dynamic-beat-v4' || !Array.isArray(cached.analysis.beats) || !Array.isArray(cached.analysis.onsets) || !Array.isArray(cached.analysis.downbeats) || !Array.isArray(cached.analysis.energyCurve)) return null;
+    if (cached.analysis?.method !== AUDIO_ANALYSIS_METHOD || !Array.isArray(cached.analysis.beats) || !Array.isArray(cached.analysis.onsets) || !Array.isArray(cached.analysis.downbeats) || !Array.isArray(cached.analysis.energyCurve) || !Array.isArray(cached.analysis.beatGrid) || !Array.isArray(cached.analysis.tempoSegments) || !Array.isArray(cached.analysis.onsetEvents) || !Array.isArray(cached.analysis.structureEvents)) return null;
     return cached.analysis;
   } catch { return null; }
 }
@@ -188,6 +208,222 @@ async function buildOnsetEnvelope(pcmPath: string): Promise<{ transients: Float6
   }
 }
 
+interface TrackedBeat {
+  timeSeconds: number;
+  index: number;
+  confidence: number;
+  strength: number;
+}
+
+/** Estimate a short-time pulse curve so a single global BPM cannot dominate an entire song. */
+function estimateTempoSegments(envelope: Float64Array, hopSeconds: number, fallbackBpm: number): TempoSegment[] {
+  const duration = envelope.length * hopSeconds;
+  if (!duration) return [];
+  const windowSeconds = Math.min(8, duration);
+  if (duration < 5.5 || !Number.isFinite(fallbackBpm)) {
+    return [{ startSeconds: 0, endSeconds: duration, bpm: fallbackBpm, confidence: 0.35 }];
+  }
+  const strideSeconds = 2;
+  const centers: number[] = [];
+  if (duration <= windowSeconds) centers.push(duration / 2);
+  else {
+    for (let center = windowSeconds / 2; center <= duration - windowSeconds / 2; center += strideSeconds) centers.push(center);
+    if (centers[centers.length - 1] < duration - windowSeconds / 2) centers.push(duration - windowSeconds / 2);
+  }
+  const samples: Array<{ center: number; bpm: number; confidence: number }> = [];
+  for (const center of centers) {
+    const start = Math.max(0, center - windowSeconds / 2);
+    const end = Math.min(duration, center + windowSeconds / 2);
+    const first = Math.max(0, Math.floor(start / hopSeconds));
+    const last = Math.min(envelope.length, Math.ceil(end / hopSeconds));
+    const local = envelope.slice(first, last);
+    const hypotheses = findBpmHypotheses(local, hopSeconds);
+    if (!hypotheses.length) continue;
+    const priorBpm = samples[samples.length - 1]?.bpm ?? fallbackBpm;
+    const top = hypotheses[0];
+    const runner = hypotheses[1];
+    const chosen = hypotheses.reduce((best, candidate) => {
+      const continuityPenalty = Math.min(0.12, Math.abs(Math.log2(candidate.bpm / priorBpm)) * 0.035);
+      const bestPenalty = Math.min(0.12, Math.abs(Math.log2(best.bpm / priorBpm)) * 0.035);
+      return candidate.score - continuityPenalty > best.score - bestPenalty ? candidate : best;
+    }, top);
+    const margin = runner ? Math.max(0, top.score - runner.score) : Math.max(0, top.score);
+    const confidence = clamp(0.25 + Math.max(-0.2, top.score) * 0.38 + Math.min(0.5, margin) * 0.55, 0.08, 0.96);
+    samples.push({ center, bpm: chosen.bpm, confidence });
+  }
+  if (!samples.length) return [{ startSeconds: 0, endSeconds: duration, bpm: fallbackBpm, confidence: 0.35 }];
+  if (samples[0].center > 0) samples.unshift({ ...samples[0], center: 0 });
+  if (samples[samples.length - 1].center < duration) samples.push({ ...samples[samples.length - 1], center: duration });
+
+  // Median smoothing removes isolated half/double-tempo jumps while preserving clear changes.
+  const smoothed = samples.map((sample, index) => {
+    const adjacent = samples.slice(Math.max(0, index - 1), Math.min(samples.length, index + 2));
+    const bpmValues = adjacent.map((item) => item.bpm).sort((a, b) => a - b);
+    const medianBpm = bpmValues[Math.floor(bpmValues.length / 2)];
+    const differsByChange = adjacent.some((item) => Math.abs(Math.log2(item.bpm / sample.bpm)) > 0.28);
+    return { ...sample, bpm: differsByChange ? sample.bpm : medianBpm };
+  });
+  const segments: TempoSegment[] = [];
+  for (let index = 0; index < smoothed.length - 1; index++) {
+    const current = smoothed[index], next = smoothed[index + 1];
+    const startSeconds = Math.max(0, current.center);
+    const endSeconds = Math.min(duration, next.center);
+    if (endSeconds <= startSeconds) continue;
+    const previous = segments[segments.length - 1];
+    if (previous && Math.abs(Math.log2(previous.bpm / current.bpm)) < 0.035) {
+      const oldDuration = previous.endSeconds - previous.startSeconds;
+      const addedDuration = endSeconds - startSeconds;
+      previous.bpm = (previous.bpm * oldDuration + current.bpm * addedDuration) / (oldDuration + addedDuration);
+      previous.confidence = (previous.confidence * oldDuration + current.confidence * addedDuration) / (oldDuration + addedDuration);
+      previous.endSeconds = endSeconds;
+    } else segments.push({ startSeconds, endSeconds, bpm: current.bpm, confidence: current.confidence });
+  }
+  if (!segments.length) segments.push({ startSeconds: 0, endSeconds: duration, bpm: fallbackBpm, confidence: 0.35 });
+  segments[0].startSeconds = 0;
+  segments[segments.length - 1].endSeconds = duration;
+  return segments;
+}
+
+/** Dynamic-program a beat path against local tempo periods, allowing gradual tempo drift and changes. */
+function trackAdaptiveBeatGrid(envelope: Float64Array, hopSeconds: number, tempoSegments: TempoSegment[], fallbackBpm: number, _rms: Float64Array, _bassEnergy: Float64Array): TrackedBeat[] {
+  if (envelope.length < 2 || !Number.isFinite(fallbackBpm) || fallbackBpm <= 0) return [];
+  const segmentAt = (time: number) => tempoSegments.find((item) => time >= item.startSeconds && time < item.endSeconds) ?? tempoSegments[time < 0 ? 0 : tempoSegments.length - 1];
+  const periodFramesAt = (frame: number): number => {
+    const segment = segmentAt(frame * hopSeconds);
+    const bpm = clamp(segment?.bpm ?? fallbackBpm, 40, 300);
+    return 60 / bpm / hopSeconds;
+  };
+  const scores = new Float64Array(envelope.length);
+  const previous = new Int32Array(envelope.length).fill(-1);
+  let bestEnd = -1, bestScore = -Infinity;
+  for (let index = 0; index < envelope.length; index++) {
+    const period = periodFramesAt(index);
+    const minGap = Math.max(1, Math.floor(period * 0.68));
+    const maxGap = Math.ceil(period * 1.48);
+    let score = envelope[index];
+    const firstPrevious = Math.max(0, index - maxGap);
+    const lastPrevious = index - minGap;
+    for (let prior = firstPrevious; prior <= lastPrevious; prior++) {
+      const ratio = (index - prior) / period;
+      const penalty = 2.4 * Math.log2(ratio) ** 2;
+      const candidate = scores[prior] + envelope[index] - penalty;
+      if (candidate > score) { score = candidate; previous[index] = prior; }
+    }
+    scores[index] = score;
+    if (score > bestScore) { bestScore = score; bestEnd = index; }
+  }
+  const path: number[] = [];
+  for (let cursor = bestEnd; cursor >= 0; cursor = previous[cursor]) path.push(cursor);
+  path.reverse();
+  if (path.length < 3) return [];
+  const beats: TrackedBeat[] = [];
+  for (let position = 0; position < path.length; position++) {
+    const predicted = path[position];
+    const gap = position === 0 ? periodFramesAt(predicted) : predicted - path[position - 1];
+    const radius = Math.max(1, Math.round(Math.min(periodFramesAt(predicted) * 0.1, gap * 0.2)));
+    let strongest = predicted;
+    for (let index = Math.max(0, predicted - radius); index <= Math.min(envelope.length - 1, predicted + radius); index++) if (envelope[index] > envelope[strongest]) strongest = index;
+    const timeSeconds = Number((strongest * hopSeconds + ONSET_TIME_CORRECTION_SECONDS).toFixed(4));
+    if (beats.length && timeSeconds <= beats[beats.length - 1].timeSeconds + hopSeconds * 2) continue;
+    const segment = segmentAt(timeSeconds);
+    const intervalFit = position === 0 ? 0.5 : 1 - Math.min(1, Math.abs(Math.log2(Math.max(1, gap) / periodFramesAt(predicted))));
+    const strength = clamp(envelope[strongest] / 0.72, 0, 1);
+    const confidence = clamp(0.18 + (segment?.confidence ?? 0.35) * 0.35 + strength * 0.35 + intervalFit * 0.12, 0.05, 0.98);
+    beats.push({ timeSeconds, index: beats.length, confidence: Number(confidence.toFixed(3)), strength: Number(strength.toFixed(3)) });
+  }
+  return beats;
+}
+
+function modulo(value: number, divisor: number): number { return ((value % divisor) + divisor) % divisor; }
+function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }
+
+function findOnsetPeaks(envelope: Float64Array, hopSeconds: number): Array<{ timeSeconds: number; strength: number }> {
+  const average = envelope.reduce((sum, value) => sum + value, 0) / Math.max(1, envelope.length);
+  const peak = envelope.reduce((max, value) => Math.max(max, value), 0);
+  if (peak < 1e-5) return [];
+  const threshold = Math.max(average * 2.25, peak * 0.08, 0.015);
+  const onsets: Array<{ timeSeconds: number; strength: number }> = [];
+  for (let i = 1; i < envelope.length - 1; i++) {
+    if (envelope[i] >= threshold && envelope[i] >= envelope[i - 1] && envelope[i] > envelope[i + 1]) {
+      const timeSeconds = Number((i * hopSeconds + ONSET_TIME_CORRECTION_SECONDS).toFixed(4));
+      if (!onsets.length || timeSeconds - onsets[onsets.length - 1].timeSeconds >= 0.08) {
+        const strength = clamp((envelope[i] - threshold) / Math.max(peak - threshold, 1e-8), 0, 1);
+        onsets.push({ timeSeconds, strength });
+      }
+    }
+  }
+  return onsets;
+}
+
+function findAccents(beatGrid: BeatGridPoint[], onsets: Array<{ timeSeconds: number; strength: number }>): Array<{ timeSeconds: number; strength: number; confidence: number }> {
+  const beatStrengths = beatGrid.map((beat) => beat.strength).sort((a, b) => a - b);
+  const percentile = (fraction: number) => beatStrengths[Math.min(beatStrengths.length - 1, Math.floor(beatStrengths.length * fraction))] ?? 0;
+  const beatMedian = percentile(0.5), beatHigh = percentile(0.9), beatContrast = beatHigh - beatMedian;
+  // Keep accent anchors sparse; lower-strength transients remain available in onsetEvents.
+  const candidates = [
+    ...(beatContrast >= 0.08 ? beatGrid.filter((beat) => beat.strength >= beatMedian + beatContrast * 0.65 && beat.strength >= 0.55).map((beat) => ({ timeSeconds: beat.timeSeconds, strength: beat.strength, confidence: clamp((beat.strength - beatMedian) / Math.max(beatContrast, 0.08) * beat.confidence, 0, 0.98) })) : []),
+    ...onsets.filter((onset) => onset.strength >= 0.82).map((onset) => ({ ...onset, confidence: onset.strength * 0.8 }))
+  ].sort((a, b) => a.timeSeconds - b.timeSeconds || b.strength - a.strength);
+  const merged: typeof candidates = [];
+  for (const candidate of candidates) {
+    const prior = merged[merged.length - 1];
+    if (prior && candidate.timeSeconds - prior.timeSeconds < 0.12) {
+      if (candidate.strength > prior.strength) merged[merged.length - 1] = candidate;
+    } else merged.push(candidate);
+  }
+  return merged;
+}
+
+function findMusicStructureEvents(curve: number[], rawEnergy: number[], sections: EnergySection[], accents: Array<{ timeSeconds: number; strength: number; confidence: number }>): MusicStructureEvent[] {
+  const events: MusicStructureEvent[] = [];
+  const positiveEnergy = rawEnergy.filter((value) => value > 1e-5).sort((a, b) => a - b);
+  const referenceEnergy = positiveEnergy[Math.floor((positiveEnergy.length - 1) * 0.75)] ?? 0;
+  const quietThreshold = referenceEnergy * 0.22;
+  let quietStart: number | undefined;
+  for (let index = 0; index <= rawEnergy.length; index++) {
+    const quiet = index < rawEnergy.length && referenceEnergy > 1e-5 && rawEnergy[index] <= quietThreshold;
+    if (quiet && quietStart === undefined) quietStart = index;
+    if ((!quiet || index === rawEnergy.length) && quietStart !== undefined) {
+      const end = index;
+      if (end - quietStart >= 2) {
+        const mean = rawEnergy.slice(quietStart, end).reduce((sum, value) => sum + value, 0) / (end - quietStart);
+        events.push({ type: 'quiet', timeSeconds: quietStart, endSeconds: end, confidence: clamp(0.55 + 0.45 * (1 - mean / Math.max(quietThreshold, 1e-5)), 0, 0.98), strength: clamp(1 - mean / Math.max(referenceEnergy, 1e-5), 0, 1), signals: ['source RMS below 22% of upper-quartile level'] });
+      }
+      quietStart = undefined;
+    }
+  }
+  for (let index = 1; index < sections.length; index++) {
+    const previous = sections[index - 1], current = sections[index];
+    if (previous.level !== current.level) {
+      const change = current.meanEnergy - previous.meanEnergy;
+      events.push({ type: 'section_change', timeSeconds: current.startSeconds, confidence: clamp(0.45 + Math.abs(change) * 0.8, 0, 0.9), strength: clamp(Math.abs(change), 0, 1), signals: [`energy ${previous.level}-to-${current.level}`] });
+    }
+  }
+  for (let index = 4; index + 1 < curve.length; index++) {
+    const before = curve.slice(index - 4, index).reduce((sum, value) => sum + value, 0) / 4;
+    const after = (curve[index] + curve[index + 1]) / 2;
+    const rise = after - before;
+    if (rise >= 0.28 && after >= 0.62 && before <= 0.58 && !events.some((event) => event.type === 'drop' && Math.abs(event.timeSeconds - index) < 4)) {
+      events.push({ type: 'drop', timeSeconds: index, confidence: clamp(0.5 + rise * 0.8, 0, 0.96), strength: clamp(rise, 0, 1), signals: ['four-second energy rise', ...(accents.some((accent) => Math.abs(accent.timeSeconds - index) <= 1) ? ['nearby strong accent'] : [])] });
+    }
+  }
+  for (let end = 4; end <= curve.length; end++) {
+    const start = end - 4;
+    const before = (curve[start] + curve[start + 1]) / 2;
+    const after = (curve[end - 2] + curve[end - 1]) / 2;
+    const rise = after - before;
+    const increasingSteps = curve.slice(start + 1, end).filter((value, index) => value >= curve[start + index] - 0.04).length;
+    const nearDrop = events.some((event) => event.type === 'drop' && Math.abs(event.timeSeconds - end) <= 1.5);
+    const nearBuildUp = events.some((event) => event.type === 'build_up' && event.endSeconds !== undefined && Math.abs(event.endSeconds - end) <= 2);
+    // Require a low-energy starting point to avoid labeling later energy fluctuations as builds.
+    if (rise >= 0.12 && before <= 0.58 && after >= 0.52 && increasingSteps >= 2 && !nearDrop && !nearBuildUp) {
+      events.push({ type: 'build_up', timeSeconds: start, endSeconds: end, confidence: clamp(0.42 + rise * 0.75, 0, 0.9), strength: clamp(rise, 0, 1), signals: ['four-second sustained relative-energy increase'] });
+    }
+  }
+  for (const accent of accents) events.push({ type: 'strong_accent', timeSeconds: accent.timeSeconds, confidence: accent.confidence, strength: accent.strength, signals: ['high onset or beat-grid strength'] });
+  return events.sort((a, b) => a.timeSeconds - b.timeSeconds || a.type.localeCompare(b.type));
+}
+
 function makeBitReverseTable(size: number): Uint32Array {
   const bits = Math.log2(size);
   return Uint32Array.from({ length: size }, (_value, index) => {
@@ -250,7 +486,7 @@ function normalizeNovelty(raw: number[], hopSeconds: number): Float64Array {
   return Float64Array.from(residual, (value) => Math.min(2, value / scale));
 }
 
-function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, beats: number[], hopSeconds: number, periodSeconds?: number): MeterEstimate | undefined {
+function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, beats: number[], hopSeconds: number, periodSeconds?: number, beatStrengths: number[] = []): MeterEstimate | undefined {
   if (beats.length < 12) return undefined;
   const localPeaks = (values: Float64Array) => beats.map((beat) => {
     const center = Math.round(beat / hopSeconds);
@@ -270,7 +506,8 @@ function estimateMeter(rms: Float64Array, bassEnergy: Float64Array, beats: numbe
   const bassAccent = robustZ(localPeaks(bassEnergy));
   // Onset novelty can drift between neighboring frames as beat periods fall
   // between FFT hops, so bar accents rely on measured energy instead.
-  const strengths = beats.map((_beat, index) => 0.6 * bassAccent[index] + 0.4 * rmsAccent[index]);
+  const onsetAccent = beatStrengths.length === beats.length ? robustZ(beatStrengths) : beats.map(() => 0);
+  const strengths = beats.map((_beat, index) => 0.45 * bassAccent[index] + 0.3 * rmsAccent[index] + 0.25 * onsetAccent[index]);
   const candidates: Array<{ beatsPerBar: number; phase: number; score: number }> = [];
   for (let beatsPerBar = 2; beatsPerBar <= 12; beatsPerBar++) {
     const bars = strengths.length / beatsPerBar;
@@ -336,16 +573,6 @@ function findEnergySections(curve: number[]): EnergySection[] {
   return sections;
 }
 
-function findEnergyDrops(curve: number[]): number[] {
-  const drops: number[] = [];
-  for (let index = 4; index + 1 < curve.length; index++) {
-    const before = curve.slice(index - 4, index).reduce((sum, value) => sum + value, 0) / 4;
-    const after = (curve[index] + curve[index + 1]) / 2;
-    if (before < 0.35 && after - before >= 0.35 && (!drops.length || index - drops[drops.length - 1] >= 4)) drops.push(index);
-  }
-  return drops;
-}
-
 function findBpmHypotheses(envelope: Float64Array, hopSeconds: number): BpmHypothesis[] {
   const minLag = Math.max(1, Math.ceil(60 / (300 * hopSeconds)));
   const maxLag = Math.min(envelope.length - 2, Math.floor(60 / (40 * hopSeconds)));
@@ -397,60 +624,6 @@ function findBpmHypotheses(envelope: Float64Array, hopSeconds: number): BpmHypot
     if (selected.length === 5) break;
   }
   return selected;
-}
-
-function trackBeats(envelope: Float64Array, period: number, hopSeconds: number): number[] {
-  if (envelope.length < 2 || !Number.isFinite(period) || period < 2) return [];
-  const scores = new Float64Array(envelope.length);
-  const previous = new Int32Array(envelope.length).fill(-1);
-  const minGap = Math.max(1, Math.floor(period * 0.68));
-  const maxGap = Math.ceil(period * 1.48);
-  let bestEnd = -1, bestScore = -Infinity;
-  for (let index = 0; index < envelope.length; index++) {
-    let score = envelope[index];
-    const firstPrevious = Math.max(0, index - maxGap);
-    const lastPrevious = index - minGap;
-    for (let prior = firstPrevious; prior <= lastPrevious; prior++) {
-      const ratio = (index - prior) / period;
-      const penalty = 2.4 * Math.log2(ratio) ** 2;
-      const candidate = scores[prior] + envelope[index] - penalty;
-      if (candidate > score) { score = candidate; previous[index] = prior; }
-    }
-    scores[index] = score;
-    if (score > bestScore) { bestScore = score; bestEnd = index; }
-  }
-  const path: number[] = [];
-  for (let cursor = bestEnd; cursor >= 0; cursor = previous[cursor]) path.push(cursor);
-  path.reverse();
-  if (path.length < 3) return [];
-  const beats: number[] = [];
-  for (let position = 0; position < path.length; position++) {
-    const predicted = path[position];
-    const gap = position === 0 ? period : path[position] - path[position - 1];
-    const radius = Math.max(1, Math.round(Math.min(period * 0.1, gap * 0.2)));
-    let strongest = predicted;
-    for (let index = Math.max(0, predicted - radius); index <= Math.min(envelope.length - 1, predicted + radius); index++) {
-      if (envelope[index] > envelope[strongest]) strongest = index;
-    }
-    const seconds = Number((strongest * hopSeconds + ONSET_TIME_CORRECTION_SECONDS).toFixed(4));
-    if (!beats.length || seconds - beats[beats.length - 1] > hopSeconds * 2) beats.push(seconds);
-  }
-  return beats;
-}
-
-function pickOnsets(envelope: Float64Array, hopSeconds: number): number[] {
-  const average = envelope.reduce((sum, value) => sum + value, 0) / Math.max(1, envelope.length);
-  const peak = envelope.reduce((max, value) => Math.max(max, value), 0);
-  if (peak < 1e-5) return [];
-  const threshold = Math.max(average * 2.25, peak * 0.08, 0.015);
-  const onsets: number[] = [];
-  for (let i = 1; i < envelope.length - 1; i++) {
-    if (envelope[i] >= threshold && envelope[i] >= envelope[i - 1] && envelope[i] > envelope[i + 1]) {
-      const seconds = Number((i * hopSeconds + ONSET_TIME_CORRECTION_SECONDS).toFixed(4));
-      if (!onsets.length || seconds - onsets[onsets.length - 1] >= 0.08) onsets.push(seconds);
-    }
-  }
-  return onsets;
 }
 
 function roundBpm(value: number): number { return Number(value.toFixed(1)); }

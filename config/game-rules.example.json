@@ -5,8 +5,10 @@
       "id": "my-game",
       "gameAliases": ["My Game"],
       "events": [
-        { "id": "kill", "keywords": ["eliminated", "headshot", "double kill"] },
-        { "id": "round_win", "keywords": ["round won", "match victory"] }
+        { "id": "headshot", "eventType": "headshot", "keywords": ["headshot"] },
+        { "id": "kill", "eventType": "kill", "keywords": ["eliminated", "killed"] },
+        { "id": "multi_kill", "eventType": "multi_kill", "keywords": ["double kill", "triple kill"] },
+        { "id": "round_win", "eventType": "round_end", "keywords": ["round won", "match victory"] }
       ]
     }
   ]

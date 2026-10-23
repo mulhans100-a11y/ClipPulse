@@ -1,6 +1,6 @@
 {
   "name": "openmontage-ai",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A local-first, open-source video editor for music-synchronized gaming montages.",
   "author": "ClipPulse contributors",
   "license": "GPL-3.0-or-later",
@@ -29,10 +29,16 @@
     "package:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
     "start": "electron .",
     "cli": "node dist/src/main/cli.js",
-    "test": "npm run build:main && node --test dist/tests/*.test.js"
+    "test": "npm run build:main && node --test dist/tests/*.test.js tests/agent-e2e.test.cjs",
+    "smoke-test": "node scripts/smoke-test.cjs",
+    "agent-e2e": "npm run build:main && node scripts/agent-e2e.cjs",
+    "benchmark:preview": "npm run build:main && node scripts/benchmark-preview.cjs",
+    "evaluate:valorant-fixture": "npm run build:main && node scripts/evaluate-valorant-fixture.cjs",
+    "evaluate:audio": "tsc -p tsconfig.audio-evaluation.json && node scripts/evaluate-audio-analysis.cjs"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "chokidar": "4.0.3",
     "lucide-react": "^0.468.0",
     "react": "^19.3.1",
@@ -55,6 +61,9 @@
     "appId": "com.github.mulhans100a11y.clippulse",
     "productName": "ClipPulse",
     "afterPack": "scripts/copy-third-party-notices.cjs",
+    "electronFuses": {
+      "runAsNode": true
+    },
     "directories": {
       "output": "release"
     },
@@ -65,13 +74,19 @@
       "README.md",
       "DEPENDENCIES.md",
       "INSTALLATION.md",
+      "AGENT_API.md",
+      "MCP_SETUP.md",
+      "QUALITY_CONTROL.md",
+      "TIMELINE_PREVIEW.md",
       "!**/*.map"
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -81,11 +96,17 @@
       "allowToChangeInstallationDirectory": true
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.video"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "AudioVideo;Video;",
       "synopsis": "Local-first gaming montage editor",
       "maintainer": "ClipPulse contributors <mulhans100-a11y@users.noreply.github.com>"

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "synthetic-valorant-hud-text-v1",
+  "purpose": "Deterministic adapter/parser regression fixture; not real gameplay data or a representative accuracy benchmark.",
+  "cases": [
+    { "id": "ace", "text": "ACE", "expectedEventType": "ace", "eventTimeSeconds": 5.2, "sampledAtSeconds": 5.4 },
+    { "id": "headshot", "text": "Enemy killed · Headshot", "expectedEventType": "headshot", "eventTimeSeconds": 10.1, "sampledAtSeconds": 10.15 },
+    { "id": "double-kill", "text": "Double Kill", "expectedEventType": "multi_kill", "eventTimeSeconds": 15.0, "sampledAtSeconds": 15.5 },
+    { "id": "clutch-label", "text": "CLUTCH", "expectedEventType": "clutch", "eventTimeSeconds": 19.65, "sampledAtSeconds": 19.7 },
+    { "id": "clutch-situation", "text": "1v3", "expectedEventType": "clutch_situation", "eventTimeSeconds": 22.0, "sampledAtSeconds": 22.3 },
+    { "id": "spike-defused", "text": "Spike defused", "expectedEventType": "round_objective", "eventTimeSeconds": 30.0, "sampledAtSeconds": 30.02 },
+    { "id": "round-end", "text": "Round won", "expectedEventType": "round_end", "eventTimeSeconds": 33.1, "sampledAtSeconds": 33.25 },
+    { "id": "kill", "text": "Enemy eliminated", "expectedEventType": "kill", "eventTimeSeconds": 40.2, "sampledAtSeconds": 40.6 },
+    { "id": "substring-negative-space", "text": "Space", "expectedEventType": null },
+    { "id": "plural-negative", "text": "Headshots are allowed", "expectedEventType": null },
+    { "id": "scoreboard-negative", "text": "Scoreboard 0-13", "expectedEventType": null }
+  ]
+}

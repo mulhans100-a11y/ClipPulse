@@ -1,7 +1,27 @@
 import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageOptions, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 
+export type McpClientTarget = 'codex' | 'claude-code';
+export interface McpSetupConfiguration {
+  client: McpClientTarget;
+  serverName: string;
+  configPath: string;
+  backupPath?: string;
+  command: string;
+  args: string[];
+  allowedRoots: string[];
+}
+export interface McpConnectionTest {
+  server: { name: string; version: string };
+  protocol: 'stdio';
+  toolCount: number;
+  diagnostics: { platform?: string; node?: string; ffmpeg?: { ffmpeg?: boolean; ffprobe?: boolean; compatible?: boolean; message?: string } };
+}
+
 export interface OpenMontageApi {
-  version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; message?: string }>;
+  version(): Promise<{ appVersion: string; ffmpeg: boolean; ffprobe: boolean; compatible: boolean; message?: string }>;
+  chooseMcpAllowedRoot(): Promise<string | null>;
+  configureMcpClient(client: McpClientTarget, roots: string[]): Promise<McpSetupConfiguration>;
+  testMcpConnection(roots: string[]): Promise<McpConnectionTest>;
   createProject(): Promise<{ project: Project; path: string } | null>;
   openProject(): Promise<{ project: Project; path: string } | null>;
   openProjectFile(path: string): Promise<{ project: Project; path: string }>;
@@ -45,7 +65,8 @@ export interface OpenMontageApi {
   splitClip(path: string, clipId: string, at: number): Promise<Project>;
   removeClip(path: string, clipId: string): Promise<Project>;
   renderTimelineFrame(path: string, time: number): Promise<{ frame: number; time: Rational; path: string }>;
-  renderTimelinePlayback(path: string): Promise<{ path: string; revision: string }>;
+  renderTimelinePlayback(path: string, time: number): Promise<{ cancelled: true } | { path: string; revision: string; startTime: Rational; duration: Rational; hasMore: boolean }>;
+  cancelTimelinePlayback(path: string): Promise<{ cancelled: boolean }>;
   onTimelinePlaybackProgress(callback: (progress: number) => void): () => void;
   exportVideo(path: string): Promise<{ outputPath: string } | null>;
   onExportProgress(callback: (progress: number) => void): () => void;

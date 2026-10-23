@@ -1,10 +1,12 @@
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { AppError } from './errors';
+import type { EvidenceLevel, GameplayEventType } from './types';
 
 export interface GameRuleEvent {
   id: string;
   keywords: string[];
+  eventType?: GameplayEventType;
 }
 
 export interface GameRuleProfile {
@@ -17,47 +19,54 @@ export interface GameRuleMatch {
   profileId: string;
   eventId: string;
   matchedKeyword: string;
+  eventType?: GameplayEventType;
+  evidenceLevel?: EvidenceLevel;
 }
 
 export const BUILT_IN_GAME_RULES: GameRuleProfile[] = [
   { id: 'valorant', gameAliases: ['valorant'], events: [
-    { id: 'ace', keywords: ['ace'] },
-    { id: 'kill', keywords: ['eliminated', 'headshot', 'killed'] },
-    { id: 'round_objective', keywords: ['spike planted', 'spike defused'] },
-    { id: 'round_result', keywords: ['round won', 'round lost', 'victory', 'defeat'] }
+    { id: 'ace', eventType: 'ace', keywords: ['ace'] },
+    { id: 'multi_kill', eventType: 'multi_kill', keywords: ['double kill', 'triple kill', 'quadra kill', 'quad kill', 'multi kill'] },
+    { id: 'headshot', eventType: 'headshot', keywords: ['headshot', 'head shot'] },
+    { id: 'clutch', eventType: 'clutch', keywords: ['clutch'] },
+    { id: 'round_objective', eventType: 'round_objective', keywords: ['spike planted', 'spike defused', 'spike detonated'] },
+    { id: 'round_end', eventType: 'round_end', keywords: ['round won', 'round lost', 'victory', 'defeat', 'match won', 'match lost'] },
+    { id: 'kill', eventType: 'kill', keywords: ['eliminated', 'killed', 'kill confirmed'] }
   ] },
   { id: 'counter-strike', gameAliases: ['counter-strike', 'counter strike', 'cs2', 'cs go', 'csgo'], events: [
-    { id: 'round_win', keywords: ['terrorists win', 'counter-terrorists win', 'counter terrorists win'] },
-    { id: 'bomb_objective', keywords: ['bomb has been planted', 'bomb has been defused', 'bomb planted', 'bomb defused'] },
-    { id: 'ace', keywords: ['ace'] }
+    { id: 'round_win', eventType: 'round_end', keywords: ['terrorists win', 'counter-terrorists win', 'counter terrorists win'] },
+    { id: 'bomb_objective', eventType: 'round_objective', keywords: ['bomb has been planted', 'bomb has been defused', 'bomb planted', 'bomb defused'] },
+    { id: 'ace', eventType: 'ace', keywords: ['ace'] }
   ] },
   { id: 'fortnite', gameAliases: ['fortnite'], events: [
-    { id: 'victory', keywords: ['victory royale'] },
-    { id: 'elimination', keywords: ['eliminated', 'double elimination', 'triple elimination'] }
+    { id: 'victory', eventType: 'round_end', keywords: ['victory royale'] },
+    { id: 'elimination', eventType: 'kill', keywords: ['eliminated', 'double elimination', 'triple elimination'] }
   ] },
   { id: 'apex-legends', gameAliases: ['apex', 'apex legends'], events: [
-    { id: 'champion', keywords: ['you are the champion', 'champion squad'] },
-    { id: 'squad_elimination', keywords: ['squad eliminated', 'squad wipe'] },
-    { id: 'knockdown', keywords: ['knocked down', 'eliminated'] }
+    { id: 'champion', eventType: 'round_end', keywords: ['you are the champion', 'champion squad'] },
+    { id: 'squad_elimination', eventType: 'multi_kill', keywords: ['squad eliminated', 'squad wipe'] },
+    { id: 'knockdown', eventType: 'kill', keywords: ['knocked down', 'eliminated'] }
   ] },
   { id: 'overwatch', gameAliases: ['overwatch'], events: [
-    { id: 'team_kill', keywords: ['team kill'] },
-    { id: 'match_result', keywords: ['victory', 'defeat'] },
-    { id: 'elimination', keywords: ['eliminated'] }
+    { id: 'team_kill', eventType: 'multi_kill', keywords: ['team kill'] },
+    { id: 'match_result', eventType: 'round_end', keywords: ['victory', 'defeat'] },
+    { id: 'elimination', eventType: 'kill', keywords: ['eliminated'] }
   ] },
   { id: 'call-of-duty', gameAliases: ['call of duty', 'modern warfare', 'warzone'], events: [
-    { id: 'multi_kill', keywords: ['double kill', 'triple kill', 'quad feed', 'multi kill'] },
-    { id: 'headshot', keywords: ['headshot'] },
-    { id: 'elimination', keywords: ['elimination', 'eliminated'] }
+    { id: 'multi_kill', eventType: 'multi_kill', keywords: ['double kill', 'triple kill', 'quad feed', 'multi kill'] },
+    { id: 'headshot', eventType: 'headshot', keywords: ['headshot'] },
+    { id: 'elimination', eventType: 'kill', keywords: ['elimination', 'eliminated'] }
   ] },
   { id: 'openarena', gameAliases: ['openarena', 'anarch'], events: [
-    { id: 'frag', keywords: ['you fragged', 'was fragged by', 'was gunned down by'] },
-    { id: 'match_result', keywords: ['red team wins', 'blue team wins', 'you win', 'you lose'] }
+    { id: 'frag', eventType: 'kill', keywords: ['you fragged', 'was fragged by', 'was gunned down by'] },
+    { id: 'match_result', eventType: 'round_end', keywords: ['red team wins', 'blue team wins', 'you win', 'you lose'] }
   ] },
   { id: 'generic-explicit-events', gameAliases: ['*'], events: [
-    { id: 'kill', keywords: ['double kill', 'triple kill', 'multi kill', 'headshot', 'eliminated', 'killed', 'fragged', 'knocked down'] },
-    { id: 'death', keywords: ['you died', 'killed by', 'eliminated by'] },
-    { id: 'victory', keywords: ['victory', 'match won', 'round won', 'winner'] }
+    { id: 'multi_kill', eventType: 'multi_kill', keywords: ['double kill', 'triple kill', 'multi kill'] },
+    { id: 'headshot', eventType: 'headshot', keywords: ['headshot'] },
+    { id: 'kill', eventType: 'kill', keywords: ['eliminated', 'killed', 'fragged', 'knocked down'] },
+    { id: 'death', eventType: 'unknown', keywords: ['you died', 'killed by', 'eliminated by'] },
+    { id: 'victory', eventType: 'round_end', keywords: ['victory', 'match won', 'round won', 'winner'] }
   ] }
 ];
 
@@ -88,7 +97,7 @@ export async function loadGameRuleProfiles(): Promise<GameRuleProfile[]> {
 
 export async function gameRuleCacheKey(): Promise<string> {
   const configuredPath = process.env.OPENMONTAGE_GAME_RULES?.trim();
-  if (!configuredPath) return 'built-in-game-rules-v1';
+  if (!configuredPath) return 'built-in-game-rules-v2';
   try {
     const raw = await fs.readFile(configuredPath);
     return `custom-game-rules:${createHash('sha256').update(raw).digest('hex')}`;
@@ -105,8 +114,8 @@ export async function matchGameEvent(text: string, game?: string, profiles?: Gam
   const orderedProfiles = activeProfiles.filter((profile) => profile.gameAliases.some((alias) => alias === '*' || normalizedGame.includes(normalize(alias))));
   for (const profile of orderedProfiles) {
     for (const event of profile.events) {
-      const matchedKeyword = event.keywords.find((keyword) => normalizedText.includes(normalize(keyword)));
-      if (matchedKeyword) return { profileId: profile.id, eventId: event.id, matchedKeyword };
+      const matchedKeyword = event.keywords.find((keyword) => containsPhrase(normalizedText, normalize(keyword)));
+      if (matchedKeyword) return { profileId: profile.id, eventId: event.id, matchedKeyword, ...(event.eventType ? { eventType: event.eventType, evidenceLevel: 'explicit' as const } : {}) };
     }
   }
   return null;
@@ -122,8 +131,11 @@ function validateProfile(value: unknown, index: number): GameRuleProfile {
     if (!event?.id?.trim() || !Array.isArray(event.keywords) || !event.keywords.length || event.keywords.some((keyword) => typeof keyword !== 'string' || !keyword.trim())) {
       throw new AppError('INVALID_GAME_RULES', `Event ${eventIndex + 1} in profile ${profile.id} needs an id and non-empty keywords.`);
     }
+    const supportedTypes: GameplayEventType[] = ['kill', 'headshot', 'multi_kill', 'ace', 'clutch', 'clutch_situation', 'round_end', 'round_objective', 'kill_feed_change', 'combat_activity', 'fast_action_candidate', 'quiet_passage', 'audio_activity', 'scene_change', 'text_recognition', 'unknown'];
+    if (event.eventType !== undefined && !supportedTypes.includes(event.eventType)) throw new AppError('INVALID_GAME_RULES', `Event ${event.id} in profile ${profile.id} has an unsupported eventType.`);
   }
   return profile as GameRuleProfile;
 }
 
 function normalize(value: string): string { return value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim(); }
+function containsPhrase(text: string, phrase: string): boolean { return ` ${text} `.includes(` ${phrase} `); }

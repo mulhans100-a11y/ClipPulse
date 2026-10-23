@@ -442,6 +442,28 @@
                   "description": "Reviewed event window end.",
                   "minimum": 0
                 },
+                "correctedEventType": {
+                  "type": "string",
+                  "enum": [
+                    "kill",
+                    "headshot",
+                    "multi_kill",
+                    "ace",
+                    "clutch",
+                    "clutch_situation",
+                    "round_end",
+                    "round_objective",
+                    "kill_feed_change",
+                    "combat_activity",
+                    "fast_action_candidate",
+                    "quiet_passage",
+                    "audio_activity",
+                    "scene_change",
+                    "text_recognition",
+                    "unknown"
+                  ],
+                  "description": "Optional manually corrected semantic event type."
+                },
                 "updatedAt": {
                   "type": "string",
                   "description": "Review timestamp in ISO-8601 form."
@@ -2319,6 +2341,7 @@
               "clean",
               "aggressive",
               "cinematic",
+              "smooth",
               "velocity",
               "custom"
             ]
@@ -2415,6 +2438,159 @@
         "required": [
           "projectPath",
           "time"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "quality_analyze",
+      "description": "Create and persist an objective timeline/render quality report with representative preview frames. Optional selected beat targets are checked exactly; subjective aesthetics are not scored.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "selectedBeatTargets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A selected timeline beat time, preserving exact rational notation."
+            },
+            "description": "Optional beat targets to check against video edit points.",
+            "minItems": 0,
+            "maxItems": 500
+          },
+          "beatToleranceMs": {
+            "type": "number",
+            "description": "Allowed edit-to-beat deviation in milliseconds; defaults to 80.",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "maxAutomaticGapSeconds": {
+            "type": "number",
+            "description": "Largest same-track video gap eligible for an automatic move suggestion.",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "renderAudio": {
+            "type": "boolean",
+            "description": "Render the current timeline once to measure clipping and sustained silence; defaults to true."
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "quality_report_get",
+      "description": "Load a previously persisted quality report by its ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "reportId": {
+            "type": "string",
+            "description": "Quality report UUID."
+          }
+        },
+        "required": [
+          "projectPath",
+          "reportId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "quality_report_list",
+      "description": "List recent persisted quality reports for a project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum reports to return; defaults to 20.",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "projectPath"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "quality_improve",
+      "description": "Run a bounded quality-feedback loop: analyze, transactionally close safe small same-track video gaps, render a new preview, and recheck. Defaults to at most three iterations; all other findings remain suggestions for the agent.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "description": "Absolute path to an .omproj file inside a granted root."
+          },
+          "maxIterations": {
+            "type": "number",
+            "description": "Maximum analyze/fix/recheck iterations (default 3).",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "maxAutomaticGapSeconds": {
+            "type": "number",
+            "description": "Largest same-track video gap eligible for automatic correction; defaults to 0.5.",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "beatToleranceMs": {
+            "type": "number",
+            "description": "Allowed edit-to-beat deviation in milliseconds; defaults to 80.",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "selectedBeatTargets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A selected timeline beat time, preserving exact rational notation."
+            },
+            "description": "Optional beat targets.",
+            "minItems": 0,
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "projectPath"
         ],
         "additionalProperties": false
       },

@@ -32,8 +32,8 @@ jobs:
             os: macos-26-intel
             ffmpeg: macos
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.16.0
           cache: npm
@@ -44,14 +44,29 @@ jobs:
         run: choco install ffmpeg --yes --no-progress
       - name: Install FFmpeg on Linux
         if: matrix.ffmpeg == 'linux'
-        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+        run: bash scripts/install-ffmpeg-linux.sh
       - name: Install FFmpeg on macOS
         if: matrix.ffmpeg == 'macos'
         run: |
           brew install ffmpeg-full
           echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - run: npm ci
+      - run: npm run build
       - name: Verify FFmpeg features used by the editor
         run: node scripts/verify-ffmpeg-ci.cjs
-      - run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
       - run: npm test
+      - name: Read app version for test report artifact
+        id: app-version
+        if: always()
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + require('./package.json').version + '\n')"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: ClipPulse-agent-e2e-v${{ steps.app-version.outputs.version }}-${{ github.run_id }}-${{ runner.os }}-${{ runner.arch }}
+          path: test-results/agent-e2e-*.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Run CLI, media, export, and MCP smoke tests
+        run: npm run smoke-test

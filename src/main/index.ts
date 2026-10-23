@@ -2,23 +2,26 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { analyzeAudio, readCachedAudioAnalysis } from '../core/audioAnalysis';
 import { analyzeHighlightCues } from '../core/highlightAnalysis';
 import { getPublicAnalysisRuntimeStatuses } from '../core/analysisRuntimes';
 import { generateAutomaticMontages } from '../core/autoMontage';
 import { AppError } from '../core/errors';
-import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, setClipEffects, splitClip, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
+import { addTrack, addClip, createProject, duplicateClip, fileExists, findMissingMedia, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, saveProject, setClipAudio, setClipEffects, splitClip, timelineDuration, trimClip, undoProject, updateProjectProfile, updateMediaMetadata, updateTrackSettings, searchMedia, getImportRoots, setImportRootWatching } from '../core/project';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable } from '../core/ffmpeg';
-import { frameTime } from '../core/time';
+import { add, compare, frameTime } from '../core/time';
 import { watchFolder } from '../core/folderWatcher';
 import type { FSWatcher } from 'chokidar';
 import { medalCaptureFolderPreset } from '../core/medal';
-import { renderTimelineFrame } from '../core/timelinePreview';
+import { renderTimelineFrame, timelinePreviewCacheKey, timelinePreviewRangeAt } from '../core/timelinePreview';
+import { prunePreviewCache } from '../core/previewCache';
 import { generateClipModelMask } from '../core/modelSegmentation';
 import { PersistentMediaJobQueue, mediaJobQueuePath, type MediaJobSource } from '../core/mediaJobs';
-import type { AutoMontageOptions, MediaAsset, Project, SegmentationOptions, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
+import type { AutoMontageOptions, MediaAsset, Project, Rational, SegmentationOptions, TimelineClip, TimelineTrack, TrackKind } from '../core/types';
 import { toFrame } from '../core/time';
+import { buildMcpServerArgs, canonicalizeAllowedRoots, installMcpConfiguration, testMcpConnection, type McpClientTarget } from './mcpSetup';
 
 const here = __dirname;
 let mainWindow: BrowserWindow | null = null;
@@ -26,6 +29,7 @@ const projectLocks = new Map<string, Promise<void>>();
 let folderWatchers = new Map<string, FSWatcher>();
 let watchedProjectPath: string | null = null;
 const previewFrameCounts = new Map<string, number>();
+const playbackRenderJobs = new Map<string, Map<string, { controller: AbortController; promise: Promise<void> }>>();
 const mediaJobQueues = new Map<string, Promise<PersistentMediaJobQueue>>();
 
 async function mediaJobQueue(filePath: string): Promise<PersistentMediaJobQueue> {
@@ -55,29 +59,55 @@ async function mediaJobSource(asset: MediaAsset): Promise<MediaJobSource> {
 }
 
 async function pruneTimelinePreviews(directory: string, keepPath: string): Promise<void> {
-  const files = await fs.readdir(directory).catch(() => [] as string[]);
-  if (files.length <= 120) return;
-  const ranked = await Promise.all(files.filter((file) => file.endsWith('.png')).map(async (file) => {
-    const fullPath = path.join(directory, file);
-    try { return { fullPath, modified: (await fs.stat(fullPath)).mtimeMs }; }
-    catch { return { fullPath, modified: 0 }; }
-  }));
-  ranked.sort((a, b) => b.modified - a.modified);
-  const keep = new Set([keepPath, ...ranked.slice(0, 120).map((file) => file.fullPath)]);
-  await Promise.all(ranked.filter((file) => !keep.has(file.fullPath)).map((file) => fs.rm(file.fullPath, { force: true })));
+  await prunePreviewCache(directory, keepPath, { maxFiles: 120, maxBytes: 128 * 1024 * 1024, maxAgeMs: 14 * 24 * 60 * 60 * 1000, matches: (name) => name.endsWith('.png') });
 }
 
 async function pruneTimelinePlaybacks(directory: string, keepPath: string): Promise<void> {
-  const files = await fs.readdir(directory).catch(() => [] as string[]);
-  const ranked = await Promise.all(files.filter((file) => file.endsWith('.mp4')).map(async (file) => {
-    const fullPath = path.join(directory, file);
-    try { return { fullPath, modified: (await fs.stat(fullPath)).mtimeMs }; }
-    catch { return { fullPath, modified: 0 }; }
-  }));
-  if (ranked.length <= 4) return;
-  ranked.sort((a, b) => b.modified - a.modified);
-  const keep = new Set([keepPath, ...ranked.slice(0, 4).map((file) => file.fullPath)]);
-  await Promise.all(ranked.filter((file) => !keep.has(file.fullPath)).map((file) => fs.rm(file.fullPath, { force: true }).catch(() => undefined)));
+  await prunePreviewCache(directory, keepPath, { maxFiles: 24, maxBytes: 512 * 1024 * 1024, maxAgeMs: 14 * 24 * 60 * 60 * 1000, matches: (name) => name.endsWith('.mp4') });
+}
+
+function cancelPlaybackJobs(projectKey: string, keepOutputPath?: string): void {
+  const jobs = playbackRenderJobs.get(projectKey);
+  if (!jobs) return;
+  for (const [outputPath, job] of jobs) {
+    if (outputPath === keepOutputPath) continue;
+    job.controller.abort();
+    jobs.delete(outputPath);
+  }
+  if (!jobs.size) playbackRenderJobs.delete(projectKey);
+}
+
+async function ensureTimelinePlaybackCache(
+  filePath: string, project: Project, range: { start: Rational; duration: Rational },
+  outputPath: string, progress?: (fraction: number) => void
+): Promise<boolean> {
+  if (await fileExists(outputPath)) {
+    const accessedAt = new Date();
+    await fs.utimes(outputPath, accessedAt, accessedAt).catch(() => undefined);
+    return true;
+  }
+  const projectKey = path.resolve(filePath).toLocaleLowerCase();
+  let jobs = playbackRenderJobs.get(projectKey);
+  if (!jobs) { jobs = new Map(); playbackRenderJobs.set(projectKey, jobs); }
+  let job = jobs.get(outputPath);
+  if (!job) {
+    const controller = new AbortController();
+    const currentJobs = jobs;
+    const promise = (async () => {
+      if (!(await fileExists(outputPath))) {
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await exportVideo(project, { outputPath, overwrite: true, range, quality: 'preview', signal: controller.signal, onProgress: progress });
+      }
+      await pruneTimelinePlaybacks(path.dirname(outputPath), outputPath);
+    })().finally(() => {
+      if (currentJobs.get(outputPath)?.controller === controller) currentJobs.delete(outputPath);
+      if (!currentJobs.size && playbackRenderJobs.get(projectKey) === currentJobs) playbackRenderJobs.delete(projectKey);
+    });
+    job = { controller, promise };
+    jobs.set(outputPath, job);
+  }
+  try { await job.promise; return !job.controller.signal.aborted && await fileExists(outputPath); }
+  catch (error) { if (job.controller.signal.aborted) return false; throw error; }
 }
 
 async function withProjectLock<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
@@ -146,14 +176,37 @@ function createWindow(): void {
       preload: path.join(here, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: !app.isPackaged
     }
   });
   mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => console.error(`Preload failed (${preloadPath}):`, error));
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devUrl) void mainWindow.loadURL(devUrl);
-  else void mainWindow.loadFile(path.join(here, '../../renderer/index.html'));
+  const rendererPath = path.resolve(here, '../../renderer/index.html');
+  const configuredDevUrl = !app.isPackaged ? process.env.VITE_DEV_SERVER_URL : undefined;
+  let devOrigin: string | undefined;
+  if (configuredDevUrl) {
+    try {
+      const parsed = new URL(configuredDevUrl);
+      if (parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) devOrigin = parsed.origin;
+    } catch { /* Invalid development URLs fall back to the local renderer file. */ }
+  }
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    let allowed = false;
+    if (devOrigin) {
+      try { allowed = new URL(navigationUrl).origin === devOrigin; } catch { allowed = false; }
+    } else {
+      try {
+        const target = new URL(navigationUrl);
+        allowed = target.protocol === 'file:' && path.resolve(fileURLToPath(target)) === rendererPath;
+      } catch { allowed = false; }
+    }
+    if (!allowed) event.preventDefault();
+  });
+  if (devOrigin && configuredDevUrl) void mainWindow.loadURL(configuredDevUrl);
+  else void mainWindow.loadFile(rendererPath);
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
@@ -166,6 +219,25 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('will-quit', () => { void stopFolderWatchers().catch((error) => console.error('Could not close folder watchers:', error)); });
 
 ipcMain.handle('app:version', async () => ({ appVersion: app.getVersion(), ...await ffmpegAvailable() }));
+ipcMain.handle('agentMcp:chooseRoot', async (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('MCP setup is available only in the ClipPulse window.');
+  const response = await dialog.showOpenDialog(mainWindow, { title: 'Choose an allowed media or project folder', properties: ['openDirectory'] });
+  if (response.canceled || !response.filePaths[0]) return null;
+  return (await canonicalizeAllowedRoots([response.filePaths[0]]))[0];
+});
+ipcMain.handle('agentMcp:configure', async (event, client: McpClientTarget, roots: unknown) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('MCP setup is available only in the ClipPulse window.');
+  if (client !== 'codex' && client !== 'claude-code') throw new Error('Choose Codex or Claude Code.');
+  const allowedRoots = await canonicalizeAllowedRoots(roots);
+  const launch = { command: app.getPath('exe'), args: buildMcpServerArgs(path.join(here, 'cli.js'), allowedRoots), env: { ELECTRON_RUN_AS_NODE: '1' } };
+  return installMcpConfiguration({ client, roots: allowedRoots, launch });
+});
+ipcMain.handle('agentMcp:test', async (event, roots: unknown) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error('MCP setup is available only in the ClipPulse window.');
+  const allowedRoots = await canonicalizeAllowedRoots(roots);
+  const launch = { command: app.getPath('exe'), args: buildMcpServerArgs(path.join(here, 'cli.js'), allowedRoots), env: { ELECTRON_RUN_AS_NODE: '1' } };
+  return testMcpConnection(launch);
+});
 ipcMain.handle('project:create', async () => {
   const response = await dialog.showSaveDialog(mainWindow!, { title: 'New OpenMontage project', defaultPath: 'Untitled.omproj', filters: [{ name: 'OpenMontage project', extensions: ['omproj'] }] });
   if (response.canceled || !response.filePath) return null;
@@ -371,9 +443,12 @@ ipcMain.handle('timeline:previewFrame', (_event, filePath: string, requestedTime
   const project = await loadProject(filePath);
   const time = await uiFrameTime(filePath, requestedTime);
   const frame = toFrame(time, project.frameRate);
-  const revision = createHash('sha256').update(JSON.stringify(project)).digest('hex').slice(0, 16);
-  const outputPath = path.join(projectCachePath(filePath, project.id), 'timeline-preview', `${revision}-${frame}.png`);
-  if (!(await fileExists(outputPath))) {
+  const key = timelinePreviewCacheKey(project, { start: time, duration: frameTime(1, project.frameRate) }, 'final');
+  const outputPath = path.join(projectCachePath(filePath, project.id), 'timeline-preview', `${key}-${frame}.png`);
+  if (await fileExists(outputPath)) {
+    const accessedAt = new Date();
+    await fs.utimes(outputPath, accessedAt, accessedAt).catch(() => undefined);
+  } else {
     await renderTimelineFrame(project, time, outputPath);
     const count = (previewFrameCounts.get(path.resolve(filePath)) ?? 0) + 1;
     previewFrameCounts.set(path.resolve(filePath), count);
@@ -381,21 +456,43 @@ ipcMain.handle('timeline:previewFrame', (_event, filePath: string, requestedTime
   }
   return { frame, time, path: outputPath };
 }));
-ipcMain.handle('timeline:playbackPreview', (_event, filePath: string) => withProjectLock(filePath, async () => {
-  const project = await loadProject(filePath);
-  const revision = createHash('sha256').update(JSON.stringify(project)).digest('hex').slice(0, 24);
-  const outputPath = path.join(projectCachePath(filePath, project.id), 'timeline-playback', `${revision}.mp4`);
-  if (!(await fileExists(outputPath))) {
-    await fs.mkdir(path.dirname(outputPath), { recursive: true });
-    await exportVideo(project, {
-      outputPath,
-      overwrite: true,
-      onProgress: (progress) => mainWindow?.webContents.send('timeline:playbackProgress', progress)
+ipcMain.handle('timeline:cancelPlaybackPreview', (_event, filePath: string) => {
+  const key = path.resolve(filePath).toLocaleLowerCase();
+  cancelPlaybackJobs(key);
+  return { cancelled: true };
+});
+ipcMain.handle('timeline:playbackPreview', async (_event, filePath: string, requestedTime: number) => {
+  const requestKey = path.resolve(filePath).toLocaleLowerCase();
+  try {
+    const { project, playhead } = await withProjectLock(filePath, async () => {
+      const loaded = await loadProject(filePath);
+      if (!Number.isFinite(requestedTime) || requestedTime < 0) throw new AppError('INVALID_TIME', 'Preview time must be a finite, nonnegative value.');
+      const frame = Math.round(requestedTime * Number(loaded.frameRate.num) / Number(loaded.frameRate.den));
+      if (!Number.isSafeInteger(frame)) throw new AppError('TIME_OVERFLOW', 'Timeline position is too large.');
+      return { project: loaded, playhead: frameTime(frame, loaded.frameRate) };
     });
+    const range = timelinePreviewRangeAt(project, playhead);
+    const key = timelinePreviewCacheKey(project, range, 'preview');
+    const outputPath = path.join(projectCachePath(filePath, project.id), 'timeline-playback', `${key}.mp4`);
+    cancelPlaybackJobs(requestKey, outputPath);
+    const ready = await ensureTimelinePlaybackCache(filePath, project, range, outputPath,
+      (progress) => mainWindow?.webContents.send('timeline:playbackProgress', progress));
+    if (!ready) return { cancelled: true as const };
+    const nextStart = add(range.start, range.duration);
+    if (compare(nextStart, timelineDuration(project)) < 0) {
+      const nextRange = timelinePreviewRangeAt(project, nextStart);
+      const nextKey = timelinePreviewCacheKey(project, nextRange, 'preview');
+      const nextPath = path.join(projectCachePath(filePath, project.id), 'timeline-playback', `${nextKey}.mp4`);
+      if (nextPath !== outputPath) void ensureTimelinePlaybackCache(filePath, project, nextRange, nextPath).catch(() => undefined);
+    }
+    return {
+      path: outputPath, revision: project.updatedAt, startTime: range.start, duration: range.duration,
+      hasMore: compare(add(range.start, range.duration), timelineDuration(project)) < 0
+    };
+  } catch (error) {
+    throw error;
   }
-  await pruneTimelinePlaybacks(path.dirname(outputPath), outputPath);
-  return { path: outputPath, revision: project.updatedAt };
-}));
+});
 ipcMain.handle('video:export', async (_event, filePath: string) => {
   const response = await dialog.showSaveDialog(mainWindow!, { title: 'Export video', defaultPath: 'Montage.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
   if (response.canceled || !response.filePath) return null;

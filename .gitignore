@@ -7,6 +7,7 @@ work/
 *.rendering.mp4
 .openmontage-cache-*/
 coverage/
+test-results/
 /evaluation/.local/
 .DS_Store
 Thumbs.db

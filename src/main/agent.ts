@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { analyzeAudio } from '../core/audioAnalysis';
 import { analyzeHighlightCues } from '../core/highlightAnalysis';
@@ -10,9 +11,11 @@ import { generateClipModelMask } from '../core/modelSegmentation';
 import { AppError, asAppError } from '../core/errors';
 import { exportVideo } from '../core/export';
 import { ffmpegAvailable, runCommand } from '../core/ffmpeg';
-import { addClip, addTrack, createProject, duplicateClip, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, projectHistoryPath, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setClipEffects, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings, validateProject } from '../core/project';
-import { renderTimelineFrame } from '../core/timelinePreview';
-import { frameTime, parseDecimal, rational, sub, toFrame, compare, decimal } from '../core/time';
+import { addClip, addTrack, createProject, duplicateClip, fileExists, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, projectHistoryPath, redoProject, relinkMedia, removeClip, saveProject, searchMedia, setClipAudio, setClipEffects, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateProjectProfile, updateTrackSettings, validateProject } from '../core/project';
+import { renderTimelineFrame, timelinePreviewCacheKey } from '../core/timelinePreview';
+import { prunePreviewCache } from '../core/previewCache';
+import { analyzeProjectQuality, persistQualityReport, type QualityReport } from '../core/qualityAnalysis';
+import { add, frameTime, parseDecimal, rational, sub, toFrame, compare, decimal } from '../core/time';
 import type { AutoMontageFormat, AutoMontageStyle, HighlightAnalysis, Project, Rational, TimelineClip } from '../core/types';
 
 export const AGENT_SCHEMA_VERSION = 1;
@@ -56,7 +59,7 @@ export const AGENT_TOOLS: AgentTool[] = [
   tool('media_import', 'Import files or recursively scan granted folders; source media remains read-only.', { projectPath, paths: arr(str('Absolute local file or folder path.'), 'Media files or directories.', 1, 64), recursive: bool('Scan folders recursively; defaults to true.') }, ['projectPath', 'paths']),
   tool('media_search', 'Search the project library by name, path, tags, and game.', { projectPath, query: str('Optional search text.'), favoritesOnly: bool('Only return favorites.') }, ['projectPath']),
   tool('media_get', 'Return metadata for one imported media asset.', { projectPath, mediaId: str('Media asset ID.') }, ['projectPath', 'mediaId']),
-  tool('media_update', 'Set asset tags, game, favorite/rating, and accept, reject, or correct analyzed event proposals.', { projectPath, mediaId: str('Media asset ID.'), favorite: bool('Favorite state.'), rating: num('Manual highlight rating.', 0, 5), tags: arr(str('Tag.'), 'Replacement tag list.', 0, 100), game: { type: ['string', 'null'], description: 'Game label, or null to clear.' }, analysisEventReviews: arr(obj({ eventId: str('Stable detected event ID.'), detectorIds: arr(str('Detector provenance ID.'), 'Detector IDs.', 0, 16), status: { type: 'string', enum: ['accepted', 'rejected', 'corrected'] }, startSeconds: num('Reviewed event window start.', 0), decisiveSeconds: num('Decisive event time.', 0), endSeconds: num('Reviewed event window end.', 0), updatedAt: str('Review timestamp in ISO-8601 form.') }, ['eventId', 'detectorIds', 'status', 'startSeconds', 'decisiveSeconds', 'endSeconds', 'updatedAt']), 'Full replacement review list.', 0, 5000) }, ['projectPath', 'mediaId']),
+  tool('media_update', 'Set asset tags, game, favorite/rating, and accept, reject, or correct analyzed event proposals.', { projectPath, mediaId: str('Media asset ID.'), favorite: bool('Favorite state.'), rating: num('Manual highlight rating.', 0, 5), tags: arr(str('Tag.'), 'Replacement tag list.', 0, 100), game: { type: ['string', 'null'], description: 'Game label, or null to clear.' }, analysisEventReviews: arr(obj({ eventId: str('Stable detected event ID.'), detectorIds: arr(str('Detector provenance ID.'), 'Detector IDs.', 0, 16), status: { type: 'string', enum: ['accepted', 'rejected', 'corrected'] }, startSeconds: num('Reviewed event window start.', 0), decisiveSeconds: num('Decisive event time.', 0), endSeconds: num('Reviewed event window end.', 0), correctedEventType: { type: 'string', enum: ['kill', 'headshot', 'multi_kill', 'ace', 'clutch', 'clutch_situation', 'round_end', 'round_objective', 'kill_feed_change', 'combat_activity', 'fast_action_candidate', 'quiet_passage', 'audio_activity', 'scene_change', 'text_recognition', 'unknown'], description: 'Optional manually corrected semantic event type.' }, updatedAt: str('Review timestamp in ISO-8601 form.') }, ['eventId', 'detectorIds', 'status', 'startSeconds', 'decisiveSeconds', 'endSeconds', 'updatedAt']), 'Full replacement review list.', 0, 5000) }, ['projectPath', 'mediaId']),
   tool('media_relink', 'Relink a missing asset to a compatible granted source file.', { projectPath, mediaId: str('Media asset ID.'), path: str('Replacement media path.') }, ['projectPath', 'mediaId', 'path']),
   tool('media_get_frames', 'Extract up to 12 source preview frames as JPEG images.', { projectPath, mediaId: str('Video media asset ID.'), times: arr(num('Source time in seconds.', 0), 'Frame times in source seconds.', 1, 12) }, ['projectPath', 'mediaId', 'times']),
   tool('media_analyze', 'Analyze audio beats or detect highlight cues for an imported asset.', { projectPath, mediaId: str('Media asset ID.'), kind: { type: 'string', enum: ['audio', 'highlights'], description: 'Analysis type.' } }, ['projectPath', 'mediaId', 'kind']),
@@ -83,9 +86,13 @@ export const AGENT_TOOLS: AgentTool[] = [
   tool('mask_track', 'Set manually corrected time-keyed mask paths; points must correspond across corrections.', { projectPath, clipId: str('Timeline clip ID.'), keyframes: arr(obj({ time: str('Clip-local time.'), path: str('Closed normalized SVG mask path.', 4096) }, ['time', 'path']), 'Ordered correction keyframes.', 1, 256) }, ['projectPath', 'clipId', 'keyframes']),
   tool('mask_segment', 'Generate a local ONNX object mask for a recognized class; track the matching instance and temporally stabilize its path.', { projectPath, clipId: str('Video timeline clip ID.'), className: str('Recognized object class such as person, car, dog, cat, or chair.', 80), sampleFps: num('Mask inference samples per second.', 0.25, 8), scoreThreshold: num('Minimum instance score.', 0, 1) }, ['projectPath', 'clipId']),
   tool('composition_create', 'Configure blend modes and masks on one or more existing compositing layers.', { projectPath, layers: arr(obj({ clipId: str('Timeline clip ID.'), blendMode: { type: 'string', enum: ['normal', 'multiply', 'screen', 'add', 'difference'] } }, ['clipId']), 'Layer effect settings.') }, ['projectPath', 'layers']),
-  tool('montage_generate', 'Generate explainable editable montage project variants without modifying the source project.', { projectPath, musicId: str('Music media asset ID.'), durationSeconds: num('Target montage duration.', 1, 3600), style: { type: 'string', enum: ['clean', 'aggressive', 'cinematic', 'velocity', 'custom'] }, videoIds: arr(str('Optional video media ID.'), 'Optional video asset selection.'), variants: num('Number of variants.', 1, 5), intensity: num('Pacing intensity.', 0, 100), format: { type: 'string', enum: ['project', 'landscape-1080p', 'portrait-1080p', 'square-1080p'] }, outputDirectory: str('Output directory inside a granted root.') }, ['projectPath', 'musicId', 'durationSeconds']),
+  tool('montage_generate', 'Generate explainable editable montage project variants without modifying the source project.', { projectPath, musicId: str('Music media asset ID.'), durationSeconds: num('Target montage duration.', 1, 3600), style: { type: 'string', enum: ['clean', 'aggressive', 'cinematic', 'smooth', 'velocity', 'custom'] }, videoIds: arr(str('Optional video media ID.'), 'Optional video asset selection.'), variants: num('Number of variants.', 1, 5), intensity: num('Pacing intensity.', 0, 100), format: { type: 'string', enum: ['project', 'landscape-1080p', 'portrait-1080p', 'square-1080p'] }, outputDirectory: str('Output directory inside a granted root.') }, ['projectPath', 'musicId', 'durationSeconds']),
   tool('preview_render', 'Render the composite timeline frame at the exact project frame nearest the requested time.', { projectPath, time: str('Timeline time in seconds.') }, ['projectPath', 'time']),
   tool('preview_analyze', 'Render and inspect a composite frame using FFmpeg signal statistics.', { projectPath, time: str('Timeline time in seconds.') }, ['projectPath', 'time']),
+  tool('quality_analyze', 'Create and persist an objective timeline/render quality report with representative preview frames. Optional selected beat targets are checked exactly; subjective aesthetics are not scored.', { projectPath, selectedBeatTargets: arr(str('A selected timeline beat time, preserving exact rational notation.'), 'Optional beat targets to check against video edit points.', 0, 500), beatToleranceMs: num('Allowed edit-to-beat deviation in milliseconds; defaults to 80.', 0, 1000), maxAutomaticGapSeconds: num('Largest same-track video gap eligible for an automatic move suggestion.', 0, 5), renderAudio: bool('Render the current timeline once to measure clipping and sustained silence; defaults to true.') }, ['projectPath']),
+  tool('quality_report_get', 'Load a previously persisted quality report by its ID.', { projectPath, reportId: str('Quality report UUID.') }, ['projectPath', 'reportId']),
+  tool('quality_report_list', 'List recent persisted quality reports for a project.', { projectPath, limit: num('Maximum reports to return; defaults to 20.', 1, 100) }, ['projectPath']),
+  tool('quality_improve', 'Run a bounded quality-feedback loop: analyze, transactionally close safe small same-track video gaps, render a new preview, and recheck. Defaults to at most three iterations; all other findings remain suggestions for the agent.', { projectPath, maxIterations: num('Maximum analyze/fix/recheck iterations (default 3).', 1, 3), maxAutomaticGapSeconds: num('Largest same-track video gap eligible for automatic correction; defaults to 0.5.', 0, 5), beatToleranceMs: num('Allowed edit-to-beat deviation in milliseconds; defaults to 80.', 0, 1000), selectedBeatTargets: arr(str('A selected timeline beat time, preserving exact rational notation.'), 'Optional beat targets.', 0, 500) }, ['projectPath']),
   tool('video_export', 'Start a validated asynchronous MP4 export; poll render_status for progress.', { projectPath, outputPath: str('Output MP4 inside a granted root.'), overwrite: bool('Replace an existing output after validation.'), encoder: { type: 'string', enum: ['libx264', 'h264_amf', 'h264_nvenc', 'h264_qsv'] } }, ['projectPath', 'outputPath']),
   tool('render_status', 'Read progress, completion, or failure for an export job, including after service restart.', { projectPath, jobId: str('Render job ID.') }, ['projectPath', 'jobId']),
   tool('diagnostics', 'Report platform, Node, FFmpeg, and optional local analysis runtimes.', {}),
@@ -117,7 +124,11 @@ export class AgentService {
     const definition = this.tools.find((item) => item.name === name);
     if (!definition) throw new AppError('UNKNOWN_TOOL', `Unknown agent tool: ${name}`);
     const args = validateInput(definition.inputSchema, input);
-    if (name === 'project_transaction') return this.withProjectLock(args.projectPath, () => this.transaction(args));
+    if (args.projectPath && name !== 'project_create') return this.withProjectLock(args.projectPath, async () => {
+      const recoveryPath = await this.assertPath(args.projectPath, 'write');
+      await this.recoverInterruptedTransactions(recoveryPath);
+      return name === 'project_transaction' ? this.transaction(args) : this.execute(name, args);
+    });
     if (args.projectPath) return this.withProjectLock(args.projectPath, () => this.execute(name, args));
     return this.execute(name, args);
   }
@@ -236,9 +247,10 @@ export class AgentService {
       const updated = await setClipEffects(projectFile, a.clipId, { mask }); return findClip(updated, a.clipId).clip;
     }
     if (name === 'composition_create') {
-      const updatedClips = [];
-      for (const layer of a.layers) { const updated = await setClipEffects(projectFile, layer.clipId, { blendMode: layer.blendMode ?? 'normal' }); updatedClips.push(findClip(updated, layer.clipId).clip); }
-      return { layers: updatedClips };
+      const transaction = await this.transaction({ projectPath: projectFile, operations: a.layers.map((layer: any) => ({
+        name: 'effect_update', arguments: { clipId: layer.clipId, effects: { blendMode: layer.blendMode ?? 'normal' } }
+      })) });
+      return { layers: transaction.results };
     }
     if (name === 'montage_generate') {
       const outputDirectory = await this.assertPath(a.outputDirectory ?? path.join(path.dirname(projectFile), 'auto-montages'), 'write');
@@ -246,13 +258,17 @@ export class AgentService {
       const generated = await generateAutomaticMontages(projectFile, outputDirectory, { musicMediaId: a.musicId, durationSeconds: a.durationSeconds, style: (a.style ?? 'clean') as AutoMontageStyle, ...(a.videoIds?.length ? { videoMediaIds: a.videoIds } : {}), variants: a.variants ?? 3, intensity: (a.intensity ?? 50) / 100, format: (a.format ?? 'project') as AutoMontageFormat });
       return { outputDirectory: generated.outputDirectory, variants: generated.variants.map(({ projectPath: file, planPath, plan }) => ({ projectPath: file, planPath, variant: plan.variant, style: plan.style, score: plan.score, scoreBreakdown: plan.scoreBreakdown, durationSeconds: plan.durationSeconds, segments: plan.segments.length, warnings: plan.warnings })) };
     }
+    if (name === 'quality_analyze') return this.analyzeQuality(projectFile, project, a);
+    if (name === 'quality_report_get') return this.getQualityReport(projectFile, project, a.reportId);
+    if (name === 'quality_report_list') return this.listQualityReports(projectFile, project, a.limit ?? 20);
+    if (name === 'quality_improve') return this.improveQuality(projectFile, project, a);
     if (name === 'preview_render' || name === 'preview_analyze') return this.renderPreview(projectFile, project, a.time, name === 'preview_analyze');
     if (name === 'video_export') return this.startRender(projectFile, project, a);
     if (name === 'render_status') return this.renderStatus(projectFile, a.jobId, project);
     throw new AppError('UNKNOWN_TOOL', `Tool is not implemented: ${name}`);
   }
 
-  private async transaction(a: any): Promise<any> {
+  private async transaction(a: any, verifyAfterEdits?: () => Promise<void>): Promise<any> {
     if (!Array.isArray(a.operations) || a.operations.length < 1 || a.operations.length > 32) throw new AppError('INVALID_ARGUMENTS', 'A transaction must contain 1 to 32 editing operations.');
     const allowed = new Set(['project_update_profile', 'timeline_add_track', 'timeline_add_clip', 'timeline_duplicate_clip', 'timeline_trim_clip', 'timeline_move_clip', 'timeline_split_clip', 'timeline_remove_clip', 'timeline_align_event', 'timeline_set_track', 'timeline_set_clip_audio', 'effect_add', 'effect_update', 'effect_remove', 'keyframe_set', 'mask_create', 'mask_track', 'composition_create']);
     for (const op of a.operations) {
@@ -262,13 +278,21 @@ export class AgentService {
     const file = await this.assertPath(a.projectPath, 'read'); const before = await loadProject(file); const historyPath = projectHistoryPath(file, before.id);
     const backup = await fs.mkdtemp(path.join(path.dirname(file), '.openmontage-transaction-'));
     const projectBackup = path.join(backup, 'before.omproj'); const historyBackup = path.join(backup, 'history');
-    await fs.copyFile(file, projectBackup); const historyExists = await fs.access(historyPath).then(() => true, () => false);
-    if (historyExists) await fs.cp(historyPath, historyBackup, { recursive: true });
+    const transactionId = randomUUID(); let historyExists = false; let snapshotReady = false;
     const results: any[] = [];
     try {
+      await fs.copyFile(file, projectBackup);
+      historyExists = await fs.access(historyPath).then(() => true, () => false);
+      if (historyExists) await fs.cp(historyPath, historyBackup, { recursive: true });
+      await fs.writeFile(path.join(backup, 'transaction.json'), `${JSON.stringify({ transactionId, projectPath: path.resolve(file), projectId: before.id, historyExists, processId: process.pid, host: hostname() })}\n`, 'utf8');
+      snapshotReady = true;
       for (const operation of a.operations) results.push(await this.execute(operation.name, { ...operation.arguments, projectPath: file }));
-      return { transactionId: randomUUID(), committed: true, operationCount: results.length, results, project: await loadProject(file), history: await getProjectHistory(file) };
+      await verifyAfterEdits?.();
+      const result = { transactionId, committed: true, operationCount: results.length, results, project: await loadProject(file), history: await getProjectHistory(file) };
+      await fs.writeFile(path.join(backup, 'COMMITTED'), 'committed\n', 'utf8');
+      return result;
     } catch (cause) {
+      if (!snapshotReady) throw cause;
       let rolledBack = 0;
       try {
         for (let attempt = 0; attempt < a.operations.length + 1; attempt++) {
@@ -284,6 +308,157 @@ export class AgentService {
       const error = asAppError(cause);
       throw new AppError('TRANSACTION_ROLLED_BACK', `Transaction failed after ${results.length} operation(s); project state was restored. Cause ${error.code}: ${error.message}`, { cause });
     } finally { await fs.rm(backup, { recursive: true, force: true }).catch(() => undefined); }
+  }
+
+  private async analyzeQuality(projectFile: string, project: Project, args: any): Promise<QualityReport> {
+    const directory = path.join(projectCachePath(projectFile, project.id), 'quality-reports');
+    const selectedBeatTargets = Array.isArray(args.selectedBeatTargets) ? args.selectedBeatTargets.map((value: string) => parseDecimal(value)) : undefined;
+    for (const target of selectedBeatTargets ?? []) if (BigInt(target.num) < 0n || compare(target, timelineDuration(project)) > 0) throw new AppError('INVALID_TIME', 'Selected beat targets must be within the project timeline.');
+    await this.assertPath(directory, 'write');
+    const frameDirectory = path.join(directory, 'frames', randomUUID());
+    await this.assertPath(path.dirname(frameDirectory), 'write');
+    await this.assertPath(frameDirectory, 'write');
+    await this.assertProjectMedia(project, true);
+    const report = await analyzeProjectQuality(project, {
+      outputDirectory: frameDirectory,
+      ...(selectedBeatTargets ? { selectedBeatTargets } : {}),
+      ...(args.beatToleranceMs !== undefined ? { beatToleranceMs: args.beatToleranceMs } : {}),
+      ...(args.maxAutomaticGapSeconds !== undefined ? { maxAutomaticGapSeconds: args.maxAutomaticGapSeconds } : {}),
+      ...(args.renderAudio !== undefined ? { renderAudio: args.renderAudio } : {})
+    });
+    await persistQualityReport(directory, report);
+    return report;
+  }
+
+  private async getQualityReport(projectFile: string, project: Project, reportId: string): Promise<QualityReport> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reportId)) throw new AppError('INVALID_ARGUMENTS', 'reportId must be a UUID returned by quality_analyze or quality_improve.');
+    const directory = path.join(projectCachePath(projectFile, project.id), 'quality-reports');
+    const file = path.join(directory, `${reportId}.json`);
+    await this.assertPath(file, 'read');
+    const info = await fs.lstat(file);
+    if (!info.isFile() || info.isSymbolicLink()) throw new AppError('QUALITY_REPORT_UNSAFE', 'Quality report must be a regular file.');
+    const report = JSON.parse(await fs.readFile(file, 'utf8')) as QualityReport;
+    if (report.schemaVersion !== 1 || report.projectId !== project.id || report.reportId !== reportId) throw new AppError('QUALITY_REPORT_INVALID', 'The saved quality report does not match this project.');
+    return report;
+  }
+
+  private async listQualityReports(projectFile: string, project: Project, limit: number): Promise<{ reports: QualityReport[] }> {
+    const directory = path.join(projectCachePath(projectFile, project.id), 'quality-reports');
+    await this.assertPath(directory, 'write');
+    const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    });
+    const reports: QualityReport[] = [];
+    for (const entry of entries.filter((item) => item.isFile() && !item.isSymbolicLink() && /^[0-9a-f-]{36}\.json$/i.test(item.name))) {
+      const file = path.join(directory, entry.name);
+      await this.assertPath(file, 'read');
+      try {
+        const report = JSON.parse(await fs.readFile(file, 'utf8')) as QualityReport;
+        if (report.schemaVersion === 1 && report.projectId === project.id) reports.push(report);
+      } catch { /* malformed historic entries are ignored; get-by-id reports a useful error */ }
+    }
+    reports.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return { reports: reports.slice(0, limit) };
+  }
+
+  private async improveQuality(projectFile: string, initialProject: Project, args: any): Promise<any> {
+    const maxIterations = args.maxIterations ?? 3;
+    if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 3) throw new AppError('INVALID_ARGUMENTS', 'maxIterations must be from 1 through 3.');
+    const iterations: Array<{ iteration: number; reportId: string; correctionCount: number; transactionId?: string; rolledBack?: boolean; errorCode?: string }> = [];
+    let project = initialProject;
+    let previousReportId: string | undefined;
+    let finalReport = await this.analyzeQuality(projectFile, project, { ...args, renderAudio: true });
+    for (let iteration = 1; iteration <= maxIterations; iteration++) {
+      const report = finalReport;
+      const corrections = report.findings.filter((item) => item.correction?.automaticallySafe && item.correction.tool === 'timeline_move_clip').slice(0, 32);
+      if (!corrections.length) {
+        iterations.push({ iteration, reportId: report.reportId, correctionCount: 0 });
+        break;
+      }
+      let verifiedReport: QualityReport | undefined;
+      let transaction: any;
+      try {
+        transaction = await this.transaction({ projectPath: projectFile, operations: corrections.map((item) => ({ name: item.correction!.tool, arguments: item.correction!.arguments })) }, async () => {
+          const edited = await loadProject(projectFile);
+          verifiedReport = await this.analyzeQuality(projectFile, edited, { ...args, renderAudio: true });
+          const remaining = verifiedReport.findings.filter((item) => item.correction?.automaticallySafe).length;
+          if (verifiedReport.summary.status === 'incomplete' || remaining >= corrections.length) throw new AppError('QUALITY_CORRECTION_NOT_VERIFIED', 'The safe correction did not reduce the reported issues or the verification pass was incomplete.');
+        });
+      } catch (cause) {
+        const error = asAppError(cause);
+        iterations.push({ iteration, reportId: report.reportId, correctionCount: corrections.length, rolledBack: true, errorCode: error.code });
+        if (verifiedReport) {
+          await fs.rm(path.join(projectCachePath(projectFile, project.id), 'quality-reports', `${verifiedReport.reportId}.json`), { force: true }).catch(() => undefined);
+          if (verifiedReport.previewFrames[0]) await fs.rm(path.dirname(verifiedReport.previewFrames[0].path), { recursive: true, force: true }).catch(() => undefined);
+        }
+        project = await loadProject(projectFile);
+        finalReport = await this.analyzeQuality(projectFile, project, { ...args, renderAudio: true });
+        finalReport.findings.push({ id: randomUUID(), code: 'automatic_correction_rolled_back', category: 'structure', severity: 'warning', evidence: 'objective', title: 'Automatic correction was rolled back', description: `The improvement transaction was restored because its verification failed (${error.code}).` });
+        finalReport.summary.findings++;
+        finalReport.summary.warnings++;
+        finalReport.summary.status = 'issues';
+        await persistQualityReport(path.join(projectCachePath(projectFile, project.id), 'quality-reports'), finalReport);
+        break;
+      }
+      iterations.push({ iteration, reportId: report.reportId, correctionCount: corrections.length, transactionId: transaction.transactionId, rolledBack: false });
+      previousReportId = report.reportId;
+      project = await loadProject(projectFile);
+      finalReport = verifiedReport!;
+      if (!finalReport.findings.some((item) => item.correction?.automaticallySafe)) break;
+    }
+    if (iterations.some((item) => item.transactionId || item.rolledBack)) {
+      finalReport.improvement = { iteration: iterations.length, maxIterations, ...(previousReportId ? { previousReportId } : {}), appliedTransactions: iterations.flatMap((item) => item.transactionId ? [item.transactionId] : []), ...(iterations.some((item) => item.rolledBack) ? { rolledBackIterations: iterations.filter((item) => item.rolledBack).length } : {}) };
+      await persistQualityReport(path.join(projectCachePath(projectFile, project.id), 'quality-reports'), finalReport);
+    }
+    return { maxIterations, iterations, finalReport, history: await getProjectHistory(projectFile) };
+  }
+
+  private async recoverInterruptedTransactions(projectFile: string): Promise<void> {
+    const parent = path.dirname(projectFile);
+    const entries = await fs.readdir(parent, { withFileTypes: true }).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      if (!entry.name.startsWith('.openmontage-transaction-')) continue;
+      const directory = path.join(parent, entry.name);
+      const directoryInfo = await fs.lstat(directory).catch(() => undefined);
+      if (!directoryInfo?.isDirectory() || directoryInfo.isSymbolicLink()) continue;
+      const manifestPath = path.join(directory, 'transaction.json');
+      let manifest: { transactionId?: string; projectPath?: string; projectId?: string; historyExists?: boolean; processId?: number; host?: string };
+      try { manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw new AppError('AGENT_RECOVERY_FAILED', `An interrupted project transaction has an unreadable recovery record at ${manifestPath}.`, { cause: error });
+      }
+      if (typeof manifest.projectPath !== 'string' || !samePath(manifest.projectPath, projectFile)) continue;
+      if (typeof manifest.projectId !== 'string' || !manifest.projectId || typeof manifest.transactionId !== 'string' || typeof manifest.historyExists !== 'boolean') {
+        throw new AppError('AGENT_RECOVERY_FAILED', `The recovery record at ${manifestPath} is incomplete.`);
+      }
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(manifest.projectId)) throw new AppError('AGENT_RECOVERY_FAILED', `The recovery record at ${manifestPath} contains an invalid project ID.`);
+      if (manifest.host === hostname() && Number.isInteger(manifest.processId) && manifest.processId! > 0 && isProcessRunning(manifest.processId!)) continue;
+      const markerPath = path.join(directory, 'COMMITTED');
+      const markerInfo = await fs.lstat(markerPath).catch(() => undefined);
+      const committed = markerInfo?.isFile() && !markerInfo.isSymbolicLink() && await fs.readFile(markerPath, 'utf8').then((value) => value === 'committed\n', () => false);
+      if (committed) { await fs.rm(directory, { recursive: true, force: true }); continue; }
+      const projectBackup = path.join(directory, 'before.omproj');
+      const backupInfo = await fs.lstat(projectBackup).catch(() => undefined);
+      if (!backupInfo?.isFile() || backupInfo.isSymbolicLink()) throw new AppError('AGENT_RECOVERY_FAILED', `The recovery snapshot for transaction ${manifest.transactionId ?? '(unknown)'} is missing or unsafe.`);
+      const snapshot = await loadProject(projectBackup);
+      if (snapshot.id !== manifest.projectId) throw new AppError('AGENT_RECOVERY_FAILED', `The recovery snapshot for transaction ${manifest.transactionId} does not match its project ID.`);
+      const historyBackup = path.join(directory, 'history');
+      if (manifest.historyExists) {
+        const historyInfo = await fs.lstat(historyBackup).catch(() => undefined);
+        if (!historyInfo?.isDirectory() || historyInfo.isSymbolicLink()) throw new AppError('AGENT_RECOVERY_FAILED', `The recovery history snapshot for transaction ${manifest.transactionId ?? '(unknown)'} is missing or unsafe.`);
+      }
+      const historyPath = projectHistoryPath(projectFile, manifest.projectId ?? '');
+      await this.assertPath(historyPath, 'write');
+      await replaceFromSnapshot(projectBackup, projectFile);
+      await fs.rm(historyPath, { recursive: true, force: true });
+      if (manifest.historyExists) await fs.cp(historyBackup, historyPath, { recursive: true });
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   }
 
   private async assertPath(value: string, access: 'read' | 'write'): Promise<string> {
@@ -367,7 +542,7 @@ export class AgentService {
     if (!asset.hasAudio) throw new AppError('NO_AUDIO_STREAM', `Media asset has no audio stream: ${asset.name}`);
     await this.assertPath(asset.path, 'read');
     const analysis = await analyzeAudio(asset.path, path.join(projectCachePath(file, project.id), 'analysis', `${asset.id}.json`));
-    return { mediaId, analysis, beatGrid: { bpm: analysis.estimatedBpm, hypotheses: analysis.bpmHypotheses, phaseSeconds: analysis.beatPhaseSeconds, beats: analysis.beats, downbeats: analysis.downbeats, meter: analysis.meter, drops: analysis.drops } };
+    return { mediaId, analysis, beatGrid: { bpm: analysis.estimatedBpm, hypotheses: analysis.bpmHypotheses, phaseSeconds: analysis.beatPhaseSeconds, beats: analysis.beats, points: analysis.beatGrid ?? [], downbeats: analysis.downbeats, meter: analysis.meter, tempoSegments: analysis.tempoSegments ?? [], accents: analysis.accents ?? [], drops: analysis.drops, onsets: analysis.onsets, onsetEvents: analysis.onsetEvents ?? [], structureEvents: analysis.structureEvents ?? [], confidenceModel: 'relative-heuristic-not-probability' } };
   }
 
   private async highlightAnalysis(file: string, project: Project, mediaId: string): Promise<HighlightAnalysis> {
@@ -397,37 +572,80 @@ export class AgentService {
   private async alignEvent(file: string, project: Project, clipId: string, sourceTime: Rational, targetTime: Rational): Promise<any> {
     const { clip } = findClip(project, clipId); const sourceOffset = sub(sourceTime, clip.sourceIn);
     if (BigInt(sourceOffset.num) < 0n) throw new AppError('INVALID_TIME', 'Event time occurs before this clip source range.');
+    if (compare(sourceOffset, clipSourceOffsetAt(clip, clip.duration)) > 0) throw new AppError('SOURCE_RANGE_EXCEEDED', 'Event is outside the clip source range.');
     const maxFrame = toFrame(clip.duration, project.frameRate); let lo = 0, hi = maxFrame;
     while (lo < hi) { const mid = Math.floor((lo + hi) / 2); const offset = clipSourceOffsetAt(clip, frameTime(mid, project.frameRate)); if (compare(offset, sourceOffset) < 0) lo = mid + 1; else hi = mid; }
     const candidates = [Math.max(0, lo - 1), lo].map((frame) => frameTime(frame, project.frameRate));
-    const local = candidates.reduce((best, current) => Math.abs(Number(clipSourceOffsetAt(clip, current).num) / Number(clipSourceOffsetAt(clip, current).den) - Number(sourceOffset.num) / Number(sourceOffset.den)) < Math.abs(Number(clipSourceOffsetAt(clip, best).num) / Number(clipSourceOffsetAt(clip, best).den) - Number(sourceOffset.num) / Number(sourceOffset.den)) ? current : best);
-    if (compare(clipSourceOffsetAt(clip, local), sourceOffset) < 0 && compare(local, clip.duration) >= 0) throw new AppError('SOURCE_RANGE_EXCEEDED', 'Event is outside the clip source range.');
+    const absolute = (value: Rational): Rational => rational(BigInt(value.num) < 0n ? -BigInt(value.num) : BigInt(value.num), value.den);
+    const distance = (localTime: Rational): Rational => absolute(sub(clipSourceOffsetAt(clip, localTime), sourceOffset));
+    const local = candidates.reduce((best, current) => compare(distance(current), distance(best)) < 0 ? current : best);
     const start = sub(targetTime, local); if (BigInt(start.num) < 0n) throw new AppError('INVALID_TIME', 'Target time would place the clip before timeline zero.');
-    const updated = await moveClip(file, clipId, start); return { clip: findClip(updated, clipId).clip, alignedSourceTime: sourceTime, targetTime, actualTimelineTime: { requestedTargetTime: targetTime, clipLocalTime: local, frame: toFrame(local, project.frameRate) } };
+    const actualTime = add(start, local);
+    const updated = await moveClip(file, clipId, start); return { clip: findClip(updated, clipId).clip, alignedSourceTime: sourceTime, targetTime, actualTimelineTime: { requestedTargetTime: targetTime, clipLocalTime: local, frame: toFrame(local, project.frameRate), actualTime, error: sub(actualTime, targetTime) } };
   }
 
   private async renderPreview(file: string, project: Project, timeValue: string, analyze: boolean): Promise<any> {
     await this.assertProjectMedia(project, true); const requested = parseDecimal(timeValue); const frame = toFrame(requested, project.frameRate); const time = frameTime(frame, project.frameRate);
-    const output = path.join(projectCachePath(file, project.id), 'agent-previews', `${randomUUID()}.png`); await fs.mkdir(path.dirname(output), { recursive: true });
-    await renderTimelineFrame(project, time, output, true);
+    const directory = path.join(projectCachePath(file, project.id), 'agent-previews', 'timeline-frames'); await fs.mkdir(directory, { recursive: true });
+    const key = timelinePreviewCacheKey(project, { start: time, duration: frameTime(1, project.frameRate) }, 'final');
+    const output = path.join(directory, `${key}-${frame}.png`);
+    if (await fileExists(output)) {
+      const accessedAt = new Date();
+      await fs.utimes(output, accessedAt, accessedAt).catch(() => undefined);
+    } else await renderTimelineFrame(project, time, output, true);
     const data = (await fs.readFile(output)).toString('base64'); const metadata: any = { filePath: file, time, frame, width: project.width, height: project.height, mimeType: 'image/png', data };
     if (analyze) {
-      const result = await runCommand('ffmpeg', ['-nostdin', '-hide_banner', '-i', output, '-vf', 'signalstats,metadata=print:file=-', '-frames:v', '1', '-f', 'null', '-']);
-      const statsText = `${result.stdout}\n${result.stderr}`; const stats: Record<string, number> = {};
-      for (const key of ['YAVG', 'YMIN', 'YMAX', 'UAVG', 'VAVG']) { const match = new RegExp(`lavfi\\.signalstats\\.${key}=([0-9.]+)`).exec(statsText); if (match) stats[key.toLowerCase()] = Number(match[1]); }
+      const statsPath = path.join(directory, `${key}-${frame}.analysis.json`);
+      let stats: Record<string, number> | undefined;
+      if (await fileExists(statsPath)) {
+        try {
+          stats = JSON.parse(await fs.readFile(statsPath, 'utf8'));
+          const accessedAt = new Date(); await fs.utimes(statsPath, accessedAt, accessedAt).catch(() => undefined);
+        } catch { await fs.rm(statsPath, { force: true }); }
+      }
+      if (!stats) {
+        const result = await runCommand('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'info', '-i', output, '-vf', 'signalstats,metadata=print:file=-', '-frames:v', '1', '-f', 'null', '-']);
+        const statsText = `${result.stdout}\n${result.stderr}`; stats = {};
+        for (const statName of ['YAVG', 'YMIN', 'YMAX', 'UAVG', 'VAVG']) { const match = new RegExp(`lavfi\\.signalstats\\.${statName}=([0-9.]+)`).exec(statsText); if (match) stats[statName.toLowerCase()] = Number(match[1]); }
+        await fs.writeFile(statsPath, JSON.stringify(stats), 'utf8');
+      }
       metadata.statistics = stats;
     }
+    await pruneAgentPreviewFrames(directory, output);
     return metadata;
   }
 
   private async startRender(file: string, project: Project, a: any): Promise<Job> {
     await this.assertProjectMedia(project, true); const outputPath = await this.assertPath(a.outputPath, 'write'); const id = randomUUID();
     const job: Job = { id, projectPath: file, status: 'running', progress: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), outputPath };
-    this.jobs.set(id, job); await this.persistJob(project, job);
-    void exportVideo(project, { outputPath, overwrite: a.overwrite ?? false, encoder: a.encoder, onProgress: (progress) => { job.progress = progress; job.updatedAt = new Date().toISOString(); void this.persistJob(project, job); } })
-      .then(async (result) => { job.status = 'complete'; job.progress = 1; job.result = result; job.updatedAt = new Date().toISOString(); await this.persistJob(project, job); })
-      .catch(async (cause) => { const error = asAppError(cause); job.status = 'failed'; job.error = { code: error.code, message: error.message }; job.updatedAt = new Date().toISOString(); await this.persistJob(project, job); });
+    await this.persistJob(project, job);
+    this.jobs.set(id, job);
+    void this.runRender(project, job, a);
     return job;
+  }
+
+  private async runRender(project: Project, job: Job, options: any): Promise<void> {
+    let persistenceError: AppError | undefined;
+    try {
+      const result = await exportVideo(project, {
+        outputPath: job.outputPath, overwrite: options.overwrite ?? false, encoder: options.encoder,
+        onProgress: (progress) => {
+          job.progress = progress; job.updatedAt = new Date().toISOString();
+          void this.persistJob(project, job).catch((error) => { persistenceError = asAppError(error); });
+        }
+      });
+      job.status = 'complete'; job.progress = 1; job.result = result; job.updatedAt = new Date().toISOString();
+    } catch (cause) {
+      const error = asAppError(cause); job.status = 'failed'; job.error = { code: error.code, message: error.message }; job.updatedAt = new Date().toISOString();
+    }
+    try {
+      await this.persistJob(project, job);
+    } catch (cause) {
+      const error = asAppError(cause);
+      const previous = job.error ? `${job.error.code}: ${job.error.message}. ` : '';
+      const progressIssue = persistenceError ? ` An earlier progress update also failed: ${persistenceError.code}.` : '';
+      job.status = 'failed'; job.error = { code: 'RENDER_STATUS_WRITE_FAILED', message: `${previous}The export status could not be saved: ${error.message}.${progressIssue}` }; job.updatedAt = new Date().toISOString();
+    }
   }
 
   private async renderStatus(file: string, jobId: string, project: Project): Promise<Job> {
@@ -515,5 +733,35 @@ function validateValue(rule: any, value: unknown, location: string): void {
 function isWithin(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function samePath(left: string, right: string): boolean {
+  const a = path.resolve(left), b = path.resolve(right);
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function isProcessRunning(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+async function pruneAgentPreviewFrames(directory: string, keepPath: string): Promise<void> {
+  const removed = await prunePreviewCache(directory, keepPath, {
+    maxFiles: 120, maxBytes: 128 * 1024 * 1024, maxAgeMs: 14 * 24 * 60 * 60 * 1000,
+    matches: (name) => name.endsWith('.png')
+  });
+  await Promise.all(removed.map((file) => fs.rm(file.replace(/\.png$/, '.analysis.json'), { force: true }).catch(() => undefined)));
+}
+
+async function replaceFromSnapshot(snapshot: string, destination: string): Promise<void> {
+  const temporary = `${destination}.${randomUUID()}.recovery.tmp`;
+  await fs.copyFile(snapshot, temporary);
+  try { await fs.rename(temporary, destination); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EPERM' && code !== 'EEXIST' && code !== 'EACCES') throw error;
+    try { await fs.copyFile(temporary, destination); }
+    finally { await fs.rm(temporary, { force: true }); }
+  }
 }
 

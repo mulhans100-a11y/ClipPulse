@@ -1,6 +1,6 @@
 # Roadmap
 
-Status reflects the repository at `0.1.0`.
+Status reflects the repository at `0.1.1` as of 22 October 2026.
 
 ## Phase A — Working editing core (complete)
 
@@ -38,6 +38,7 @@ Status reflects the repository at `0.1.0`.
 ## Phase C — Music and highlight analysis
 
 - [x] Local spectral-flux plus RMS onset analysis, autocorrelation tempo hypotheses, and tempo-tolerant dynamic beat tracking; source-versioned caches invalidate earlier RMS-only results.
+- [x] Adaptive v5 local-tempo beat grid with relative confidence, separate onset/accent/section events, and a frozen v4 comparison evaluator; current measured limits and failures are recorded in `evaluation/README.md` and `reports/audio-analysis-evaluation.json`.
 - [x] Import personal music from the montage generator (MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, WMA), add it to the project media bin, and select it for montage analysis.
 - [x] Show analyzed beat positions on audio timeline clips and snap editing positions to them.
 - [x] Audio-analysis outputs: downbeats, heuristic meter, one-second relative energy, coarse sections, and energy-rise markers; independent reference manifests can report BPM/beat/downbeat errors and tempo-score calibration diagnostics.
@@ -49,14 +50,18 @@ Status reflects the repository at `0.1.0`.
 - [x] Accept/reject/correct review UI with project-persisted event times and per-asset reviewed-proposal precision summaries.
 - [x] Per-detector precision/recall/F1, false-positive/negative, confidence-calibration, BPM, beat, and downbeat reporting from independently reviewed manifest data.
 - [x] Optional runtime inventory for FFmpeg, Tesseract OCR, and gameplay-model availability, with an honest no-model fallback.
+- [x] Modular Valorant HUD phrase adapter with explicit event types, normalized-position tentative kill-feed changes, and heuristic clutch-state cues.
+- [x] Explainable audio/motion corroboration, fast-action and low-activity candidates, evidence levels, signal provenance, uncertainties, and semantic score components.
+- [x] Persist manual semantic corrections through project reviews, desktop controls, montage plans, and the versioned agent API; exclude unreviewed quiet/unknown/feed-change candidates from auto-montage selection.
+- [x] Add event-type precision/recall/F1 and mean timestamp error to local evaluation reports, plus a deterministic synthetic OCR phrase regression fixture compared with the legacy substring rules.
 
-Gameplay detectors remain heuristic and are not measured against a representative game-specific reference set. Personal clip annotation is optional and is not a project-completion requirement.
+The checked-in Valorant fixture is a parser regression test, not representative gameplay media. No locally authorized and independently annotated Valorant recordings were available for this change, so real gameplay precision, recall, and timestamp deviation remain unmeasured. OCR is optional, and the conventional feed-location assumption is still a heuristic. No compatible trained gameplay model is shipped.
 
 ## Phase D — Automatic editing
 
 - [x] Versioned edit-plan data model with per-event explanations and highlight, music-alignment, diversity, pacing, framing, and duration scores.
 - [x] Select accepted/corrected, non-rejected analyzed events with source-window checks; diversify assets, games, and event types; anchor each decisive frame to a drop, downbeat, beat, or explicitly reported pacing fallback.
-- [x] Clean Competitive, Aggressive Gaming, Cinematic, Velocity Pacing, and configurable Custom rules change shot intervals, anchor weights, cut placement, and audio mix.
+- [x] Clean Competitive, Aggressive Gaming, Cinematic, Smooth, Velocity Pacing, and configurable Custom rules change shot intervals, anchor weights, cut placement, and audio mix.
 - [x] Generate one to five score-comparable variants as separate editable `.omproj` files and `.edit-plan.json` reports; source projects and timelines remain untouched.
 - [x] UI and CLI workflow analyzes music/highlights and validates frame-exact duration/source coverage. The UI opens variants for shared timeline playback; the CLI exposes timeline-frame inspection and verified FFmpeg export.
 
@@ -85,8 +90,10 @@ Phase F masks can be generated from common COCO object classes with a pinned DET
 - [x] Optional loopback-only REST service with bearer authentication, canonical path grants, symlink/import checks, per-project operation serialization, and rollback-capable edit transactions.
 - [x] MCP stdio server with typed schemas, structured results, image preview content, and asynchronous export status.
 - [x] Agent-only end-to-end montage path for project creation, media import, audio analysis, timeline assembly, frame preview, validated MP4 export, plus undo/redo, validation, interrupted-render reporting, and transaction rollback.
+- [x] Official MCP SDK client test for synthetic highlight analysis, a 30-second beat-aligned montage, timeline effects/speed ramps, preview analysis, and FFprobe-verified export; optional local-media manifest for 20 clips and music.
+- [x] Recover abandoned edit transactions from project/history snapshots after process restart; negotiate MCP versions and preserve exact rational event alignment.
 
-Phase G tools use the shared core; filesystem grants are explicitly passed at service startup. Render jobs are recoverable by status after process restart, but an interrupted FFmpeg render must be started again. Phase F manual and model-generated masks can be controlled through MCP.
+Phase G tools use the shared core; filesystem grants are explicitly passed at service startup. Render jobs are recoverable by status after process restart, but an interrupted FFmpeg render must be started again. Phase F manual and model-generated masks can be controlled through MCP. The repository test exercises the MCP server through the official TypeScript client; a full Codex-host and Claude-host agent evaluation remains environment-dependent.
 
 ## Phase H — Release
 
@@ -94,9 +101,10 @@ Phase G tools use the shared core; filesystem grants are explicitly passed at se
 - [x] Generate and package platform-specific production dependency notices and available license texts, including native `sharp`/libvips, ONNX Runtime, and `guid-typescript` notices; Windows x64 package contents verified locally.
 - [ ] Review generated notices after Linux x64, macOS arm64, and macOS Intel release builds.
 - [x] Configure an NSIS Windows installer and an automated fresh-runner silent-install/start smoke check.
-- [ ] Confirm a successful clean Windows installation/diagnostics run in GitHub Actions.
-- [x] Configure native Linux x64, macOS arm64, macOS Intel, and Windows x64 release builds with pinned Node/npm and the lockfile; attach a CycloneDX SBOM and SHA-256 checksums to a draft release.
-- [ ] Confirm successful Linux/macOS package builds and install checks on target machines.
+- [x] Confirm the clean Windows installer/start smoke test in GitHub Actions.
+- [x] Configure native Linux x64, macOS arm64, macOS Intel, and Windows x64 release builds with pinned Node/npm and the lockfile; attach a CycloneDX SBOM and SHA-256 checksums to v0.1.1.
+- [x] Confirm successful Linux x64 and macOS arm64/Intel package builds in GitHub Actions.
+- [ ] Install Linux/macOS packages on target machines.
 - [ ] Configure Windows/macOS signing secrets and verify signed/notarized artifacts.
 - [x] Publish the source repository at https://github.com/mulhans100-a11y/ClipPulse.
-- [ ] Create and review the first tagged application release; the workflow deliberately creates a draft only.
+- [x] Publish the first tagged application pre-release, v0.1.1, on 22 October 2026.

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.main.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "evaluation/.local/audio-eval-build"
+  },
+  "include": [
+    "src/core/audioAnalysis.ts",
+    "evaluation/audioAnalysisV4Baseline.ts"
+  ]
+}

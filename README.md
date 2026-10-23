@@ -1,39 +1,37 @@
 # ClipPulse
 
-ClipPulse is a free, open-source desktop video editor for gaming clips and music-led montages. It helps you bring local footage and music together, arrange and edit clips on a timeline, and export a finished video. You can edit manually or use the montage generator to create editable starting points.
+**AI-native video editing for gaming montages.** ClipPulse is a free, open-source desktop editor for arranging gameplay footage and music, refining the timeline by hand, and exporting MP4 videos. Codex and Claude Code can use the same editing core through MCP; CLI and local REST interfaces are also available.
 
-The application is built with Electron, React, and TypeScript. Media processing and rendering use FFmpeg. Projects refer to your original files; editing does not overwrite them.
+“AI-native” describes how agents can inspect projects and call typed editing tools. ClipPulse does not include a hosted AI service or promise automatic understanding of every game. Media processing is local through FFmpeg, and agents only access the folders you grant.
 
-## What you can do
+[Install ClipPulse](INSTALLATION.md) · [Download beta builds](https://github.com/mulhans100-a11y/ClipPulse/releases) · [Connect an agent](MCP_SETUP.md) · [GPL-3.0-or-later](LICENSE)
 
-- Import videos and audio from individual files or folders, including a local Medal capture folder.
-- Organize your media library with search, tags, favorites, game names, and cached thumbnails and waveforms.
-- Add your own music. Supported formats include MP3, WAV, FLAC, M4A, AAC, OGG, OPUS, and WMA.
-- Arrange, move, trim, split, duplicate, and remove clips across video and audio tracks.
-- Preview source footage and the edited timeline, then render an MP4 with H.264 video and AAC audio.
-- Adjust clip position, scale, rotation, opacity, color, playback speed, and audio. Add titles, transitions, fades, and keyframes.
-- Analyze music for beats, downbeats, tempo, and changes in energy. Use these cues to guide editing and beat snapping.
-- Generate one or more editable montage projects from selected footage and music, using a pacing style and target duration.
-- Use the command-line interface to create projects, import and inspect media, edit timelines, analyze media, generate montages, and export videos.
+![ClipPulse first-launch screen captured from a Windows x64 development build displaying version 0.1.1](docs/screenshots/clippulse-welcome-windows-x64.png)
 
-## How montage generation works
+*First-launch screen from the Windows x64 development build; the app displays version 0.1.1.*
 
-Choose gameplay footage and a music track, then select a target duration and a pacing style. OpenMontage analyzes the local media, finds candidate audio and video cues, and uses those cues to suggest clip selections and cut positions. Each result is saved as its own project, so you can open it, make changes, preview it, and export it like a manually edited project.
+## What is implemented
 
-The analysis is local and heuristic. It can identify signals such as audio activity, scene changes, sampled-frame motion, and optional HUD text, but it is not a trained gameplay-understanding system. Suggested events and beat positions can be wrong and should be reviewed while editing.
+- A Windows desktop editor with a media library, source viewer, multitrack timeline, inspector, project save/recovery, and undo/redo.
+- Video and audio import, search, tags, favorites, cached thumbnails and waveforms, plus local Medal capture-folder import.
+- Timeline editing: move, trim, split, duplicate and remove clips; adjust transforms, color, opacity, audio, speed, fades, keyframes, titles, transitions, masks and chroma key.
+- FFmpeg-based preview and H.264/AAC MP4 export. Projects refer to source media; they do not overwrite it.
+- Local music analysis for estimated tempo, beats, downbeats, accents and energy sections. Auto-montage generation creates editable project variants in aggressive, cinematic, smooth, clean, velocity or custom styles.
+- Local gameplay activity cues based on available audio, sampled motion, scene changes and optional OCR/HUD phrases. Results include evidence and uncertainty; they are suggestions, not confirmed gameplay events.
+- Agent control through a versioned MCP tool catalog, a JSON CLI and loopback REST. These all call the shared `src/core` editing services.
+- Optional local object-mask segmentation for supported COCO classes. The model downloads on first use; it is not bundled.
 
-## Getting started
+The [roadmap](ROADMAP.md), [CLI/API guide](API.md) and [agent API contract](AGENT_API.md) describe the available interfaces and their limits.
 
-### Requirements
+## Install
 
-- Windows 10 or 11 for the currently documented desktop setup
-- Node.js 24 or newer and npm 10 or newer
-- FFmpeg and FFprobe 6 or newer available on `PATH`
-- Git, to get the source code
+ClipPulse is in beta. Download the latest pre-release for your operating system from [GitHub Releases](https://github.com/mulhans100-a11y/ClipPulse/releases) and follow [INSTALLATION.md](INSTALLATION.md). Windows x64 is the locally verified desktop platform; Linux and macOS target-machine installation remain unverified. A successful package build alone does not establish that every package was installed and tested on a target machine.
 
-Tesseract OCR is optional and is only needed for HUD-text detection. Optional object segmentation downloads its model weights the first time that feature is used. Neither tool is required for basic editing or export. See [INSTALLATION.md](INSTALLATION.md) for setup details and troubleshooting.
+**FFmpeg and FFprobe are separate requirements.** They are not bundled with ClipPulse. Install FFmpeg 6 or newer with the `drawtext` filter and `libx264` encoder, make both `ffmpeg` and `ffprobe` available on `PATH`, then restart the editor. See the installation guide if the runtime check reports a problem.
 
-### Run from source
+### Run from source (Windows PowerShell)
+
+Requirements: Windows 10/11, Node.js 24+, npm 10+, Git, and compatible FFmpeg/FFprobe.
 
 ```powershell
 git clone https://github.com/mulhans100-a11y/ClipPulse.git
@@ -42,27 +40,31 @@ npm ci
 npm run dev
 ```
 
-Check the [GitHub Releases page](https://github.com/mulhans100-a11y/ClipPulse/releases) for prebuilt installers. FFmpeg is installed separately and is not bundled with the application.
+Node.js and npm are only needed for the source checkout and CLI development. Installed desktop packages include Electron. For a source build, run `npm run build`; use `npm run cli -- doctor` to check the local FFmpeg runtime.
 
-### Make your first edit
+## Make your first edit
 
-1. Create or open a project.
-2. Import gameplay clips and any music you want to use. You can select files or import a folder.
-3. Add clips to video tracks and music to an audio track.
-4. Arrange and trim the clips. Use the preview and inspector to refine timing, image, and sound.
-5. Export the project as an MP4.
+1. Create a project or open an existing `.omproj` file.
+2. Import gameplay clips and music from files or a folder.
+3. Add media to video and audio tracks, then arrange and trim the clips.
+4. Use the preview and inspector to refine timing, effects and audio. Auto Edit can create editable montage variants as starting points.
+5. Review the timeline and export an MP4. The export is validated before the destination file is finalized.
 
-For an automatically assembled starting point, choose the montage generator, select the footage and your own music, set a duration and style, and generate a project variant. Review and edit the result before exporting.
+Projects keep paths to the original media rather than embedding it. Keep source files in place or relink them if they move. The Medal option reads a local capture folder; it does not connect to a Medal account or cloud service.
 
-## Project files and media
+## Edit with Codex or Claude Code
 
-Projects use the `.omproj` format. The project stores the edit and references media at its local file paths; it does not embed or alter the original footage or music. Keep the referenced files in place, or relink them if they move. Project edits are saved automatically, with a backup snapshot and undo/redo history.
+Do the project setup once: open **Agent** in ClipPulse, choose Codex or Claude Code, grant access to the project, existing clip library, music and output folders, then run the connection check. Make sure the gameplay files are already imported into that project's media library. The setup flow preserves existing client configuration and saves a backup before updating it. Install and sign in to the AI client separately. The built-in setup currently targets Codex CLI and Claude Code; Claude Desktop has a separate setup flow and is not configured by this dialog.
 
-The Medal shortcut imports from a local capture folder on your computer. It does not connect to a Medal account or cloud service. The application performs media analysis and rendering locally; optional model weights are downloaded separately when segmentation is first used.
+For each new edit, the intended workflow is to provide the music file and describe the edit. The agent can import and analyze that music, search the existing project's media by its names, games or tags, analyze eligible videos, and generate a montage without asking you to choose clips one by one. The montage tool can consider all project videos when no video IDs are specified. The agent still needs the project path as context; ClipPulse does not yet expose an implicit “use whichever project is open in the desktop” MCP context. If the library or project has not been set up, the agent needs that location first.
 
-## Command-line examples
+Example request after connecting:
 
-Build the application and create a project:
+> Use `D:\Music\track.wav` and the existing project library to create a 30-second portrait, aggressive Valorant montage. Search the library and choose the best supported highlight cues yourself; do not ask me to pick individual clips. Align cuts to suitable music accents, add restrained zooms and speed ramps where useful, and create an editable project in my approved Exports folder. Validate and preview it, report uncertain event detections, then export `montage.mp4`. Do not modify the source media.
+
+The agent can create and edit the project through ClipPulse’s tools; detected highlights and music timing are heuristic and should be reviewed. For exact setup steps, permission behavior and examples, see [MCP_SETUP.md](MCP_SETUP.md) and [AGENT_API.md](AGENT_API.md).
+
+CLI example:
 
 ```powershell
 npm run build
@@ -71,32 +73,19 @@ npm run cli -- import --project .\montage.omproj D:\Captures\Valorant
 npm run cli -- inspect --project .\montage.omproj
 ```
 
-The import and inspect commands report media and track IDs. Use those IDs to place a clip on the timeline and export it:
+The CLI reports media and track IDs. Use them with `clip-add` and `export`; use `generate-montage` to create editable variants. See [API.md](API.md) for complete command syntax and [AGENT_E2E.md](AGENT_E2E.md) for the reproducible synthetic agent workflow.
 
-```powershell
-npm run cli -- clip-add --project .\montage.omproj --media <VIDEO_ID> --track <VIDEO_TRACK_ID> --start 0 --source-in 4.2 --duration 3.5
-npm run cli -- export --project .\montage.omproj --output .\montage.mp4
-```
+## Current limitations and beta status
 
-To generate editable montage projects from music and footage, run:
+- ClipPulse is early beta software. Review generated edits before publishing or sharing them.
+- Music, motion, scene-change and HUD detections are signals and heuristics. They do not reliably identify every kill, headshot, clutch or musically ideal cut. There is no bundled trained gameplay-understanding model.
+- HUD phrase detection requires optional Tesseract OCR. Segmentation supports common object classes; it may not isolate game-specific characters or arbitrary objects.
+- Timeline playback renders a cached preview section before playback. It is not a real-time compositor, and edits can require a new section render.
+- Export depends on the installed FFmpeg build, its filters/encoders and system resources. Optional GPU encoders depend on compatible drivers.
+- Unsigned installers may trigger Windows SmartScreen or macOS Gatekeeper. The locally tested v0.1.2 Windows installer is unsigned; consult the versioned release-status file for the platform packages' signing status.
+- The release build/test jobs have run on Windows x64, Linux x64, macOS arm64 and macOS Intel. Target-machine installation is verified on Windows x64 only; Linux/macOS installations are unverified. A historical Codex CLI agent run is recorded in the [test report](AGENT_TEST_REPORT.md); the latest connection-onboarding check covers MCP initialization and a harmless tool call, not a fresh authenticated agent turn. Claude Code host testing is not claimed for the current environment.
 
-```powershell
-npm run cli -- analyze-audio --project .\montage.omproj --media <MUSIC_ID>
-npm run cli -- generate-montage --project .\montage.omproj --music <MUSIC_ID> --duration 30 --style aggressive --variants 3 --format portrait-1080p
-```
-
-The generator prints the paths to the created variants. Export a variant by passing its `.omproj` path to the export command.
-
-See [API.md](API.md) for CLI details and [AGENT_API.md](AGENT_API.md) for the local automation interfaces.
-
-## Current limitations
-
-- Timeline playback is rendered to a preview video before it plays; it is not live playback while editing. Changes require the preview to render again.
-- Event detection, tempo, beat, and downbeat positions are estimates. The montage generator can suggest useful cuts, but it does not reliably understand every game event or guarantee that a cut matches the music.
-- HUD text detection requires Tesseract. Optional segmentation recognizes common object categories and does not isolate arbitrary game-specific objects.
-- Rendering requires a compatible FFmpeg installation with the needed filters and encoders. See the installation guide for checks.
-
-## Development
+## Development and documentation
 
 ```powershell
 npm run dev
@@ -104,16 +93,21 @@ npm run build
 npm test
 ```
 
-The test suite creates short synthetic media files with FFmpeg. It does not require your personal clips or music.
+The automated suite uses generated synthetic media; it does not require your gameplay recordings or music. See the [test report](AGENT_TEST_REPORT.md) for environment-specific results and untested clients/platforms.
 
-## Documentation and contribution
+| Guide | Contents |
+| --- | --- |
+| [Installation](INSTALLATION.md) | Installers, source setup, FFmpeg and troubleshooting |
+| [Architecture](ARCHITECTURE.md) | Shared core and app structure |
+| [CLI and API](API.md) | Command-line and local service operations |
+| [Agent API](AGENT_API.md) | Versioned MCP, REST and tool schemas |
+| [MCP setup](MCP_SETUP.md) | Codex and Claude Code configuration and permissions |
+| [Agent E2E](AGENT_E2E.md) | Synthetic workflow and optional local-media run |
+| [Gameplay analysis](GAMEPLAY_HIGHLIGHTS.md) | Signals, confidence and evaluation limits |
+| [Quality control](QUALITY_CONTROL.md) | Reports and bounded automatic corrections |
+| [Timeline preview](TIMELINE_PREVIEW.md) | Preview cache and measured performance |
+| [Contributing](CONTRIBUTING.md) | Local workflow and contribution expectations |
+| [Security](SECURITY.md) · [Dependencies](DEPENDENCIES.md) | Security reporting, bundled notices and media/codec notes |
+| [Demo-video storyboard](DEMO_VIDEO_SCRIPT.md) · [GitHub metadata proposal](GITHUB_REPOSITORY_METADATA.md) · [v0.1.1 release-description draft](V0.1.1_RELEASE_DRAFT.md) | Maintainer publication materials; no release or repository setting is changed by these files |
 
-- [Installation and troubleshooting](INSTALLATION.md)
-- [Architecture](ARCHITECTURE.md)
-- [CLI and API](API.md)
-- [Automation interface](AGENT_API.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-- [Dependencies](DEPENDENCIES.md)
-
-ClipPulse is licensed under [GPL-3.0-or-later](LICENSE).
+ClipPulse is distributed under [GPL-3.0-or-later](LICENSE). Bundled dependency notices are documented in [DEPENDENCIES.md](DEPENDENCIES.md); FFmpeg itself is installed separately.

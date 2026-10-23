@@ -801,6 +801,8 @@ function validateEventReviews(reviews: AnalysisEventReview[], durationSeconds: n
     if (!['accepted', 'rejected', 'corrected'].includes(review.status) || !Array.isArray(review.detectorIds) || review.detectorIds.length > 16 || review.detectorIds.some((id) => typeof id !== 'string' || id.length > 128)) {
       throw new AppError('INVALID_EVENT_REVIEW', `Event review ${review.eventId} has an invalid status or detector list.`);
     }
+    const eventTypes = ['kill', 'headshot', 'multi_kill', 'ace', 'clutch', 'clutch_situation', 'round_end', 'round_objective', 'kill_feed_change', 'combat_activity', 'fast_action_candidate', 'quiet_passage', 'audio_activity', 'scene_change', 'text_recognition', 'unknown'];
+    if (review.correctedEventType !== undefined && !eventTypes.includes(review.correctedEventType)) throw new AppError('INVALID_EVENT_REVIEW', `Event review ${review.eventId} has an unsupported corrected event type.`);
     const times = [review.startSeconds, review.decisiveSeconds, review.endSeconds];
     if (!times.every(Number.isFinite) || review.startSeconds < 0 || review.startSeconds > review.decisiveSeconds || review.decisiveSeconds > review.endSeconds || review.endSeconds > durationSeconds + 0.001 || typeof review.updatedAt !== 'string') {
       throw new AppError('INVALID_EVENT_REVIEW', `Event review ${review.eventId} has invalid timestamps.`);
