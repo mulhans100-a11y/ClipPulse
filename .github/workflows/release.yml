@@ -141,6 +141,17 @@ jobs:
         run: |
           status_file="ClipPulse-${RELEASE_TAG}-RELEASE-STATUS.md"
           checksum_file="ClipPulse-${RELEASE_TAG}-SHA256SUMS.txt"
+          # GitHub's release upload normalizes spaces in asset names to dots.
+          # Normalize before hashing so the manifest matches the names users download.
+          (
+            cd release
+            for file in *; do
+              [[ -f "$file" && "$file" == *" "* ]] || continue
+              normalized="${file// /.}"
+              [[ ! -e "$normalized" ]] || { echo "Asset filename normalization would overwrite $normalized"; exit 1; }
+              mv -- "$file" "$normalized"
+            done
+          )
           cat > "release/${status_file}" <<EOF
           This is an automatically assembled draft for ${RELEASE_TAG}. Review platform installation, license notices, and signing before publishing it.
 

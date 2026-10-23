@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Normalize release asset filenames before generating SHA-256 manifests so the checksums match GitHub's uploaded asset names.
+
 ## 0.1.3 Beta — Reliable AI-agent connection (2026-10-23)
 
 - Reuse and update a single ClipPulse MCP entry instead of creating a numbered entry on each setup; consolidate only ClipPulse-managed duplicates and preserve unrelated servers with a dated backup.
