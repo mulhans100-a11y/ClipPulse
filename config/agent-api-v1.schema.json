@@ -2331,9 +2331,9 @@
           },
           "durationSeconds": {
             "type": "number",
-            "description": "Target montage duration.",
+            "description": "Optional target montage duration; omitted uses the full music length, up to 30 minutes.",
             "minimum": 1,
-            "maximum": 3600
+            "maximum": 1800
           },
           "style": {
             "type": "string",
@@ -2352,7 +2352,35 @@
               "type": "string",
               "description": "Optional video media ID."
             },
-            "description": "Optional video asset selection."
+            "description": "Optional video asset selection; omitted selects the project library."
+          },
+          "selectionMode": {
+            "type": "string",
+            "enum": ["library", "selected", "ranges"],
+            "description": "library searches imported project videos; selected uses videoIds; ranges searches only marked sourceRanges."
+          },
+          "sourceRanges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mediaId": { "type": "string", "description": "Imported video asset ID." },
+                "startSeconds": { "type": "string", "description": "Inclusive source start in exact decimal or rational seconds." },
+                "endSeconds": { "type": "string", "description": "Inclusive source end in exact decimal or rational seconds." }
+              },
+              "required": ["mediaId", "startSeconds", "endSeconds"],
+              "additionalProperties": false
+            },
+            "description": "Per-video search windows; limits FFmpeg and OCR sampling to the marked range."
+          },
+          "sourceRangePolicy": {
+            "type": "string",
+            "enum": ["strict", "flexible"],
+            "description": "strict keeps output inside the marked range; flexible permits a short preset lead-in and tail."
+          },
+          "referenceMediaId": {
+            "type": "string",
+            "description": "Optional imported local video reference; its measured cut cadence is transferred, and it is excluded from target footage."
           },
           "variants": {
             "type": "number",
@@ -2362,7 +2390,7 @@
           },
           "intensity": {
             "type": "number",
-            "description": "Pacing intensity.",
+            "description": "Pacing intensity; accepts normalized 0–1 or percentage 0–100.",
             "minimum": 0,
             "maximum": 100
           },
@@ -2382,8 +2410,7 @@
         },
         "required": [
           "projectPath",
-          "musicId",
-          "durationSeconds"
+          "musicId"
         ],
         "additionalProperties": false
       },

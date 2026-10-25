@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import { AppError } from './errors';
+import { recordExternalProcessTiming } from './processMetrics';
 
 export interface CommandResult { stdout: string; stderr: string; }
 export interface FfmpegAvailability { ffmpeg: boolean; ffprobe: boolean; compatible: boolean; message?: string; }
@@ -23,6 +25,13 @@ export function runCommand(command: string, args: string[], onStdout?: (line: st
       reject(new AppError('PROCESS_ABORTED', `${command} was stopped because the media job was cancelled.`));
       return;
     }
+    const started = performance.now();
+    let timingRecorded = false;
+    const recordTiming = () => {
+      if (timingRecorded) return;
+      timingRecorded = true;
+      recordExternalProcessTiming(command, performance.now() - started);
+    };
     const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     const abort = () => child.kill();
@@ -32,6 +41,7 @@ export function runCommand(command: string, args: string[], onStdout?: (line: st
     child.stdout.on('data', (chunk: string) => { stdout += chunk; onStdout?.(chunk); });
     child.stderr.on('data', (chunk: string) => { stderr += chunk; });
     child.on('error', (error: NodeJS.ErrnoException) => {
+      recordTiming();
       signal?.removeEventListener('abort', abort);
       const executable = command.toLowerCase().replace(/\.exe$/, '');
       const isFfmpegTool = executable === 'ffmpeg' || executable === 'ffprobe';
@@ -43,6 +53,7 @@ export function runCommand(command: string, args: string[], onStdout?: (line: st
       reject(new AppError('PROCESS_START_FAILED', `Could not start ${command}${detail}. Confirm the program is installed and executable.`, { cause: error }));
     });
     child.on('close', (code) => {
+      recordTiming();
       signal?.removeEventListener('abort', abort);
       if (signal?.aborted) {
         reject(new AppError('PROCESS_ABORTED', `${command} was stopped because the media job was cancelled.`));

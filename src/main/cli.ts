@@ -14,8 +14,8 @@ import { exportVideo } from '../core/export';
 import { ffmpegAvailable, runCommand } from '../core/ffmpeg';
 import { addClip, addTrack, createProject, duplicateClip, getProjectHistory, importMedia, loadProject, moveClip, projectCachePath, redoProject, relinkMedia, removeClip, searchMedia, setClipAudio, setClipEffects, splitClip, timelineDuration, trimClip, undoProject, updateMediaMetadata, updateTrackSettings, validateProject } from '../core/project';
 import { decimal, frameTime, parseDecimal, rational, toFrame } from '../core/time';
-import type { AutoMontageCustomRules, AutoMontageFormat, AutoMontageStyle, SegmentationProgress } from '../core/types';
-import { AGENT_SCHEMA_VERSION, AgentService } from './agent';
+import type { AutoMontageCustomRules, AutoMontageFormat, AutoMontageRangePolicy, AutoMontageSelectionMode, AutoMontageSourceRange, AutoMontageStyle, SegmentationProgress } from '../core/types';
+import { AGENT_SCHEMA_VERSION, AgentService, normalizePacingIntensity } from './agent';
 import { startAgentRest } from './agentRest';
 import { runAgentMcp } from './agentMcp';
 import { generateClipModelMask, MODEL_SEGMENTATION_MODEL } from '../core/modelSegmentation';
@@ -43,6 +43,14 @@ function one(args: ParsedArgs, key: string, required = false): string | undefine
   if (required && !value) throw new AppError('INVALID_ARGUMENTS', `Required option --${key} is missing.`);
   return value;
 }
+function parseSourceRangeArgument(value: string): AutoMontageSourceRange {
+  const separator = value.indexOf('@');
+  const secondSeparator = value.indexOf('@', separator + 1);
+  if (separator <= 0 || secondSeparator <= separator + 1 || value.indexOf('@', secondSeparator + 1) !== -1) {
+    throw new AppError('INVALID_ARGUMENTS', 'A source range must use ID@START@END, with times in decimal or rational seconds.');
+  }
+  return { mediaId: value.slice(0, separator), startSeconds: value.slice(separator + 1, secondSeparator), endSeconds: value.slice(secondSeparator + 1) };
+}
 function secondsFlag(args: ParsedArgs, key: string, fallback?: string) {
   const value = one(args, key) ?? fallback;
   return value === undefined ? undefined : parseDecimal(value);
@@ -50,7 +58,7 @@ function secondsFlag(args: ParsedArgs, key: string, fallback?: string) {
 function json(data: unknown): void { process.stdout.write(`${JSON.stringify({ schemaVersion: AGENT_SCHEMA_VERSION, ok: true, data }, null, 2)}\n`); }
 function help(): void {
   process.stdout.write(`Agent interfaces (JSON schema v${AGENT_SCHEMA_VERSION}): schema | agent-call --allow-root DIR --tool NAME --arguments JSON | serve --allow-root DIR [--allow-root DIR] [--port 43173] [--token TOKEN] | mcp-server --allow-root DIR [--allow-root DIR]\n\n`);
-  process.stdout.write(`ClipPulse CLI (JSON schema v1)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --media ID --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  generate-montage --project FILE --music ID --duration SEC [--style clean|aggressive|cinematic|smooth|velocity|custom] [--custom-rules JSON] [--video ID ...] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]\n  evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]\n  segment-mask --project FILE --clip ID [--class person] [--sample-fps 2] [--model-cache DIR]\n  analysis-runtimes\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false] [--volume 0-8] [--role standard|dialogue|music] [--normalize true|false] [--duck-under-dialogue true|false] [--volume-keyframes FILE.json]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-effects --project FILE --clip ID --effects FILE.json\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nModel-backed masks download the pinned ONNX model on first use and run locally afterward. All successful commands return JSON on stdout; progress goes to stderr. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
+  process.stdout.write(`ClipPulse CLI (JSON schema v1)\n\nCommands:\n  create --project FILE [--name NAME] [--fps 60/1] [--width 1920 --height 1080]\n  import --project FILE PATH... [--no-recursive]\n  media-search --project FILE [--query TEXT] [--favorites]\n  media-update --project FILE --media ID [--favorite true|false] [--rating 0-5] [--tag TAG] [--game NAME]\n  media-relink --project FILE --path FILE\n  analyze-audio --project FILE --media ID\n  analyze-highlights --project FILE --media ID\n  generate-montage --project FILE --music ID --duration SEC [--selection library|selected|ranges] [--video ID ...] [--source-range ID@START@END ...] [--range-policy strict|flexible] [--style clean|aggressive|cinematic|smooth|velocity|custom] [--custom-rules JSON] [--reference ID] [--variants 1-5] [--intensity 0-100] [--format project|landscape-1080p|portrait-1080p|square-1080p] [--output-dir DIR]\n  evaluate-highlights --dataset FILE [--max-gap SEC] [--output REPORT.json]\n  segment-mask --project FILE --clip ID [--class person] [--sample-fps 2] [--model-cache DIR]\n  analysis-runtimes\n  history --project FILE\n  undo --project FILE\n  redo --project FILE\n  inspect --project FILE\n  validate --project FILE\n  track-add --project FILE --kind video|audio [--name NAME]\n  track-set --project FILE --track ID [--mute true|false] [--solo true|false] [--lock true|false] [--volume 0-8] [--role standard|dialogue|music] [--normalize true|false] [--duck-under-dialogue true|false] [--volume-keyframes FILE.json]\n  clip-add --project FILE --media ID --track ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-duplicate --project FILE --clip ID [--start SEC]\n  clip-audio --project FILE --clip ID [--enabled true|false] [--volume 0-8] [--fade-in SEC] [--fade-out SEC]\n  clip-effects --project FILE --clip ID --effects FILE.json\n  clip-trim --project FILE --clip ID [--start SEC] [--source-in SEC] [--duration SEC]\n  clip-move --project FILE --clip ID --start SEC [--track ID]\n  clip-split --project FILE --clip ID --at SEC\n  clip-remove --project FILE --clip ID\n  frame --project FILE --media ID --time SEC [--output IMAGE]\n  timeline-frame --project FILE --time SEC [--output IMAGE] [--overwrite]\n  export --project FILE --output FILE [--overwrite] [--encoder libx264|h264_amf|h264_nvenc|h264_qsv]\n  doctor\n\nModel-backed masks download the pinned ONNX model on first use and run locally afterward. All successful commands return JSON on stdout; progress goes to stderr. Errors return {ok:false,error:{code,message}} and exit 1.\n`);
 }
 
 async function main(): Promise<void> {
@@ -103,18 +111,23 @@ async function main(): Promise<void> {
       catch (error) { throw new AppError('INVALID_CUSTOM_RULES', `Could not read custom montage rules: ${error instanceof Error ? error.message : error}`); }
     }
     const selectedVideoIds = args.flags.get('video')?.flatMap((value) => value.split(',')).map((value) => value.trim()).filter(Boolean);
+    const sourceRanges = args.flags.get('source-range')?.map(parseSourceRangeArgument);
     const outputDirectory = one(args, 'output-dir') ?? path.join(path.dirname(path.resolve(file)), 'auto-montages');
     const generated = await generateAutomaticMontages(file, outputDirectory, {
       musicMediaId: one(args, 'music', true)!,
+      ...(one(args, 'selection') ? { selectionMode: one(args, 'selection') as AutoMontageSelectionMode } : {}),
       ...(selectedVideoIds?.length ? { videoMediaIds: selectedVideoIds } : {}),
+      ...(sourceRanges?.length ? { sourceRanges } : {}),
+      ...(one(args, 'range-policy') ? { sourceRangePolicy: one(args, 'range-policy') as AutoMontageRangePolicy } : {}),
+      ...(one(args, 'reference') ? { referenceMediaId: one(args, 'reference')! } : {}),
       style,
-      durationSeconds: Number(one(args, 'duration', true)),
+      ...(one(args, 'duration') ? { durationSeconds: Number(one(args, 'duration')) } : {}),
       variants: Number(one(args, 'variants') ?? 3),
-      intensity: Number(one(args, 'intensity') ?? 50) / 100,
+      intensity: normalizePacingIntensity(Number(one(args, 'intensity') ?? 50)),
       format: (one(args, 'format') ?? 'project') as AutoMontageFormat,
       ...(customRules ? { customRules } : {})
     });
-    json({ outputDirectory: generated.outputDirectory, variants: generated.variants.map(({ projectPath, planPath, plan }) => ({ projectPath, planPath, variant: plan.variant, style: plan.style, score: plan.score, scoreBreakdown: plan.scoreBreakdown, durationSeconds: plan.durationSeconds, segments: plan.segments.length, warnings: plan.warnings })) });
+    json({ outputDirectory: generated.outputDirectory, performanceReportPath: generated.performanceReportPath, variants: generated.variants.map(({ projectPath, planPath, plan }) => ({ projectPath, planPath, variant: plan.variant, style: plan.style, score: plan.score, scoreBreakdown: plan.scoreBreakdown, durationSeconds: plan.durationSeconds, referenceStyle: plan.referenceStyle, segments: plan.segments.length, warnings: plan.warnings })) });
     return;
   }
   if (args.command === 'history') { json(await getProjectHistory(file)); return; }

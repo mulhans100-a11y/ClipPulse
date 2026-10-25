@@ -46,8 +46,9 @@ async function retryReadOnly(operation, retry, attempts = 3, onRetry = async () 
 }
 
 class McpSession {
-  constructor(allowedRoots) {
+  constructor(allowedRoots, requestTimeoutMs = 60_000) {
     this.allowedRoots = allowedRoots;
+    this.requestTimeoutMs = requestTimeoutMs;
     this.client = undefined;
     this.transport = undefined;
     this.lastContent = [];
@@ -70,7 +71,7 @@ class McpSession {
   async call(name, args = {}, retryable = false) {
     const execute = async () => {
       if (!this.client) await this.connect();
-      const result = await this.client.callTool({ name, arguments: args });
+      const result = await this.client.callTool({ name, arguments: args }, undefined, { timeout: this.requestTimeoutMs });
       if (result.isError) {
         const envelope = result.structuredContent;
         const detail = envelope?.error ?? result.content?.find((item) => item.type === 'text')?.text ?? 'MCP tool call failed.';
@@ -207,7 +208,10 @@ async function runAgentE2E(options = {}) {
       return { name: fileName(file), sizeBytes: info.size, mtimeMs: info.mtimeMs };
     }));
 
-    session = new McpSession(rootGrants);
+    // Real recordings can make OCR slower than the MCP SDK's 60-second
+    // default. Give this local validation harness a bounded 3-minute budget;
+    // production agent clients retain their own request timeout policies.
+    session = new McpSession(rootGrants, options.manifestPath ? 180_000 : 60_000);
     const connected = await action('connect through the official MCP TypeScript client', () => session.connect(), () => session.retries);
     assert.equal(connected.server?.name, 'clippulse');
     assert.equal(connected.server?.version, packageInfo.version);
@@ -220,8 +224,8 @@ async function runAgentE2E(options = {}) {
     assert.equal(diagnostics.ffmpeg.ffprobe, true, diagnostics.ffmpeg.message);
     assert.equal(diagnostics.ffmpeg.compatible, true, diagnostics.ffmpeg.message);
 
-    const created = await action('create project', () => session.call('project_create', { projectPath, name: 'Agent 30-second edit', width: 320, height: 180, frameRate: '24/1' }));
-    assert.equal(created.project.name, 'Agent 30-second edit');
+    const created = await action('create project', () => session.call('project_create', { projectPath, name: 'Agent music-length edit', width: 320, height: 180, frameRate: '24/1' }));
+    assert.equal(created.project.name, 'Agent music-length edit');
     const opened = await action('open created project', () => session.call('project_open', { projectPath }, true), () => session.retries);
     assert.equal(opened.project.id, created.project.id);
 
@@ -230,6 +234,8 @@ async function runAgentE2E(options = {}) {
     const musicAsset = imported.added.find((item) => item.kind === 'audio');
     assert.equal(videoAssets.length, videoPaths.length, `Expected ${videoPaths.length} imported videos, got ${videoAssets.length}.`);
     assert.ok(musicAsset?.hasAudio, 'The imported music must contain an audio stream.');
+    const expectedMontageDuration = Number(musicAsset.duration.num) / Number(musicAsset.duration.den);
+    assert.ok(Number.isFinite(expectedMontageDuration) && expectedMontageDuration > 0, 'Imported music must have a finite positive duration.');
     importedHashes = [...videoAssets, musicAsset].map((asset) => asset.contentHash);
 
     const music = await action('analyze music and beats', () => session.call('audio_analyze', { projectPath, mediaId: musicAsset.id }, true), () => session.retries);
@@ -263,14 +269,17 @@ async function runAgentE2E(options = {}) {
     const sampleEvent = (await session.call('highlights_rank', { projectPath, mediaId: selectedVideos[0].id }, true)).events[0];
     if (sampleEvent) await action('inspect source video frames at selected highlight', () => session.call('media_get_frames', { projectPath, mediaId: selectedVideos[0].id, times: [sampleEvent.decisiveSeconds] }, true), () => session.retries);
 
-    const montage = await action('generate editable 30-second beat-aligned montage', () => session.call('montage_generate', {
-      projectPath, musicId: musicAsset.id, durationSeconds: 30, style: 'velocity', videoIds: selectedVideos.map((item) => item.id), variants: 1, intensity: 55, format: 'project', outputDirectory: path.join(workspace, 'generated montages')
+    const montage = await action('generate editable montage using the full music duration', () => session.call('montage_generate', {
+      projectPath, musicId: musicAsset.id, style: 'velocity', videoIds: selectedVideos.map((item) => item.id), variants: 1, intensity: 55, format: 'project', outputDirectory: path.join(workspace, 'generated montages')
     }));
     assert.equal(montage.variants.length, 1);
     const variant = montage.variants[0];
+    assert.ok(montage.performanceReportPath, 'Montage generation returns a structured stage timing report.');
+    const performanceReport = JSON.parse(await readFile(montage.performanceReportPath, 'utf8'));
+    report.montagePerformance = { timingsMs: performanceReport.timingsMs, analysis: performanceReport.analysis, externalWork: performanceReport.externalWork };
     const plan = JSON.parse(await readFile(variant.planPath, 'utf8'));
-    assert.equal(plan.durationSeconds, 30);
-    assert.ok(plan.segments.length >= 5, 'A 30-second montage should contain multiple edited shots.');
+    assert.ok(Math.abs(plan.durationSeconds - expectedMontageDuration) <= 1 / 24, 'Montage duration should match the full imported music length within one frame.');
+    assert.ok(plan.segments.length >= 5, 'A music-length montage should contain multiple edited shots.');
     assert.ok(plan.segments.every((segment) => segment.alignmentErrorFrames === 0), 'Every shot should map its decisive event to its selected music beat without a frame error.');
     report.montage = { project: fileName(variant.projectPath), style: variant.style, durationSeconds: plan.durationSeconds, segmentCount: plan.segments.length, anchorKinds: [...new Set(plan.segments.map((segment) => segment.anchorKind))], alignmentErrorsFrames: plan.segments.map((segment) => segment.alignmentErrorFrames), score: variant.score };
 
@@ -294,16 +303,17 @@ async function runAgentE2E(options = {}) {
     report.corrections.timelineEffectsApplied = 4;
 
     const timeline = await action('inspect edited timeline', () => session.call('timeline_inspect', { projectPath: variant.projectPath }, true), () => session.retries);
-    assert.equal(BigInt(timeline.duration.num) / BigInt(timeline.duration.den), 30n);
+    assert.ok(Math.abs(Number(timeline.duration.num) / Number(timeline.duration.den) - expectedMontageDuration) <= 1 / 24, 'Timeline duration should match the full imported music length within one frame.');
     assert.equal(timeline.clipCount, plan.segments.length + 1, 'Montage timeline should contain each video segment and one music clip.');
     const validation = await action('validate project and granted media', () => session.call('project_validate', { projectPath: variant.projectPath }, true), () => session.retries);
     assert.equal(validation.valid, true, JSON.stringify(validation.media.filter((item) => !item.exists || !item.permitted)));
 
-    const preview = await action('render composite preview frame', () => session.call('preview_render', { projectPath: variant.projectPath, time: '15/1' }, true), () => session.retries);
+    const previewTime = String(Math.min(15, expectedMontageDuration / 2));
+    const preview = await action('render composite preview frame', () => session.call('preview_render', { projectPath: variant.projectPath, time: previewTime }, true), () => session.retries);
     assert.equal(preview.mimeType, 'image/png');
     const previewImage = session.lastContent.find((item) => item.type === 'image' && item.mimeType === 'image/png');
     assert.ok(previewImage && Buffer.from(previewImage.data ?? '', 'base64').length > 100, 'MCP preview should be returned as a valid image content block.');
-    const previewAnalysis = await action('analyze preview frame', () => session.call('preview_analyze', { projectPath: variant.projectPath, time: '15/1' }, true), () => session.retries);
+    const previewAnalysis = await action('analyze preview frame', () => session.call('preview_analyze', { projectPath: variant.projectPath, time: previewTime }, true), () => session.retries);
     const averageLuma = previewAnalysis.statistics?.yavg;
     assert.ok(Number.isFinite(averageLuma) && averageLuma > 2, `Preview frame appears empty or black (YAVG=${averageLuma}).`);
     report.preview = { width: previewAnalysis.width, height: previewAnalysis.height, frame: previewAnalysis.frame, averageLuma };
@@ -330,7 +340,7 @@ async function runAgentE2E(options = {}) {
     ]).stdout);
     const videoStream = probe.streams.find((stream) => stream.codec_type === 'video');
     const audioStream = probe.streams.find((stream) => stream.codec_type === 'audio');
-    const expectedFrameCount = Math.round(30 * 24);
+    const expectedFrameCount = Math.round(expectedMontageDuration * 24);
     const outputStat = await stat(exportPath);
     const quality = {
       fileName: fileName(exportPath), sizeBytes: outputStat.size,
@@ -344,7 +354,7 @@ async function runAgentE2E(options = {}) {
         aacAudio: audioStream?.codec_name === 'aac',
         dimensions: videoStream?.width === 320 && videoStream?.height === 180,
         frameCount: Number(videoStream?.nb_read_frames) === expectedFrameCount,
-        duration: Math.abs(Number(probe.format.duration) - 30) <= 1 / 24
+        duration: Math.abs(Number(probe.format.duration) - expectedMontageDuration) <= 1 / 24
       }
     };
     assert.ok(Object.values(quality.checks).every(Boolean), `FFprobe export quality checks failed: ${JSON.stringify(quality)}`);

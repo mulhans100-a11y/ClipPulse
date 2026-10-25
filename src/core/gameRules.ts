@@ -29,9 +29,10 @@ export const BUILT_IN_GAME_RULES: GameRuleProfile[] = [
     { id: 'multi_kill', eventType: 'multi_kill', keywords: ['double kill', 'triple kill', 'quadra kill', 'quad kill', 'multi kill'] },
     { id: 'headshot', eventType: 'headshot', keywords: ['headshot', 'head shot'] },
     { id: 'clutch', eventType: 'clutch', keywords: ['clutch'] },
+    { id: 'buy_phase', eventType: 'quiet_passage', keywords: ['buy phase', 'purchase phase', 'kaufphase', 'kauf phase', 'press b to buy', 'druecke b zum kaufen', 'drücke b zum kaufen', '2um kaufen'] },
+    { id: 'spike_prompt', eventType: 'quiet_passage', keywords: ['hold e to plant spike', 'hold e to defuse spike', 'halte e zum pflanzen', 'halte e zum entschärfen'] },
     { id: 'round_objective', eventType: 'round_objective', keywords: ['spike planted', 'spike defused', 'spike detonated'] },
-    { id: 'round_end', eventType: 'round_end', keywords: ['round won', 'round lost', 'victory', 'defeat', 'match won', 'match lost'] },
-    { id: 'kill', eventType: 'kill', keywords: ['eliminated', 'killed', 'kill confirmed'] }
+    { id: 'round_end', eventType: 'round_end', keywords: ['round won', 'round lost', 'victory', 'defeat', 'match won', 'match lost'] }
   ] },
   { id: 'counter-strike', gameAliases: ['counter-strike', 'counter strike', 'cs2', 'cs go', 'csgo'], events: [
     { id: 'round_win', eventType: 'round_end', keywords: ['terrorists win', 'counter-terrorists win', 'counter terrorists win'] },
@@ -97,7 +98,7 @@ export async function loadGameRuleProfiles(): Promise<GameRuleProfile[]> {
 
 export async function gameRuleCacheKey(): Promise<string> {
   const configuredPath = process.env.OPENMONTAGE_GAME_RULES?.trim();
-  if (!configuredPath) return 'built-in-game-rules-v2';
+  if (!configuredPath) return 'built-in-game-rules-v3';
   try {
     const raw = await fs.readFile(configuredPath);
     return `custom-game-rules:${createHash('sha256').update(raw).digest('hex')}`;
@@ -114,6 +115,9 @@ export async function matchGameEvent(text: string, game?: string, profiles?: Gam
   const orderedProfiles = activeProfiles.filter((profile) => profile.gameAliases.some((alias) => alias === '*' || normalizedGame.includes(normalize(alias))));
   for (const profile of orderedProfiles) {
     for (const event of profile.events) {
+      // A generic “killed/eliminated” phrase in Valorant is just as likely to describe
+      // a death banner or round status as it is to describe the recording player's kill.
+      if ((normalizedGame === 'valorant' || normalizedGame === 'valorant champions tour') && profile.id === 'generic-explicit-events' && event.eventType === 'kill') continue;
       const matchedKeyword = event.keywords.find((keyword) => containsPhrase(normalizedText, normalize(keyword)));
       if (matchedKeyword) return { profileId: profile.id, eventId: event.id, matchedKeyword, ...(event.eventType ? { eventType: event.eventType, evidenceLevel: 'explicit' as const } : {}) };
     }

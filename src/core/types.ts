@@ -339,6 +339,10 @@ export interface ExportOptions {
 
 export type AutoMontageStyle = 'clean' | 'aggressive' | 'cinematic' | 'smooth' | 'velocity' | 'custom';
 export type AutoMontageFormat = 'project' | 'landscape-1080p' | 'portrait-1080p' | 'square-1080p';
+export type AutoMontageSelectionMode = 'library' | 'selected' | 'ranges';
+export type AutoMontageRangePolicy = 'strict' | 'flexible';
+/** User-marked source search interval. Times are exact decimal or rational seconds. */
+export interface AutoMontageSourceRange { mediaId: string; startSeconds: string; endSeconds: string; }
 export interface AutoMontageCustomRules {
   targetShotSeconds: number;
   minShotSeconds: number;
@@ -353,14 +357,39 @@ export interface AutoMontageCustomRules {
 
 export interface AutoMontageOptions {
   musicMediaId: string;
+  /** Defaults to selected when legacy callers pass videoMediaIds, otherwise library. */
+  selectionMode?: AutoMontageSelectionMode;
   videoMediaIds?: string[];
+  /** Required for ranges mode; each listed clip is analyzed only inside its marked source window. */
+  sourceRanges?: AutoMontageSourceRange[];
+  sourceRangePolicy?: AutoMontageRangePolicy;
+  referenceMediaId?: string;
   style: AutoMontageStyle;
-  durationSeconds: number;
+  /** Defaults to the full music asset duration, capped by the 30 minute montage limit. */
+  durationSeconds?: number;
   variants: number;
   /** 0 is a relaxed pace, 1 is the fastest pace for the selected preset. */
   intensity: number;
   format: AutoMontageFormat;
   customRules?: AutoMontageCustomRules;
+}
+
+export interface AutoMontageReferenceProfile {
+  mediaId: string;
+  mediaName: string;
+  detectedCuts: number;
+  sampledShots: number;
+  cutTimesSeconds: number[];
+  shotDurationsSeconds: number[];
+  medianShotSeconds: number;
+  p75ShotSeconds: number;
+}
+
+export interface AutoMontageEffectPlan {
+  cropScale: number;
+  impactZoom: boolean;
+  speedKeyframes?: Array<{ timeSeconds: number; rate: number }>;
+  notes: string[];
 }
 
 export interface AutoMontageSegment {
@@ -374,6 +403,7 @@ export interface AutoMontageSegment {
   eventType?: GameplayEventType;
   eventLabel: string;
   reviewStatus?: 'accepted' | 'corrected';
+  sourceRange?: { mediaId: string; startSeconds: string; endSeconds: string; policy: AutoMontageRangePolicy };
   sourceEventStartSeconds: number;
   sourceDecisiveSeconds: number;
   sourceEventEndSeconds: number;
@@ -386,6 +416,9 @@ export interface AutoMontageSegment {
   anchorKind: 'drop' | 'accent' | 'downbeat' | 'beat' | 'onset' | 'paced';
   anchorStrength: number;
   alignmentErrorFrames: number;
+  evidenceLevel?: EvidenceLevel;
+  uncertainties?: string[];
+  effectPlan: AutoMontageEffectPlan;
   score: { highlight: number; musicFit: number; framing: number; pacing: number };
   detectors: DetectorProvenance[];
   explanation: string;
@@ -393,7 +426,7 @@ export interface AutoMontageSegment {
 
 export interface AutoMontagePlan {
   schemaVersion: 1;
-  method: 'ranked-highlight-beat-planner-v1';
+  method: 'ranked-highlight-beat-planner-v2';
   createdAt: string;
   sourceProjectId: string;
   variant: number;
@@ -404,8 +437,10 @@ export interface AutoMontagePlan {
   intensity: number;
   customRules?: AutoMontageCustomRules;
   music: { mediaId: string; name: string; contentHash: string; estimatedBpm?: number; analysisMethod: AudioAnalysis['method'] };
+  selection: { mode: AutoMontageSelectionMode; videoCount: number; rangePolicy?: AutoMontageRangePolicy };
   score: number;
-  scoreBreakdown: { highlightQuality: number; musicAlignment: number; sceneDiversity: number; pacing: number; framing: number; duration: number };
+  scoreBreakdown: { highlightQuality: number; gameplayEvidence: number; musicAlignment: number; sceneDiversity: number; pacing: number; framing: number; duration: number };
+  referenceStyle?: AutoMontageReferenceProfile;
   segments: AutoMontageSegment[];
   warnings: string[];
 }
@@ -418,6 +453,7 @@ export interface GeneratedAutoMontageVariant {
 
 export interface GeneratedAutoMontages {
   outputDirectory: string;
+  performanceReportPath: string;
   variants: GeneratedAutoMontageVariant[];
 }
 
@@ -425,5 +461,7 @@ export interface AutoMontageAnalysisInput {
   project: Project;
   musicAnalysis: AudioAnalysis;
   highlightAnalyses: Array<{ mediaId: string; analysis: HighlightAnalysis }>;
+  referenceAnalysis?: HighlightAnalysis;
+  referenceCutTimesSeconds?: number[];
   options: AutoMontageOptions;
 }

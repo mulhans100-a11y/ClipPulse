@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 import os from 'node:os';
 import path from 'node:path';
 import { AppError } from './errors';
 import { runCommand } from './ffmpeg';
 import { findExecutable } from './analysisRuntimes';
+import { recordExternalProcessTiming } from './processMetrics';
 import { gameRuleCacheKey, loadGameRuleProfiles, matchGameEvent } from './gameRules';
-import { gameplayAdapterFor, type ValorantHudFrame } from './gameplay/valorant';
+import { gameplayAdapterFor, inferGameplayGame, isValorantGame, type GameplayHudClassification, type ValorantHudFrame } from './gameplay/valorant';
 import type { AudioAnalysis, AnalysisEvent, AnalysisEventKind, DetectorModality, DetectorProvenance, DetectorRunStatus, EvidenceLevel, GameplayEventType, HighlightAnalysis, HighlightScoringWeights } from './types';
 
 export interface DetectorContext {
@@ -18,6 +20,8 @@ export interface DetectorContext {
   game?: string;
   audioAnalysis?: AudioAnalysis;
   audioAnalysisError?: string;
+  /** Optional source-time window; detectors seek and sample only this interval. */
+  analysisWindow?: { startSeconds: number; endSeconds: number };
 }
 
 export interface DetectorProposal {
@@ -54,6 +58,7 @@ export const builtInDetectors: DetectorPlugin[] = [
       const proposals: DetectorProposal[] = [];
       let lastSelected = -Infinity;
       for (const time of analysis.onsets) {
+        if (!insideAnalysisWindow(time, context)) continue;
         if (time - lastSelected < 2.5) continue;
         lastSelected = time;
         const energyIndex = Math.min(analysis.energyCurve.length - 1, Math.floor(time / analysis.energyHopSeconds));
@@ -75,18 +80,18 @@ export const builtInDetectors: DetectorPlugin[] = [
     id: 'openmontage.ffmpeg-scene-change', version: '1.0.0', modality: 'video',
     async detect(context) {
       if (context.mediaKind !== 'video') return [];
-      return detectSceneChanges(context.mediaPath, context.durationSeconds);
+      return detectSceneChanges(context.mediaPath, context.durationSeconds, context.analysisWindow);
     }
   },
   {
     id: 'openmontage.frame-difference-motion', version: '2.0.0', modality: 'video',
     async detect(context) {
       if (context.mediaKind !== 'video') return [];
-      return detectMotionActivity(context.mediaPath, context.durationSeconds, context.audioAnalysis);
+      return detectMotionActivity(context.mediaPath, context.durationSeconds, context.audioAnalysis, context.analysisWindow);
     }
   },
   {
-    id: 'openmontage.tesseract-hud-ocr', version: '2.0.0', modality: 'text',
+    id: 'openmontage.tesseract-hud-ocr', version: '2.3.0', modality: 'text',
     async cacheKey() {
       const executable = await findExecutable('tesseract');
       if (!executable) return `${await gameRuleCacheKey()}#tesseract-missing`;
@@ -104,7 +109,7 @@ export const builtInDetectors: DetectorPlugin[] = [
     },
     async detect(context) {
       if (context.mediaKind !== 'video') return [];
-      return detectHudText(context.mediaPath, context.durationSeconds, context.game);
+      return detectHudText(context.mediaPath, context.durationSeconds, context.game, context.analysisWindow);
     }
   }
 ];
@@ -115,7 +120,14 @@ export async function analyzeHighlightCues(
   detectors: DetectorPlugin[] = builtInDetectors,
   scoreWeights: HighlightScoringWeights = HIGHLIGHT_SCORE_WEIGHTS
 ): Promise<HighlightAnalysis> {
+  const inferredGame = inferGameplayGame(context.game, path.basename(context.mediaPath));
+  if (inferredGame && inferredGame !== context.game) context = { ...context, game: inferredGame };
   validateWeights(scoreWeights);
+  if (context.analysisWindow && (![context.analysisWindow.startSeconds, context.analysisWindow.endSeconds].every(Number.isFinite)
+    || context.analysisWindow.startSeconds < 0 || context.analysisWindow.endSeconds <= context.analysisWindow.startSeconds
+    || context.analysisWindow.endSeconds > context.durationSeconds)) {
+    throw new AppError('INVALID_ANALYSIS_WINDOW', 'The selected analysis window must satisfy 0 ≤ start < end ≤ source duration.');
+  }
   const source = await fs.stat(context.mediaPath);
   const key = await detectorKey(detectors, scoreWeights, context);
   if (cacheFilePath) {
@@ -126,33 +138,62 @@ export async function analyzeHighlightCues(
   const warnings: string[] = [];
   const statuses: DetectorRunStatus[] = [];
   const proposals: Array<{ proposal: DetectorProposal; provenance: DetectorProvenance }> = [];
-  for (const detector of detectors) {
+  const executions = new Array<{
+    status: DetectorRunStatus;
+    warning?: string;
+    proposals: Array<{ proposal: DetectorProposal; provenance: DetectorProvenance }>;
+  }>(detectors.length);
+  let nextDetector = 0;
+  const concurrency = detectors === builtInDetectors ? Math.min(3, detectors.length) : 1;
+  const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
+    while (true) {
+      const index = nextDetector++;
+      if (index >= detectors.length) return;
+      executions[index] = await executeDetector(detectors[index]);
+    }
+  });
+  const workerResults = await Promise.allSettled(workers);
+  const workerFailure = workerResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (workerFailure) throw workerFailure.reason;
+  for (const execution of executions) {
+    statuses.push(execution.status);
+    if (execution.warning) warnings.push(execution.warning);
+    proposals.push(...execution.proposals);
+  }
+
+  async function executeDetector(detector: DetectorPlugin): Promise<{
+    status: DetectorRunStatus;
+    warning?: string;
+    proposals: Array<{ proposal: DetectorProposal; provenance: DetectorProvenance }>;
+  }> {
     if ((detector.modality === 'audio' && !context.audioAnalysis) || ((detector.modality === 'video' || detector.modality === 'text') && context.mediaKind !== 'video')) {
       const failed = detector.modality === 'audio' && !!context.audioAnalysisError;
       const message = failed ? context.audioAnalysisError : detector.modality === 'audio' ? 'Audio analysis is unavailable.' : 'Video media is required.';
-      statuses.push({ detectorId: detector.id, version: detector.version, modality: detector.modality, status: failed ? 'failed' : 'skipped', message });
-      if (failed && message) warnings.push(`${detector.id}: ${message}`);
-      continue;
+      return {
+        status: { detectorId: detector.id, version: detector.version, modality: detector.modality, status: failed ? 'failed' : 'skipped', message },
+        ...(failed && message ? { warning: `${detector.id}: ${message}` } : {}),
+        proposals: []
+      };
     }
     try {
       const availability = await detector.checkAvailability?.(context);
       if (availability && !availability.available) {
-        statuses.push({ detectorId: detector.id, version: detector.version, modality: detector.modality, status: 'skipped', message: availability.message ?? 'Detector runtime is unavailable.' });
-        continue;
+        return { status: { detectorId: detector.id, version: detector.version, modality: detector.modality, status: 'skipped', message: availability.message ?? 'Detector runtime is unavailable.' }, proposals: [] };
       }
       const detected = await detector.detect(context);
-      statuses.push({ detectorId: detector.id, version: detector.version, modality: detector.modality, status: 'complete' });
-      for (const proposal of detected) {
+      return {
+        status: { detectorId: detector.id, version: detector.version, modality: detector.modality, status: 'complete' },
+        proposals: detected.map((proposal) => {
         const normalized = normalizeProposal(proposal, context.durationSeconds);
-        proposals.push({ proposal: normalized, provenance: {
+        return { proposal: normalized, provenance: {
           detectorId: detector.id, version: detector.version, modality: detector.modality,
           confidence: normalized.confidence, evidence: normalized.evidence
-        } });
-      }
+        } };
+        })
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      statuses.push({ detectorId: detector.id, version: detector.version, modality: detector.modality, status: 'failed', message });
-      warnings.push(`${detector.id}: ${message}`);
+      return { status: { detectorId: detector.id, version: detector.version, modality: detector.modality, status: 'failed', message }, warning: `${detector.id}: ${message}`, proposals: [] };
     }
   }
 
@@ -184,15 +225,18 @@ export async function readCachedHighlightAnalysis(filePath: string, cacheFilePat
     validateWeights(scoreWeights);
     const [source, raw] = await Promise.all([fs.stat(filePath), fs.readFile(cacheFilePath, 'utf8')]);
     const cached = JSON.parse(raw) as { sourceSizeBytes: number; sourceMtimeMs: number; detectorKey: string; analysis: HighlightAnalysis };
-    if (cached.sourceSizeBytes !== source.size || cached.sourceMtimeMs !== source.mtimeMs || cached.detectorKey !== (cacheKeyOverride ?? await detectorKey(detectors, scoreWeights, context))) return null;
+    if (cached.sourceSizeBytes !== source.size || Math.abs(cached.sourceMtimeMs - source.mtimeMs) > 1 || cached.detectorKey !== (cacheKeyOverride ?? await detectorKey(detectors, scoreWeights, context))) return null;
     if (cached.analysis?.method !== 'heuristic-detector-pipeline-v1' || !Array.isArray(cached.analysis.events) || !Array.isArray(cached.analysis.detectors)) return null;
     return cached.analysis;
   } catch { return null; }
 }
 
-async function detectSceneChanges(filePath: string, durationSeconds: number): Promise<DetectorProposal[]> {
+async function detectSceneChanges(filePath: string, durationSeconds: number, analysisWindow?: DetectorContext['analysisWindow']): Promise<DetectorProposal[]> {
+  const offset = analysisWindow?.startSeconds ?? 0;
+  const windowDuration = analysisWindow ? analysisWindow.endSeconds - analysisWindow.startSeconds : undefined;
   const args = [
-    '-hide_banner', '-nostats', '-i', filePath,
+    '-hide_banner', '-nostats', ...(analysisWindow ? ['-ss', offset.toFixed(6)] : []), '-i', filePath,
+    ...(windowDuration === undefined ? [] : ['-t', windowDuration.toFixed(6)]),
     '-vf', "scale=320:180:force_original_aspect_ratio=decrease,format=gray,select='gt(scene,0.28)',metadata=mode=print",
     '-an', '-f', 'null', '-'
   ];
@@ -205,7 +249,7 @@ async function detectSceneChanges(filePath: string, durationSeconds: number): Pr
     const timeMatch = record.match(/pts_time:([\d.]+)/);
     const scoreMatch = record.match(/lavfi\.scene_score=([\d.]+)/);
     if (!timeMatch || !scoreMatch) continue;
-    const time = Number(timeMatch[1]);
+    const time = Number(timeMatch[1]) + offset;
     const score = Number(scoreMatch[1]);
     if (!Number.isFinite(time) || !Number.isFinite(score) || time < 0 || time > durationSeconds || time - lastTime < 0.35) continue;
     lastTime = time;
@@ -220,11 +264,42 @@ async function detectSceneChanges(filePath: string, durationSeconds: number): Pr
   return proposals;
 }
 
+export async function detectSceneCutTimes(filePath: string, durationSeconds: number): Promise<number[]> {
+  return (await detectSceneChanges(filePath, durationSeconds)).map((proposal) => proposal.decisiveSeconds);
+}
+
+export async function inspectValorantHudEvent(filePath: string, timeSeconds: number): Promise<{ classification: GameplayHudClassification; recognizedText: string } | null> {
+  const tesseract = await findExecutable('tesseract');
+  if (!tesseract || !Number.isFinite(timeSeconds) || timeSeconds < 0) return null;
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'openmontage-valorant-hud-'));
+  try {
+    const framePath = path.join(temporaryDirectory, 'frame.png');
+    await runCommand('ffmpeg', [
+      '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1', '-ss', timeSeconds.toFixed(3), '-i', filePath, '-an',
+      '-vf', 'scale=960:540:force_original_aspect_ratio=decrease,pad=960:540:(ow-iw)/2:(oh-ih)/2', '-frames:v', '1', framePath
+    ]);
+    const { stdout } = await runCommand(tesseract, [framePath, 'stdout', '--psm', '11', 'tsv']);
+    const words = stdout.split(/\r?\n/).slice(1).flatMap((line) => {
+      const columns = line.split('\t');
+      const confidence = Number(columns[10]);
+      const word = (columns[11] ?? '').trim();
+      return columns[0] === '5' && Number.isFinite(confidence) && confidence >= 25 && word ? [word] : [];
+    });
+    const recognizedText = words.join(' ').replace(/\s+/g, ' ').slice(0, 240);
+    const classification = gameplayAdapterFor('Valorant')?.classifyHudText(recognizedText);
+    return classification && ['quiet_passage', 'round_end', 'kill', 'headshot', 'multi_kill', 'ace', 'clutch'].includes(classification.eventType)
+      ? { classification, recognizedText }
+      : null;
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
 const MOTION_SAMPLE_FPS = 4;
 const MOTION_FRAME_WIDTH = 64;
 const MOTION_FRAME_HEIGHT = 36;
 
-async function detectMotionActivity(filePath: string, durationSeconds: number, audioAnalysis?: AudioAnalysis): Promise<DetectorProposal[]> {
+async function detectMotionActivity(filePath: string, durationSeconds: number, audioAnalysis?: AudioAnalysis, analysisWindow?: DetectorContext['analysisWindow']): Promise<DetectorProposal[]> {
   const frameBytes = MOTION_FRAME_WIDTH * MOTION_FRAME_HEIGHT;
   const scores: Array<{ time: number; score: number }> = [];
   let pending = Buffer.alloc(0);
@@ -232,16 +307,27 @@ async function detectMotionActivity(filePath: string, durationSeconds: number, a
   let frameIndex = 0;
   let stderr = '';
   let processError: Error | undefined;
+  const windowStart = analysisWindow?.startSeconds ?? 0;
+  const windowEnd = analysisWindow?.endSeconds ?? durationSeconds;
+  const processStarted = performance.now();
+  let processTimingRecorded = false;
+  const recordProcessTiming = () => {
+    if (processTimingRecorded) return;
+    processTimingRecorded = true;
+    recordExternalProcessTiming('ffmpeg', performance.now() - processStarted);
+  };
   const child = spawn('ffmpeg', [
-    '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', filePath,
+    '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1',
+    ...(analysisWindow ? ['-ss', windowStart.toFixed(6)] : []), '-i', filePath,
+    ...(analysisWindow ? ['-t', (windowEnd - windowStart).toFixed(6)] : []),
     '-an', '-vf', `setpts=PTS-STARTPTS,fps=${MOTION_SAMPLE_FPS},scale=${MOTION_FRAME_WIDTH}:${MOTION_FRAME_HEIGHT}:flags=fast_bilinear,format=gray`,
     '-filter_threads', '1', '-pix_fmt', 'gray', '-f', 'rawvideo', 'pipe:1'
   ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-2000); });
   const completion = new Promise<{ code: number | null }>((resolve) => {
-    child.once('error', (error) => { processError = error; resolve({ code: null }); });
-    child.once('close', (code) => resolve({ code }));
+    child.once('error', (error) => { recordProcessTiming(); processError = error; resolve({ code: null }); });
+    child.once('close', (code) => { recordProcessTiming(); resolve({ code }); });
   });
   for await (const chunk of child.stdout) {
     const data = pending.length ? Buffer.concat([pending, chunk]) : chunk as Buffer;
@@ -251,7 +337,7 @@ async function detectMotionActivity(filePath: string, durationSeconds: number, a
       if (previous) {
         let difference = 0;
         for (let index = 0; index < frameBytes; index++) difference += Math.abs(frame[index] - previous[index]);
-        scores.push({ time: frameIndex / MOTION_SAMPLE_FPS, score: difference / (frameBytes * 255) });
+        scores.push({ time: windowStart + frameIndex / MOTION_SAMPLE_FPS, score: difference / (frameBytes * 255) });
       }
       previous = Buffer.from(frame);
       frameIndex++;
@@ -294,8 +380,8 @@ async function detectMotionActivity(filePath: string, durationSeconds: number, a
   // A low-motion window is a negative cue, not a judgement that a scene is boring.
   // Require both a low absolute motion floor and a value near the clip's own lower quintile.
   const windowSeconds = 4;
-  for (let start = 0; start + 2.5 <= durationSeconds; start += windowSeconds) {
-    const end = Math.min(durationSeconds, start + windowSeconds);
+  for (let start = windowStart; start + 2.5 <= windowEnd; start += windowSeconds) {
+    const end = Math.min(windowEnd, start + windowSeconds);
     const windowScores = scores.filter((entry) => entry.time >= start && entry.time < end).map((entry) => entry.score);
     if (windowScores.length < Math.min(6, Math.floor((end - start) * MOTION_SAMPLE_FPS * 0.5))) continue;
     const meanMotion = average(windowScores);
@@ -320,30 +406,43 @@ async function detectMotionActivity(filePath: string, durationSeconds: number, a
   return proposals;
 }
 
-async function detectHudText(filePath: string, durationSeconds: number, game?: string): Promise<DetectorProposal[]> {
+async function detectHudText(filePath: string, durationSeconds: number, game?: string, analysisWindow?: DetectorContext['analysisWindow']): Promise<DetectorProposal[]> {
   const tesseract = await findExecutable('tesseract');
   if (!tesseract) throw new AppError('OCR_RUNTIME_MISSING', 'Tesseract is not installed or is not on PATH.');
   const maxFrames = 120;
   const gameRuleProfiles = game?.trim() ? await loadGameRuleProfiles() : [];
   const gameplayAdapter = gameplayAdapterFor(game);
-  const intervalSeconds = Math.max(1, durationSeconds / maxFrames);
+  const windowStart = analysisWindow?.startSeconds ?? 0;
+  const windowEnd = analysisWindow?.endSeconds ?? durationSeconds;
+  const windowDuration = windowEnd - windowStart;
+  const intervalSeconds = Math.max(gameplayAdapter?.id === 'valorant' ? 0.5 : 1, windowDuration / maxFrames);
   const framesPerSecond = 1 / intervalSeconds;
+  const sampleWidth = gameplayAdapter?.id === 'valorant' ? 960 : 640;
+  const sampleHeight = gameplayAdapter?.id === 'valorant' ? 540 : 360;
   const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'openmontage-ocr-'));
   try {
     const framePattern = path.join(temporaryDirectory, 'frame-%03d.jpg');
     await runCommand('ffmpeg', [
-      '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', filePath, '-an',
-      '-vf', `fps=${framesPerSecond.toFixed(6)},scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2`,
+      '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1',
+      ...(analysisWindow ? ['-ss', windowStart.toFixed(6)] : []), '-i', filePath, '-an',
+      ...(analysisWindow ? ['-t', windowDuration.toFixed(6)] : []),
+      '-vf', `fps=${framesPerSecond.toFixed(6)},scale=${sampleWidth}:${sampleHeight}:force_original_aspect_ratio=decrease,pad=${sampleWidth}:${sampleHeight}:(ow-iw)/2:(oh-ih)/2`,
       '-frames:v', String(maxFrames), '-start_number', '0', '-q:v', '5', framePattern
     ]);
     const files = (await fs.readdir(temporaryDirectory)).filter((name) => /^frame-\d+\.jpg$/.test(name)).sort();
+    // Each frame OCR call is independent. A small bounded pool avoids the
+    // previous N×Tesseract process startup cost while keeping memory bounded.
+    const recognizedFrameOutputs = await mapConcurrentOrdered(files, 4, async (file) => {
+      const framePath = path.join(temporaryDirectory, file);
+      const { stdout } = await runCommand(tesseract, [framePath, 'stdout', '--psm', '11', 'tsv']);
+      return stdout;
+    });
     const proposals: DetectorProposal[] = [];
     const lastSeenByText = new Map<string, number>();
     const hudFrames: ValorantHudFrame[] = [];
     for (let frameIndex = 0; frameIndex < files.length; frameIndex++) {
-      const framePath = path.join(temporaryDirectory, files[frameIndex]);
-      const { stdout } = await runCommand(tesseract, [framePath, 'stdout', '--psm', '11', 'tsv']);
-      const time = Math.min(durationSeconds, frameIndex / framesPerSecond);
+      const stdout = recognizedFrameOutputs[frameIndex];
+      const time = Math.min(windowEnd, windowStart + frameIndex / framesPerSecond);
       const recognized = stdout.split(/\r?\n/).slice(1).flatMap((line) => {
         const columns = line.split('\t');
         if (columns[0] !== '5') return [];
@@ -354,7 +453,7 @@ async function detectHudText(filePath: string, durationSeconds: number, game?: s
           ? [{ word, confidence, left, top, width, height, lineId: `${columns[2]}:${columns[3]}:${columns[4]}` }]
           : [];
       });
-      hudFrames.push({ timeSeconds: time, words: recognized.map((item) => ({ text: item.word, confidence: item.confidence, x: item.left / 640, y: item.top / 360, width: item.width / 640, height: item.height / 360, lineId: item.lineId })) });
+      hudFrames.push({ timeSeconds: time, words: recognized.map((item) => ({ text: item.word, confidence: item.confidence, x: item.left / sampleWidth, y: item.top / sampleHeight, width: item.width / sampleWidth, height: item.height / sampleHeight, lineId: item.lineId })) });
       if (!recognized.length) continue;
       const text = recognized.map((item) => item.word).join(' ').replace(/\s+/g, ' ').slice(0, 160);
       const signature = text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -369,8 +468,8 @@ async function detectHudText(filePath: string, durationSeconds: number, game?: s
       if (time - (lastSeenByText.get(dedupeKey) ?? -Infinity) < minRepeatGap) continue;
       lastSeenByText.set(dedupeKey, time);
       const meanConfidence = recognized.reduce((sum, item) => sum + item.confidence, 0) / recognized.length;
-      const start = Math.max(0, time - intervalSeconds / 2);
-      const end = Math.min(durationSeconds, time + intervalSeconds / 2);
+      const start = Math.max(windowStart, time - intervalSeconds / 2);
+      const end = Math.min(windowEnd, time + intervalSeconds / 2);
       proposals.push({
         kind: gameEvent || valorantEvent ? 'gameplay_event' : 'text_recognition', startSeconds: start, decisiveSeconds: time, endSeconds: Math.max(start, end),
         confidence: clamp(meanConfidence / 100), interestingness: clamp((meanConfidence / 100) * Math.min(1, recognized.length / 3)),
@@ -383,8 +482,8 @@ async function detectHudText(filePath: string, durationSeconds: number, game?: s
         const halfInterval = intervalSeconds / 2;
         proposals.push({
           kind: 'gameplay_event', eventType: 'kill_feed_change', evidenceLevel: 'heuristic',
-          startSeconds: Math.max(0, feedChange.timeSeconds - halfInterval), decisiveSeconds: feedChange.timeSeconds,
-          endSeconds: Math.min(durationSeconds, feedChange.timeSeconds + halfInterval),
+          startSeconds: Math.max(windowStart, feedChange.timeSeconds - halfInterval), decisiveSeconds: feedChange.timeSeconds,
+          endSeconds: Math.min(windowEnd, feedChange.timeSeconds + halfInterval),
           confidence: feedChange.confidence, interestingness: 0.42,
           uncertainties: ['A changed OCR row in the conventional top-right feed region is not proof of a kill; it can also be a changed HUD label or OCR error.'],
           evidence: { engine: 'tesseract', feedSignature: feedChange.signature, feedRegion: 'normalized-upper-right', coordinateBasis: 'normalized-frame-coordinates', sampleIntervalSeconds: round(intervalSeconds) }
@@ -402,8 +501,10 @@ function rankProposals(mediaId: string, items: Array<{ proposal: DetectorProposa
   const groups: typeof sorted[] = [];
   for (const item of sorted) {
     const current = groups[groups.length - 1];
-    const previous = current?.[current.length - 1];
-    if (current?.length && previous && item.proposal.decisiveSeconds - previous.proposal.decisiveSeconds <= 0.8 && current.every((member) => canGroupProposals(member.proposal, item.proposal))) current.push(item);
+    const anchor = current?.[0];
+    // Fuse cues around one moment, not a chain of neighboring cues that can stretch
+    // across an entire fight and move the decisive timestamp away from its evidence.
+    if (current?.length && anchor && item.proposal.decisiveSeconds - anchor.proposal.decisiveSeconds <= 0.8 && current.every((member) => canGroupProposals(member.proposal, item.proposal))) current.push(item);
     else groups.push([item]);
   }
   const events = groups.map((group) => {
@@ -467,13 +568,18 @@ function normalizeProposal(proposal: DetectorProposal, durationSeconds: number):
 
 async function detectorKey(detectors: DetectorPlugin[], weights: HighlightScoringWeights, context?: DetectorContext): Promise<string> {
   const keys = await Promise.all(detectors.map(async (detector) => `${detector.id}@${detector.version}${detector.cacheKey ? `#${await detector.cacheKey()}` : ''}`));
-  return `${keys.sort().join('|')}|weights:${weights.confidence},${weights.interestingness},${weights.corroboration}|game:${context?.game?.trim().toLocaleLowerCase() ?? ''}`;
+  const valorantHudVersion = isValorantGame(context?.game) ? '|valorant-hud-ocr-v5' : '';
+  const windowKey = context?.analysisWindow ? `|window:${context.analysisWindow.startSeconds}:${context.analysisWindow.endSeconds}` : '';
+  return `fusion-v2|${keys.sort().join('|')}|weights:${weights.confidence},${weights.interestingness},${weights.corroboration}|game:${context?.game?.trim().toLocaleLowerCase() ?? ''}${valorantHudVersion}${windowKey}`;
 }
 function validateWeights(weights: HighlightScoringWeights): void {
   const values = [weights.confidence, weights.interestingness, weights.corroboration];
   if (!values.every((value) => Number.isFinite(value) && value >= 0) || values.every((value) => value === 0)) throw new AppError('INVALID_SCORING_WEIGHTS', 'Highlight ranking weights must be finite, nonnegative, and have a positive total.');
 }
 function proposalSignal(proposal: DetectorProposal): number { return proposal.confidence * 0.5 + proposal.interestingness * 0.5; }
+function insideAnalysisWindow(time: number, context: DetectorContext): boolean {
+  return !context.analysisWindow || (time >= context.analysisWindow.startSeconds && time <= context.analysisWindow.endSeconds);
+}
 function evidencePriority(level: EvidenceLevel | undefined): number { return ({ explicit: 4, corroborated: 3, heuristic: 2, unknown: 1 } as const)[level ?? 'unknown']; }
 function canGroupProposals(a: DetectorProposal, b: DetectorProposal): boolean {
   if ((a.eventType === 'quiet_passage') !== (b.eventType === 'quiet_passage')) return false;
@@ -506,3 +612,20 @@ function signalEvidence(evidence: Record<string, string | number | boolean>): st
 function average(values: number[]): number { return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length); }
 function round(value: number): number { return Number(value.toFixed(3)); }
 function clamp(value: number, min = 0, max = 1): number { return Math.min(max, Math.max(min, value)); }
+
+async function mapConcurrentOrdered<T, R>(items: T[], concurrency: number, map: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(items.length, Math.max(1, Math.floor(concurrency)));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await map(items[index], index);
+    }
+  });
+  const settled = await Promise.allSettled(workers);
+  const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw failure.reason;
+  return results;
+}

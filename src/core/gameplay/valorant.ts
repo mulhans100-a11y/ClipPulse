@@ -36,6 +36,7 @@ export interface ValorantHudFrame {
 
 export interface GameplayAdapter {
   id: string;
+  canonicalName?: string;
   gameAliases: string[];
   classifyHudText(text: string): GameplayHudClassification | null;
   detectFeedChanges?(frames: ValorantHudFrame[]): Array<{ timeSeconds: number; signature: string; confidence: number }>;
@@ -46,12 +47,14 @@ const EVENT_RULES: Array<{ id: string; type: GameplayEventType; keywords: string
   { id: 'ace', type: 'ace', keywords: ['ace'] },
   { id: 'headshot', type: 'headshot', keywords: ['headshot', 'head shot'] },
   { id: 'clutch', type: 'clutch', keywords: ['clutch'] },
+  { id: 'buy_phase', type: 'quiet_passage', keywords: ['buy phase', 'purchase phase', 'kaufphase', 'kauf phase', 'press b to buy', 'druecke b zum kaufen', 'drücke b zum kaufen', '2um kaufen'] },
+  { id: 'spike_prompt', type: 'quiet_passage', keywords: ['hold e to plant spike', 'hold e to defuse spike', 'halte e zum pflanzen', 'halte e zum entschärfen'] },
   { id: 'round_objective', type: 'round_objective', keywords: ['spike planted', 'spike defused', 'spike detonated'] },
-  { id: 'round_end', type: 'round_end', keywords: ['round won', 'round lost', 'victory', 'defeat', 'match won', 'match lost'] },
-  { id: 'kill', type: 'kill', keywords: ['eliminated', 'killed', 'kill confirmed'] }
+  { id: 'round_end', type: 'round_end', keywords: ['round won', 'round lost', 'victory', 'defeat', 'match won', 'match lost', 'rundensieg', 'runde gewonnen', 'runde verloren'] }
 ];
 
 const UNSUPPORTED_CERTAINTY = 'OCR phrase matching reports visible text; it does not inspect the underlying game state.';
+const OWNERSHIP_UNCERTAINTY = 'Visible kill-related HUD text does not establish that the recorded player made the kill.';
 
 export function isValorantGame(game?: string): boolean {
   const normalized = normalize(game ?? '');
@@ -59,7 +62,7 @@ export function isValorantGame(game?: string): boolean {
 }
 
 export const BUILT_IN_GAMEPLAY_ADAPTERS: GameplayAdapter[] = [{
-  id: 'valorant', gameAliases: ['valorant', 'valorant champions tour'],
+  id: 'valorant', canonicalName: 'Valorant', gameAliases: ['valorant', 'valorant champions tour'],
   classifyHudText: (text) => classifyValorantHudText(text, 'valorant'),
   detectFeedChanges: detectValorantKillFeedChanges
 }];
@@ -67,6 +70,14 @@ export const BUILT_IN_GAMEPLAY_ADAPTERS: GameplayAdapter[] = [{
 export function gameplayAdapterFor(game?: string): GameplayAdapter | undefined {
   const normalized = normalize(game ?? '');
   return BUILT_IN_GAMEPLAY_ADAPTERS.find((adapter) => adapter.gameAliases.some((alias) => normalized === normalize(alias) || normalized.includes(normalize(alias))));
+}
+
+/** Prefer explicit project metadata; use a recognized adapter alias from the media label as a fallback. */
+export function inferGameplayGame(game: string | undefined, mediaLabel: string): string | undefined {
+  if (game?.trim()) return game;
+  const normalizedLabel = normalize(mediaLabel);
+  const adapter = BUILT_IN_GAMEPLAY_ADAPTERS.find((candidate) => candidate.gameAliases.some((alias) => normalizedLabel.includes(normalize(alias))));
+  return adapter?.canonicalName ?? adapter?.gameAliases[0];
 }
 
 /** Classifies only explicit Valorant-related HUD phrases. No text means no kill claim. */
@@ -80,7 +91,7 @@ export function classifyValorantHudText(text: string, game = 'Valorant'): Valora
       return {
         profileId: 'valorant', eventId: rule.id, eventType: rule.type,
         evidenceLevel: 'explicit', matchedKeyword,
-        uncertainties: [UNSUPPORTED_CERTAINTY]
+        uncertainties: [UNSUPPORTED_CERTAINTY, ...(['headshot', 'multi_kill', 'ace'].includes(rule.id) ? [OWNERSHIP_UNCERTAINTY] : [])]
       };
     }
   }
@@ -125,8 +136,16 @@ export function detectValorantKillFeedChanges(frames: ValorantHudFrame[]): Array
       if (normalized.split(' ').length < 2 || span < 0.045 || normalized.length > 72) continue;
       signatures.set(normalized, sorted.reduce((sum, word) => sum + word.confidence, 0) / sorted.length / 100);
     }
+    const frameText = normalize(frame.words.map((word) => word.text).join(' '));
+    const overlayMarkers = [
+      'buy phase', 'purchase phase', 'combat report', 'killed by', 'spike carrier killed',
+      'scoreboard', 'press tab to display', 'match won',
+      'match lost', 'round won', 'round lost', 'victory', 'defeat'
+    ];
+    const nonFeedOverlay = overlayMarkers.some((marker) => containsPhrase(frameText, normalize(marker)));
     const current = new Set(signatures.keys());
     if (!hasBaseline) { previous = current; hasBaseline = true; continue; }
+    if (nonFeedOverlay) { previous = current; continue; }
     for (const [signature, confidence] of signatures) {
       const lastTime = seenAt.get(signature) ?? -Infinity;
       if (!previous.has(signature) && frame.timeSeconds - lastTime >= 2) {

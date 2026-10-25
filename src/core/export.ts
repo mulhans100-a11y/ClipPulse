@@ -29,6 +29,7 @@ export async function exportVideo(project: Project, options: ExportOptions): Pro
   catch (error) { if (error instanceof AppError) throw error; }
   await fs.mkdir(path.dirname(output), { recursive: true });
   const temp = path.join(path.dirname(output), `.${path.basename(output, path.extname(output))}.${randomUUID()}.rendering.mp4`);
+  const filterScript = `${temp}.filtergraph.txt`;
 
   const active = project.tracks.flatMap((track) => isTrackEnabled(project, track) ? track.clips
     .filter((clip) => compare(clip.start, renderEnd) < 0 && compare(add(clip.start, clip.duration), renderStart) > 0)
@@ -135,14 +136,27 @@ export async function exportVideo(project: Project, options: ExportOptions): Pro
   if (options.quality === 'preview') {
     filter.push(`[vout]scale=${outputWidth}:${outputHeight}:flags=fast_bilinear,fps=${outputFps},setpts=PTS-STARTPTS[vpreview]`);
   }
-  args.push('-filter_complex', filter.join(';'), '-map', options.quality === 'preview' ? '[vpreview]' : '[vout]', '-map', '[aout]', '-t', totalSeconds,
+  args.push('-/filter_complex', filterScript, '-map', options.quality === 'preview' ? '[vpreview]' : '[vout]', '-map', '[aout]', '-t', totalSeconds,
     '-r', outputFps, '-c:v', options.encoder ?? 'libx264', '-b:v', options.videoBitrate ?? (options.quality === 'preview' ? '3500k' : '16M'), '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', options.audioBitrate ?? (options.quality === 'preview' ? '160k' : '320k'), '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp);
   try {
-    await runCommand('ffmpeg', args, (chunk) => {
+    // Keep large multi-clip filter graphs out of the Windows process command
+    // line limit while using the same graph for preview and final export.
+    await fs.writeFile(filterScript, `${filter.join(';')}\n`, { encoding: 'utf8', flag: 'wx' });
+    const onProgress = (chunk: string) => {
       const match = /out_time_ms=(\d+)/.exec(chunk);
       if (match) options.onProgress?.(Math.min(0.99, Number(match[1]) / 1_000_000 / Number(totalSeconds)));
-    }, options.signal);
+    };
+    try {
+      await runCommand('ffmpeg', args, onProgress, options.signal);
+    } catch (error) {
+      // FFmpeg 7+ reads option values from files via -/option. FFmpeg 6 still
+      // provides the older spelling, so retain a narrow compatibility fallback.
+      if (!unsupportedFilterGraphFileOption(error)) throw error;
+      args[args.indexOf('-/filter_complex')] = '-filter_complex_script';
+      await runCommand('ffmpeg', args, onProgress, options.signal);
+    }
+    await fs.rm(filterScript, { force: true });
     const verify = await runCommand('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-show_entries', 'stream=codec_type,width,height,r_frame_rate', '-of', 'json', temp], undefined, options.signal);
     const info = JSON.parse(verify.stdout);
     const video = info.streams?.find((stream: any) => stream.codec_type === 'video');
@@ -155,7 +169,13 @@ export async function exportVideo(project: Project, options: ExportOptions): Pro
     return { outputPath: output, duration: renderDuration, frameRate: outputFrameRate };
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => undefined);
+    await fs.rm(filterScript, { force: true }).catch(() => undefined);
     if (error instanceof AppError) throw error;
     throw new AppError('EXPORT_FAILED', `Video export failed: ${tail(error instanceof Error ? error.message : String(error))}`);
   }
+}
+
+function unsupportedFilterGraphFileOption(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /filter_complex/i.test(message) && /unrecognized option|option not found|error splitting the argument list/i.test(message);
 }

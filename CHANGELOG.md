@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 Beta — Evidence-led montage generation (2026-10-25)
 
 - Normalize release asset filenames before generating SHA-256 manifests so the checksums match GitHub's uploaded asset names.
+- Add library-wide, explicit-clip, and rough source-range selection to montage generation, with strict and bounded-flexible range policies shared by desktop, CLI, REST, and MCP.
+- Default montage duration to the imported music length, reuse validated highlight-analysis cache entries, and report stage and external-process timings.
+- Require explicit gameplay evidence or strongly corroborated activity for automatic montage candidates; avoid generic OCR kill claims and do not fill edits with arbitrary clips when eligible highlights are absent.
+- Expose event evidence, uncertainties, source ranges, montage plans, and stable no-highlight errors through the versioned agent API; preserve manual event corrections.
+- Add a desktop library workflow for choosing all, selected, or range-trimmed clips and selecting optional local edit references.
+- Add regression coverage for source selection, strict/flexible range boundaries, music-derived durations, cautious Valorant OCR classification, and bounded event fusion.
 
 ## 0.1.3 Beta — Reliable AI-agent connection (2026-10-23)
 

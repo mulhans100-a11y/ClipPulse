@@ -2,9 +2,9 @@ import { createReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors';
+import { runCommand } from './ffmpeg';
 import type { AudioAnalysis, AudioOnset, BeatGridPoint, BpmHypothesis, EnergySection, MeterEstimate, MusicStructureEvent, TempoSegment } from './types';
 
 const SAMPLE_RATE = 11_025;
@@ -116,20 +116,13 @@ export async function readCachedAudioAnalysis(filePath: string, cacheFilePath: s
 }
 
 function decodePcm(source: string, output: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('ffmpeg', [
+  return runCommand('ffmpeg', [
       '-nostdin', '-hide_banner', '-loglevel', 'error', '-i', source,
       '-map', '0:a:0', '-vn', '-ac', '1', '-ar', String(SAMPLE_RATE), '-f', 's16le', '-y', output
-    ], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-2000); });
-    child.on('error', (error) => reject(new AppError('AUDIO_DECODE_FAILED', `Could not start FFmpeg for audio analysis: ${error.message}`, { cause: error })));
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new AppError('AUDIO_DECODE_FAILED', `Could not decode audio from ${source}. ${stderr.trim()}`));
+    ]).then(() => undefined).catch((error) => {
+      if (error instanceof AppError && error.code === 'FFMPEG_NOT_FOUND') throw error;
+      throw new AppError('AUDIO_DECODE_FAILED', `Could not decode audio from ${source}. ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     });
-  });
 }
 
 async function buildOnsetEnvelope(pcmPath: string): Promise<{ transients: Float64Array; rms: Float64Array; bassEnergy: Float64Array; energyBySecond: number[] }> {

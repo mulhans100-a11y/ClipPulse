@@ -7,14 +7,20 @@ export interface OptionalAnalysisRuntime extends AnalysisRuntimeStatus {
   executablePath?: string;
 }
 
+const executableLookupCache = new Map<string, Promise<string | null>>();
+
 export async function findExecutable(command: string): Promise<string | null> {
+  const key = command.trim().toLocaleLowerCase();
+  const cached = executableLookupCache.get(key);
+  if (cached) return cached;
   const locator = process.platform === 'win32' ? 'where.exe' : 'which';
-  try {
-    const result = await runCommand(locator, [command]);
-    return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
-  } catch {
-    return null;
-  }
+  const lookup = runCommand(locator, [command]).then((result) =>
+    result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null
+  ).catch(() => null);
+  // PATH is fixed for the lifetime of the Electron/CLI process. Keep both
+  // hits and misses so large libraries do not spawn `where`/`which` per clip.
+  executableLookupCache.set(key, lookup);
+  return lookup;
 }
 
 export async function getOptionalAnalysisRuntimes(): Promise<OptionalAnalysisRuntime[]> {

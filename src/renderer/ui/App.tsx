@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AudioLines, Bot, Check, ChevronDown, Clapperboard, Clock3, Copy, FilePlus2, Film, FolderOpen, FolderSync, Gauge, HardDrive, Import, Layers2, Magnet, Medal, Music2, Pause, Play, Plus, Redo2, Scissors, Settings2, Sparkles, Star, Trash2, Undo2, Upload, Video, Volume2, WandSparkles } from 'lucide-react';
-import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageStyle, GameplayEventType, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
+import type { AnalysisEventReview, AnalysisRuntimeStatus, AudioAnalysis, AutoMontageCustomRules, AutoMontageFormat, AutoMontageOptions, AutoMontageRangePolicy, AutoMontageSelectionMode, AutoMontageSourceRange, AutoMontageStyle, GameplayEventType, GeneratedAutoMontageVariant, GeneratedAutoMontages, HighlightAnalysis, ImportResult, ImportRoot, MediaAsset, MediaJob, MediaJobQueueSnapshot, Project, Rational, SegmentationOptions, SegmentationProgress, TimelineClip, TimelineTrack, TrackKind } from '../../core/types';
 import type { McpClientTarget, McpConnectionTest, McpExistingConfiguration, McpSetupConfiguration } from '../../shared/electron';
 import { add as addTime, compare, decimal, frameTime, parseDecimal, rational, seconds, toFrame } from '../../core/time';
 import { audioClipBeatOffsets, audioClipDownbeatOffsets, audioClipDropOffsets, snapTimelineTime } from '../../core/timelineSnapping';
@@ -1127,9 +1127,16 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
   const videos = project.media.filter((asset) => asset.kind === 'video');
   const musicAssets = project.media.filter((asset) => asset.hasAudio);
   const [musicMediaId, setMusicMediaId] = useState(musicAssets[0]?.id ?? '');
-  const [videoMediaIds, setVideoMediaIds] = useState<string[]>(videos.map((asset) => asset.id));
+  const [selectionMode, setSelectionMode] = useState<AutoMontageSelectionMode>('library');
+  const [videoMediaIds, setVideoMediaIds] = useState<string[]>([]);
+  const [sourceRanges, setSourceRanges] = useState<Record<string, { startSeconds: string; endSeconds: string }>>({});
+  const [sourceRangePolicy, setSourceRangePolicy] = useState<AutoMontageRangePolicy>('strict');
+  const [trimMediaId, setTrimMediaId] = useState(videos[0]?.id ?? '');
+  const [mediaQuery, setMediaQuery] = useState('');
+  const [gameFilter, setGameFilter] = useState('all');
+  const sourcePreviewRef = useRef<HTMLVideoElement>(null);
   const [style, setStyle] = useState<AutoMontageStyle>('clean');
-  const [duration, setDuration] = useState(() => String(Math.min(30, secondsOf(musicAssets[0]?.duration ?? rational(30)))));
+  const [duration, setDuration] = useState(() => String(Math.min(1800, secondsOf(musicAssets[0]?.duration ?? rational(30)))));
   const [variants, setVariants] = useState('3');
   const [intensity, setIntensity] = useState(50);
   const [format, setFormat] = useState<AutoMontageFormat>('project');
@@ -1148,7 +1155,16 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
     try {
       const result = await onGenerate({
         musicMediaId,
-        videoMediaIds,
+        selectionMode,
+        ...(selectionMode === 'library' ? {} : { videoMediaIds }),
+        ...(selectionMode === 'ranges' ? {
+          sourceRanges: videoMediaIds.map((mediaId): AutoMontageSourceRange => {
+            const asset = videos.find((item) => item.id === mediaId)!;
+            const range = sourceRanges[mediaId] ?? { startSeconds: '0', endSeconds: secondsOf(asset.duration).toFixed(3) };
+            return { mediaId, ...range };
+          }),
+          sourceRangePolicy
+        } : {}),
         style,
         durationSeconds: Number(duration),
         variants: Number(variants),
@@ -1167,14 +1183,42 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
       const asset = await onImportMusic();
       if (asset) {
         setMusicMediaId(asset.id);
-        setDuration(String(Math.min(30, secondsOf(asset.duration))));
+        setDuration(String(Math.min(1800, secondsOf(asset.duration))));
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setImportingMusic(false); }
   }
 
   function toggleVideo(id: string, checked: boolean) {
-    setVideoMediaIds((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
+    const next = checked ? [...new Set([...videoMediaIds, id])] : videoMediaIds.filter((item) => item !== id);
+    setVideoMediaIds(next);
+    if (checked) {
+      const asset = videos.find((item) => item.id === id);
+      if (asset) setSourceRanges((ranges) => ({ ...ranges, [id]: ranges[id] ?? { startSeconds: '0', endSeconds: secondsOf(asset.duration).toFixed(3) } }));
+      if (!trimMediaId) setTrimMediaId(id);
+    }
+    if (!next.includes(trimMediaId)) setTrimMediaId(next[0] ?? '');
+  }
+
+  const visibleVideos = videos.filter((asset) => {
+    const queryMatch = !mediaQuery || `${asset.name} ${asset.path} ${asset.tags?.join(' ') ?? ''} ${asset.game ?? ''}`.toLocaleLowerCase().includes(mediaQuery.toLocaleLowerCase());
+    return queryMatch && (gameFilter === 'all' || asset.game === gameFilter);
+  });
+  const availableGames = [...new Set(videos.map((asset) => asset.game).filter((game): game is string => Boolean(game)))].sort();
+  const trimAsset = videos.find((asset) => asset.id === trimMediaId && videoMediaIds.includes(asset.id));
+  const trimRange = trimAsset ? sourceRanges[trimAsset.id] ?? { startSeconds: '0', endSeconds: secondsOf(trimAsset.duration).toFixed(3) } : undefined;
+  const selectionReady = selectionMode === 'library' || (videoMediaIds.length > 0 && (selectionMode !== 'ranges' || videoMediaIds.every((id) => Boolean(sourceRanges[id]))));
+
+  function markRangeEdge(edge: 'startSeconds' | 'endSeconds') {
+    if (!trimAsset || !sourcePreviewRef.current) return;
+    const time = Math.min(secondsOf(trimAsset.duration), Math.max(0, sourcePreviewRef.current.currentTime));
+    const fallback = { startSeconds: '0', endSeconds: secondsOf(trimAsset.duration).toFixed(3) };
+    setSourceRanges((current) => ({ ...current, [trimAsset.id]: { ...(current[trimAsset.id] ?? fallback), [edge]: time.toFixed(3) } }));
+  }
+
+  function resetRange() {
+    if (!trimAsset) return;
+    setSourceRanges((current) => ({ ...current, [trimAsset.id]: { startSeconds: '0', endSeconds: secondsOf(trimAsset.duration).toFixed(3) } }));
   }
 
   function updateCustomRule<K extends keyof AutoMontageCustomRules>(key: K, value: AutoMontageCustomRules[K]) {
@@ -1190,12 +1234,17 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
       <div className="montage-modal-heading"><div><span className="eyebrow">AUTOMATIC EDITING · PHASE D</span><h2>Generate a montage</h2></div><button type="button" className="square-button" disabled={busy} onClick={onClose} title="Close">×</button></div>
       <p className="montage-intro">Analyze local highlights, align their decisive moments to music anchors, and create separate editable project variants. Your current timeline is preserved.</p>
       <div className="modal-field-pair">
-        <div className="montage-music-field"><label><span>Music / audio</span><select value={musicMediaId} onChange={(event) => setMusicMediaId(event.target.value)} required><option value="" disabled>Select audio</option>{musicAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name} · {formatTime(secondsOf(asset.duration))}</option>)}</select></label><button type="button" className="music-import-button" disabled={busy || importingMusic} onClick={() => void importMusic()}><Music2 size={13} />{importingMusic ? 'Importing…' : 'Import music'}</button></div>
+        <div className="montage-music-field"><label><span>Music / audio</span><select value={musicMediaId} onChange={(event) => { const id = event.target.value; setMusicMediaId(id); const selected = musicAssets.find((asset) => asset.id === id); if (selected) setDuration(String(Math.min(1800, secondsOf(selected.duration)))); }} required><option value="" disabled>Select audio</option>{musicAssets.map((asset) => <option value={asset.id} key={asset.id}>{asset.name} · {formatTime(secondsOf(asset.duration))}</option>)}</select></label><button type="button" className="music-import-button" disabled={busy || importingMusic} onClick={() => void importMusic()}><Music2 size={13} />{importingMusic ? 'Importing…' : 'Import music'}</button></div>
         <label><span>Editing style</span><select value={style} onChange={(event) => setStyle(event.target.value as AutoMontageStyle)}><option value="clean">Clean Competitive</option><option value="aggressive">Aggressive Gaming</option><option value="cinematic">Cinematic</option><option value="smooth">Smooth</option><option value="velocity">Velocity pacing</option><option value="custom">Custom pacing</option></select></label>
       </div>
       <div className="modal-field-pair">
         <label><span>Desired duration · seconds</span><input type="number" min="1" max="1800" step="0.5" value={duration} onChange={(event) => setDuration(event.target.value)} required /></label>
         <label><span>Output format</span><select value={format} onChange={(event) => setFormat(event.target.value as AutoMontageFormat)}><option value="project">Keep project format · {project.width} × {project.height}</option><option value="landscape-1080p">Landscape · 1920 × 1080</option><option value="portrait-1080p">Portrait · 1080 × 1920</option><option value="square-1080p">Square · 1080 × 1080</option></select></label>
+      </div>
+      <div className="montage-selection-modes" role="group" aria-label="Clip selection mode">
+        <label className={selectionMode === 'library' ? 'active' : ''}><input type="radio" name="montage-selection" checked={selectionMode === 'library'} onChange={() => setSelectionMode('library')} /><span><strong>Automatic library search</strong><small>Use eligible clips from all {videos.length} imported videos.</small></span></label>
+        <label className={selectionMode === 'selected' ? 'active' : ''}><input type="radio" name="montage-selection" checked={selectionMode === 'selected'} onChange={() => setSelectionMode('selected')} /><span><strong>Selected clips</strong><small>Analyze only the clips you check below.</small></span></label>
+        <label className={selectionMode === 'ranges' ? 'active' : ''}><input type="radio" name="montage-selection" checked={selectionMode === 'ranges'} onChange={() => setSelectionMode('ranges')} /><span><strong>Selected clips + search ranges</strong><small>Analyze only marked sections; keep original files unchanged.</small></span></label>
       </div>
       <div className="modal-field-pair">
         <label><span>Variants</span><select value={variants} onChange={(event) => setVariants(event.target.value)}><option value="1">1 variant</option><option value="2">2 variants</option><option value="3">3 variants</option><option value="4">4 variants</option><option value="5">5 variants</option></select></label>
@@ -1215,11 +1264,13 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
         </div>
         <div className="custom-anchor-rules">{(['drop', 'accent', 'downbeat', 'beat', 'onset'] as const).map((key) => <label key={key}>{key} weight<input type="number" min="0" max="1" step="0.05" value={customRules.anchorPreference[key] ?? 0.9} onChange={(event) => updateCustomAnchor(key, Number(event.target.value))} /></label>)}</div>
       </div>}
-      <div className="montage-source-heading"><span>Video sources</span><button type="button" className="text-action" onClick={() => setVideoMediaIds(videoMediaIds.length === videos.length ? [] : videos.map((asset) => asset.id))}>{videoMediaIds.length === videos.length ? 'Select none' : 'Select all'}</button><small>{videoMediaIds.length} of {videos.length} selected</small></div>
+      <div className="montage-source-heading"><span>Video library</span>{selectionMode !== 'library' && <><button type="button" className="text-action" onClick={() => { const next = [...new Set([...videoMediaIds, ...visibleVideos.map((asset) => asset.id)])]; setVideoMediaIds(next); setSourceRanges((current) => Object.fromEntries([...Object.entries(current), ...visibleVideos.map((asset) => [asset.id, current[asset.id] ?? { startSeconds: '0', endSeconds: secondsOf(asset.duration).toFixed(3) }])])); }}>Select visible</button><button type="button" className="text-action" onClick={() => { setVideoMediaIds([]); setTrimMediaId(''); }}>Clear</button></>}<small>{selectionMode === 'library' ? `${videos.length} clips available to search` : `${videoMediaIds.length} selected of ${videos.length}`}</small></div>
+      <div className="montage-filters"><input aria-label="Filter clips" placeholder="Filter by name, tag, or game" value={mediaQuery} onChange={(event) => setMediaQuery(event.target.value)} /><select aria-label="Filter by game" value={gameFilter} onChange={(event) => setGameFilter(event.target.value)}><option value="all">All games</option>{availableGames.map((game) => <option value={game} key={game}>{game}</option>)}</select></div>
       <div className="montage-video-list">
-        {videos.length ? videos.map((asset) => <label className="montage-video-choice" key={asset.id}><input type="checkbox" checked={videoMediaIds.includes(asset.id)} onChange={(event) => toggleVideo(asset.id, event.target.checked)} /><span title={asset.name}>{asset.name}</span><small>{formatTime(secondsOf(asset.duration))}{asset.game ? ` · ${asset.game}` : ''}{asset.rating ? ` · ★${asset.rating}` : ''}</small></label>) : <div className="empty-small">No video assets in this project.</div>}
+        {visibleVideos.length ? visibleVideos.map((asset) => <label className="montage-video-choice" key={asset.id}>{selectionMode !== 'library' && <input type="checkbox" checked={videoMediaIds.includes(asset.id)} onChange={(event) => toggleVideo(asset.id, event.target.checked)} />}{asset.thumbnailPath && <img src={window.openmontage.toFileUrl(asset.thumbnailPath)} alt="" />}<span title={asset.name}>{asset.name}</span><small>{formatTime(secondsOf(asset.duration))}{asset.game ? ` · ${asset.game}` : ''}{asset.rating ? ` · ★${asset.rating}` : ''}{asset.favorite ? ' · ★' : ''}</small></label>) : <div className="empty-small">No video assets match this filter.</div>}
       </div>
-      <div className="montage-hint">Analysis runs locally and uses event reviews, detector cues, manual ratings, game diversity, music drops, downbeats, and beats. Scores are heuristic. Variants are saved as new projects; open one to render a playback preview or export it.</div>
+      {selectionMode === 'ranges' && <div className="montage-range-editor"><div className="montage-range-heading"><strong>Coarse search window</strong><label><span>Selected clip</span><select value={trimAsset?.id ?? ''} onChange={(event) => setTrimMediaId(event.target.value)}><option value="" disabled>Select a checked video</option>{videos.filter((asset) => videoMediaIds.includes(asset.id)).map((asset) => <option value={asset.id} key={asset.id}>{asset.name}</option>)}</select></label></div>{trimAsset && trimRange ? <><video ref={sourcePreviewRef} src={window.openmontage.toFileUrl(trimAsset.path)} controls preload="metadata" className="montage-range-preview" /><div className="montage-range-actions"><button type="button" onClick={() => markRangeEdge('startSeconds')}>Mark start at playhead</button><button type="button" onClick={() => markRangeEdge('endSeconds')}>Mark end at playhead</button><button type="button" className="text-action" onClick={resetRange}>Reset to full clip</button></div><div className="montage-range-times"><label>Search from · s<input type="number" min="0" max={secondsOf(trimAsset.duration)} step="0.001" value={trimRange.startSeconds} onChange={(event) => setSourceRanges((current) => ({ ...current, [trimAsset.id]: { ...trimRange, startSeconds: event.target.value } }))} /></label><label>Search to · s<input type="number" min="0" max={secondsOf(trimAsset.duration)} step="0.001" value={trimRange.endSeconds} onChange={(event) => setSourceRanges((current) => ({ ...current, [trimAsset.id]: { ...trimRange, endSeconds: event.target.value } }))} /></label></div></> : <div className="empty-small">Select one or more videos above, then choose a clip to mark its search range.</div>}<label className="montage-range-policy"><span>Range behavior</span><select value={sourceRangePolicy} onChange={(event) => setSourceRangePolicy(event.target.value as AutoMontageRangePolicy)}><option value="strict">Strict · output stays within the marked range</option><option value="flexible">Flexible · allow a short lead-in and tail outside it</option></select></label></div>}
+      <div className="montage-hint">ClipPulse searches only this project’s imported library. Automatic scores are heuristics: movement and audio do not prove a kill. The generator reports when no eligible highlights exist instead of filling the edit with arbitrary footage. Select a shorter duration for a short music passage; the default follows the selected track up to 30 minutes.</div>
       {busy && <div className="montage-progress"><i /> Analyzing selected clips and music; this can take a while…</div>}
       {error && <div className="modal-error">{error}</div>}
       {generated && <div className="montage-results">
@@ -1228,12 +1279,12 @@ function AutoMontageModal({ project, onClose, onGenerate, onOpenVariant, onImpor
           <div className="montage-variant"><div><strong>{variant.plan.style} · {String(variant.plan.variant).padStart(2, '0')}</strong><small>{variant.plan.score}/100 · {variant.plan.segments.length} highlight cuts · {formatTime(variant.plan.durationSeconds)}</small></div><button type="button" className="primary" disabled={busy} onClick={() => void onOpenVariant(variant)}>Open to preview</button></div>
           <details className="montage-plan-details"><summary>Explainable score and edit decisions</summary>
             <div className="montage-score-grid">{Object.entries(variant.plan.scoreBreakdown).map(([key, score]) => <span key={key}>{key.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`)} <b>{score}</b></span>)}</div>
-            <ol>{variant.plan.segments.map((segment) => <li key={`${segment.mediaId}:${segment.eventId}`}>{formatTime(segment.targetAnchorSeconds)} · {segment.explanation}</li>)}</ol>
+            <ol>{variant.plan.segments.map((segment) => <li key={`${segment.mediaId}:${segment.eventId}`}><b>{(segment.eventType ?? 'activity').replaceAll('_', ' ')} · {segment.evidenceLevel ?? 'unknown'} evidence</b><br />{formatTime(segment.targetAnchorSeconds)} · {segment.explanation}{segment.uncertainties?.length ? <small className="montage-warning">{segment.uncertainties.join(' ')}</small> : null}</li>)}</ol>
             {variant.plan.warnings.map((warning) => <small className="montage-warning" key={warning}>{warning}</small>)}
           </details>
         </div>)}
       </div>}
-      <div className="modal-actions"><button type="button" onClick={onClose} disabled={busy}>Close</button><button type="submit" className="primary" disabled={busy || !musicAssets.length || !videos.length || videoMediaIds.length === 0 || !musicMediaId}>{busy ? 'Analyzing…' : 'Generate variants'}</button></div>
+      <div className="modal-actions"><button type="button" onClick={onClose} disabled={busy}>Close</button><button type="submit" className="primary" disabled={busy || !musicAssets.length || !videos.length || !selectionReady || !musicMediaId}>{busy ? 'Analyzing…' : 'Generate variants'}</button></div>
     </form>
   </div>;
 }
